@@ -1,0 +1,561 @@
+import {
+  AppDetailsState,
+  changeRideStatus,
+  setAppData,
+  setRideData,
+  setRideUtils,
+} from "@/store/AppSlice";
+import { BackHandler, StatusBar, Dimensions, View } from "react-native";
+import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
+import { AntDesign } from "@expo/vector-icons";
+import React, { useCallback, useContext, useEffect, useState, useMemo } from "react";
+import { useDispatch, useSelector } from "react-redux";
+
+import { AppContext } from "@/app/context";
+import { ConfirmPaymentView } from "@/components/find-ride/confirmPayment";
+import { DriverInfoView } from "@/components/find-ride/driverInfo";
+import { DriverView } from "@/components/find-ride/driver";
+import { LocationView } from "@/components/find-ride/location";
+import { PromoCodeView } from "@/components/find-ride/promoCode";
+import { SearchView } from "@/components/find-ride/search";
+import { SelectVehicleView } from "@/components/find-ride/selectVehicle";
+import { SelectedView } from "@/components/find-ride/selected";
+import { TVehicle } from "@/types";
+import { TouchableOpacity } from "react-native-gesture-handler";
+import { WalletPay } from "@/components/find-ride/walletPay";
+import axios from "axios";
+import { showMessage } from "react-native-flash-message";
+import tw from "@/lib/tailwind";
+import { useFocusEffect } from "expo-router";
+import { getErrorMessage, showErrorMessage } from "@/utils/errorHandler";
+import { requestManager } from "@/utils/requestManager";
+import apiClient from "@/utils/apiClient";
+
+interface Props {
+  bottomSheetRef: React.RefObject<BottomSheetMethods>;
+  getActiveRide: () => void;
+}
+
+const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
+  const { apiConfig } = useContext(AppContext);
+  const { ride } = useSelector(AppDetailsState);
+  const dispatch = useDispatch();
+  const [height, setHeight] = useState<number>(600); // Default to 600px
+  const [step, setStep] = useState<number>(1);
+
+  const handleBack = useCallback(() => {
+    console.log('🔙 handleBack called, current step:', step);
+    
+    if (step > 1) {
+      // For decimal steps (like 4.1), go back to the integer step (4)
+      if (!Number.isInteger(step)) {
+        const integerStep = Math.floor(step);
+        console.log('🔙 Going back from decimal step', step, 'to integer step', integerStep);
+        setStep(integerStep);
+      } else {
+        // For integer steps, go back by 1
+        const newStep = step - 1;
+        console.log('🔙 Going back from step', step, 'to step', newStep);
+        setStep(newStep);
+      }
+    } else {
+      // On first step, close the modal
+      console.log('🔙 Closing modal from step 1');
+      setStep(1);
+      bottomSheetRef?.current?.close();
+
+      setTimeout(() => {
+        dispatch(
+          setAppData({
+            isBooking: false,
+            ride: { status: false, data: {} },
+          })
+        );
+      }, 600);
+    }
+  }, [step, bottomSheetRef, dispatch]);
+
+  const modifyHeight = useCallback(() => {
+    if (ride.status) {
+      const screenHeight = Dimensions.get('window').height;
+      if ([1].includes(step)) {
+        setHeight(Math.round(screenHeight * 0.7)); // 70% of screen
+      } else if (step === 2) {
+        setHeight(Math.round(screenHeight * 0.65)); // 65% of screen - Vehicle selection
+      } else if (step === 3) {
+        setHeight(Math.round(screenHeight * 0.6)); // 60% of screen - Driver selection
+      } else {
+        // Fallback to default height
+        setHeight(Math.round(screenHeight * 0.75)); // 75% of screen
+      }
+    }
+  }, [step, ride.status]);
+
+  useEffect(() => {
+    modifyHeight();
+  }, [step, ride.status]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const backAction = () => {
+        handleBack();
+        return true;
+      };
+
+      const backHandler = BackHandler.addEventListener(
+        "hardwareBackPress",
+        backAction
+      );
+
+      return () => {
+        backHandler.remove();
+      };
+    }, [step])
+  );
+
+  const createRide = async (
+    loading: React.Dispatch<React.SetStateAction<boolean>>,
+    payment_type = ""
+  ) => {
+    loading(true);
+    
+    try {
+      // Transform frontend data structure to match backend validation
+      const rideData = ride?.data as any;
+      const finalPaymentType = payment_type.length > 0 ? payment_type : (rideData?.payment_type || 'wallet');
+      
+      // Map payment type to backend format (lowercase)
+      const paymentMethodMap: { [key: string]: string } = {
+        'Cash': 'cash',
+        'Wallet': 'wallet',
+        'Card': 'card',
+        'Bank Transfer': 'bank_transfer',
+        'cash': 'cash',
+        'wallet': 'wallet',
+        'card': 'card',
+        'bank_transfer': 'bank_transfer',
+      };
+      const paymentMethod = paymentMethodMap[finalPaymentType] || 'wallet';
+      
+      // Log ride data for debugging
+      console.log('🔍 Ride data before validation:', {
+        hasOrigin: !!rideData?.origin,
+        hasDestination: !!rideData?.destination,
+        origin: rideData?.origin,
+        destination: rideData?.destination,
+        fullRideData: rideData,
+      });
+
+      // Transform data to backend format
+      const pickupName = rideData?.origin?.name || '';
+      const pickupAddress = rideData?.origin?.formatted_address || rideData?.origin?.address || rideData?.origin?.name || '';
+      
+      const dropoffName = rideData?.destination?.name || '';
+      const dropoffAddress = rideData?.destination?.formatted_address || rideData?.destination?.address || rideData?.destination?.name || '';
+      
+      // Validate coordinates - must be valid GPS coordinates (not 0,0 or default values)
+      const pickupLat = parseFloat(String(rideData?.origin?.lat || rideData?.origin?.latitude || '0'));
+      const pickupLng = parseFloat(String(rideData?.origin?.long || rideData?.origin?.longitude || '0'));
+      const dropoffLat = parseFloat(String(rideData?.destination?.lat || rideData?.destination?.latitude || '0'));
+      const dropoffLng = parseFloat(String(rideData?.destination?.long || rideData?.destination?.longitude || '0'));
+
+      console.log('📍 Parsed coordinates:', {
+        pickup: { lat: pickupLat, lng: pickupLng },
+        dropoff: { lat: dropoffLat, lng: dropoffLng },
+      });
+
+      // Validate coordinates are valid GPS coordinates
+      if (pickupLat === 0 || pickupLng === 0 || isNaN(pickupLat) || isNaN(pickupLng)) {
+        console.error('❌ Invalid pickup coordinates:', { pickupLat, pickupLng, origin: rideData?.origin });
+        showMessage({
+          type: "warning",
+          message: "Please select a valid pickup location first.",
+        });
+        throw new Error('Invalid pickup location coordinates. Please select a valid pickup location.');
+      }
+      
+      if (!rideData?.destination) {
+        console.error('❌ Missing destination in ride data');
+        showMessage({
+          type: "warning",
+          message: "Please select a destination location first.",
+        });
+        throw new Error('Destination location is required. Please go back and select a destination.');
+      }
+      
+      if (dropoffLat === 0 || dropoffLng === 0 || isNaN(dropoffLat) || isNaN(dropoffLng)) {
+        console.error('❌ Invalid dropoff coordinates:', { dropoffLat, dropoffLng, destination: rideData?.destination });
+        showMessage({
+          type: "warning",
+          message: "Please select a valid destination location first.",
+        });
+        throw new Error('Invalid dropoff location coordinates. Please select a valid destination.');
+      }
+      if (Math.abs(pickupLat) > 90 || Math.abs(pickupLng) > 180) {
+        throw new Error('Pickup coordinates are out of valid range.');
+      }
+      if (Math.abs(dropoffLat) > 90 || Math.abs(dropoffLng) > 180) {
+        throw new Error('Dropoff coordinates are out of valid range.');
+      }
+
+      console.log('📍 Creating ride with exact GPS coordinates:', {
+        pickup: { lat: pickupLat, lng: pickupLng, address: pickupAddress },
+        dropoff: { lat: dropoffLat, lng: dropoffLng, address: dropoffAddress },
+      });
+
+      const requestData: any = {
+        pickupLocation: {
+          lat: pickupLat,
+          lng: pickupLng,
+          name: pickupName,
+          address: pickupAddress,
+        },
+        dropoffLocation: {
+          lat: dropoffLat,
+          lng: dropoffLng,
+          name: dropoffName,
+          address: dropoffAddress,
+        },
+        vehicleTypeId: rideData?.vehicle_type_id || '',
+        paymentMethod: paymentMethod,
+        promoCode: rideData?.promo_code || null,
+      };
+
+      // Add scheduledAt if provided
+      if (rideData?.scheduledAt || rideData?.scheduled_at) {
+        const scheduledTime = rideData?.scheduledAt || rideData?.scheduled_at;
+        requestData.scheduledAt = scheduledTime;
+        console.log('📅 Scheduling ride for:', scheduledTime);
+      }
+
+      console.log('📤 Creating ride:', requestData);
+
+      // Use apiClient instead of axios for automatic token refresh
+      // Use 'booking/confirm-ride' which is the correct endpoint (alias for request-ride)
+      const response = await apiClient.post('booking/confirm-ride', requestData);
+      
+      console.log('✅ Ride created successfully:', response.data?.data);
+      
+      // Close modal and reset state
+      bottomSheetRef?.current?.close();
+      dispatch(
+        setAppData({
+          isBooking: false,
+          ride: { status: false, data: {} },
+        })
+      );
+
+      // Fetch the newly created ride
+      getActiveRide();
+      
+      showMessage({ 
+        type: "success", 
+        message: "Ride created successfully" 
+      });
+      
+      // Reset step
+      setStep(1);
+      
+    } catch (err: any) {
+      console.error('❌ Create ride error:', err?.response?.data || err?.message);
+      
+      // Handle 409 - Active ride already exists
+      if (err?.response?.status === 409 || err?.status === 409) {
+        console.log('🔄 Active ride exists, fetching it...');
+        getActiveRide();
+        showMessage({
+          type: "info",
+          message: "You already have an active ride",
+        });
+        
+        // Close modal
+        bottomSheetRef?.current?.close();
+        dispatch(
+          setAppData({
+            isBooking: false,
+            ride: { status: false, data: {} },
+          })
+        );
+        setStep(1);
+        return;
+      }
+      
+      // Handle validation errors
+      const validationErrors = err?.response?.data?.error?.errors || 
+                              err?.response?.data?.errors;
+      
+      if (validationErrors) {
+        let errorMessages: string[] = [];
+        
+        if (Array.isArray(validationErrors)) {
+          errorMessages = validationErrors.map((e: any) => 
+            typeof e === 'string' ? e : (e?.msg || e?.message || 'Validation error')
+          );
+        } else if (typeof validationErrors === 'object') {
+          Object.entries(validationErrors).forEach(([field, errors]: [string, any]) => {
+            if (Array.isArray(errors)) {
+              errors.forEach((errMsg: any) => {
+                const msg = typeof errMsg === 'string' ? errMsg : (errMsg?.msg || errMsg?.message || 'Validation error');
+                errorMessages.push(`${field}: ${msg}`);
+              });
+            } else if (typeof errors === 'string') {
+              errorMessages.push(`${field}: ${errors}`);
+            }
+          });
+        }
+        
+        const errorMessage = errorMessages.length > 0 
+          ? errorMessages.join(', ') 
+          : 'Validation failed. Please check your input.';
+        
+        showMessage({
+          type: "danger",
+          message: errorMessage,
+        });
+        return;
+      }
+      
+      // Handle other errors using centralized error handler
+      showErrorMessage(err, {
+        fallback: 'Failed to create ride. Please try again.',
+        type: 'danger',
+        duration: 5000,
+      });
+      
+    } finally {
+      loading(false);
+    }
+  };
+
+  const RenderView = useCallback(() => {
+    console.log('🎨 RenderView - screen:', step === 1 ? 'LOCATION' : step === 2 ? 'VEHICLE' : step === 3 ? 'DRIVER' : step, 
+                'rideId:', (ride?.data as any)?.ride_id, 
+                'hasData:', !!ride?.data && Object.keys(ride.data).length > 0);
+    
+    switch (step) {
+      case 1:
+        // Location selection
+        return <LocationView action={() => setStep(2)} back={() => handleBack()} />;
+        
+      case 2:
+        // Vehicle selection with payment and promo
+        return (
+          <SelectVehicleView
+            onHeightChange={(measuredHeight) => {
+              if (measuredHeight && measuredHeight > 0 && isFinite(measuredHeight)) {
+                // measuredHeight is already in pixels, use it directly
+                const heightValue = Math.round(measuredHeight);
+                const screenHeight = Dimensions.get('window').height;
+                // Clamp between 200px and 95% of screen to show all content
+                const clampedHeight = Math.max(200, Math.min(heightValue, Math.round(screenHeight * 0.95)));
+                setHeight(clampedHeight);
+                console.log('📐 Modal height updated:', { 
+                  measuredHeight, 
+                  clampedHeight, 
+                  screenHeight,
+                  percentage: `${((clampedHeight / screenHeight) * 100).toFixed(1)}%`
+                });
+              } else {
+                console.warn('⚠️ Invalid height measured:', measuredHeight);
+              }
+            }}
+            action={(vehicle: TVehicle, paymentMethod: string, promoCode?: string) => {
+              // Extract pricing data
+              const vehicleWithPricing = vehicle as any;
+              const cost = vehicleWithPricing?.cost;
+              const distance = vehicleWithPricing?.distance;
+              const duration = vehicleWithPricing?.duration;
+              
+              console.log('🚗 Vehicle selected:', {
+                id: vehicle?.vehicle_id,
+                type: vehicle?.vehicle_type,
+                cost,
+                payment: paymentMethod,
+                promo: promoCode,
+              });
+              
+              // Store vehicle and pricing data
+              dispatch(setRideUtils({ 
+                vehicle,
+                distanceTime: {
+                  cost: cost?.toString() || cost || '0',
+                  distance: typeof distance === 'object' ? distance : (distance || { text: '0 km', value: 0, unit: 'km' }),
+                  duration: typeof duration === 'object' ? duration : (duration || { text: '0 min', value: 0, unit: 'minutes' }),
+                }
+              }));
+              
+              dispatch(
+                setRideData({
+                  vehicle_type_id: vehicle?.vehicle_id?.toString(),
+                  payment_type: paymentMethod,
+                  promo_code: promoCode || "",
+                  // Note: cost is stored in distanceTime, not directly in ride data
+                } as any)
+              );
+              
+              dispatch(changeRideStatus(true));
+              
+              // Move to driver selection
+              setStep(3);
+            }}
+            back={() => handleBack()}
+          />
+        );
+        
+      case 3:
+        // Driver selection and search
+        return (
+          <DriverView
+            action={() => {
+              // Optional: View driver details
+            }}
+            request={(driverId: string, loading: React.Dispatch<React.SetStateAction<boolean>>) => {
+              console.log('🚗 Requesting ride with driver:', driverId);
+              dispatch(setRideData({ driver_id: driverId }));
+              createRide(loading);
+            }}
+            back={() => handleBack()}
+            onHeightChange={(measuredHeight) => {
+              if (measuredHeight && measuredHeight > 0 && isFinite(measuredHeight)) {
+                // measuredHeight is already in pixels, use it directly
+                const heightValue = Math.round(measuredHeight);
+                const screenHeight = Dimensions.get('window').height;
+                // Clamp between 200px and 95% of screen
+                const clampedHeight = Math.max(200, Math.min(heightValue, Math.round(screenHeight * 0.95)));
+                setHeight(clampedHeight);
+                console.log('📐 Driver modal height updated:', { 
+                  measuredHeight, 
+                  clampedHeight, 
+                  screenHeight 
+                });
+              } else {
+                console.warn('⚠️ Invalid height measured for driver view:', measuredHeight);
+              }
+            }}
+          />
+        );
+        
+      default:
+        console.log('🎨 Default case - no ride data, returning null');
+        return null;
+    }
+  }, [step, handleBack, dispatch, bottomSheetRef, ride, getActiveRide]);
+
+  // Ensure height is always a valid number (pixels)
+  const getValidHeight = (): number => {
+    console.log('🔍 getValidHeight called with:', height, 'type:', typeof height);
+    
+    let heightValue: number;
+    
+    // Height should now always be a number, but handle edge cases
+    if (typeof height === 'number') {
+      heightValue = height;
+    } else {
+      // Fallback if somehow it's not a number
+      console.warn('⚠️ Height is not a number, using fallback 600px');
+      heightValue = 600;
+    }
+    
+    // Validate the final value
+    if (isNaN(heightValue) || !isFinite(heightValue) || heightValue <= 0) {
+      console.warn('⚠️ Invalid height value detected, using fallback 600px');
+      heightValue = 600;
+    }
+    
+    // Ensure it's a reasonable value (between 200px and screen height)
+    const screenHeight = Dimensions.get('window').height;
+    heightValue = Math.max(200, Math.min(heightValue, screenHeight));
+    heightValue = Math.round(heightValue); // Round to integer
+    
+    console.log('✅ getValidHeight returning:', heightValue);
+    return heightValue;
+  };
+
+  // Don't render the BottomSheet at all if there's no valid content
+  const content = useMemo(() => RenderView(), [step, handleBack, dispatch, bottomSheetRef, ride, getActiveRide]);
+  
+  // If there's no content, don't render anything
+  if (!content) {
+    console.log('❌ No content to render, hiding BottomSheet');
+    return null;
+  }
+
+  const validHeight = getValidHeight();
+  console.log('🔍 Debug height values:', { 
+    originalHeight: height, 
+    validHeight, 
+    typeOfHeight: typeof height,
+    typeOfValidHeight: typeof validHeight 
+  });
+
+  // Extra safety check - if validHeight is still somehow invalid, use fallback
+  if (!validHeight || validHeight <= 0 || isNaN(validHeight) || !isFinite(validHeight)) {
+    console.error('❌ CRITICAL: Invalid height detected, using fallback 600px');
+    const fallbackHeight = 600;
+    return (
+      <BottomSheet
+        height={fallbackHeight}
+        ref={bottomSheetRef}
+        animationType="spring"
+        backdropMaskColor="#19191900"
+        openDuration={1000}
+        closeDuration={1000}
+        disableKeyboardHandling={true}
+        style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`, {
+          position: 'relative',
+        })}
+        closeOnDragDown={true}
+      >
+        {/* X Button at top right edge of card */}
+        <View style={tw.style(`absolute -top-2 right-0 z-50`, {
+          paddingTop: 0,
+          paddingRight: 0,
+        })}>
+          <TouchableOpacity 
+            onPress={handleBack}
+            style={tw`h-[32px] w-[32px] flex-col items-center justify-center bg-black rounded-full`}
+            activeOpacity={0.7}
+          >
+            <AntDesign name="close" size={20} color="white" />
+          </TouchableOpacity>
+        </View>
+        {content}
+      </BottomSheet>
+    );
+  }
+
+  console.log('✅ Rendering BottomSheet with height:', validHeight);
+
+  return (
+    <BottomSheet
+      height={validHeight}
+      ref={bottomSheetRef}
+      animationType="spring"
+      backdropMaskColor="#19191900"
+      openDuration={1000}
+      closeDuration={1000}
+      disableKeyboardHandling={true}
+      style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`, {
+        position: 'relative',
+      })}
+      closeOnDragDown={true}
+    >
+      {/* X Button at top right edge of card */}
+      <View style={tw.style(`absolute -top-2 right-0 z-50`, {
+        paddingTop: 0,
+        paddingRight: 0,
+      })}>
+        <TouchableOpacity 
+          onPress={handleBack}
+          style={tw`h-[32px] w-[32px] flex-col items-center justify-center bg-black rounded-full`}
+          activeOpacity={0.7}
+        >
+          <AntDesign name="close" size={20} color="white" />
+        </TouchableOpacity>
+      </View>
+      {content}
+    </BottomSheet>
+  );
+};
+
+export default FindRideSheet;

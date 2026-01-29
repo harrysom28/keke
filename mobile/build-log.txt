@@ -1,0 +1,376 @@
+🔧 Setting up Android build environment...
+✅ JAVA_HOME: /Applications/Android Studio.app/Contents/jbr/Contents/Home
+✅ ANDROID_HOME: /Users/mac1/Library/Android/sdk
+
+☕ Java version:
+openjdk version "21.0.8" 2025-07-15
+OpenJDK Runtime Environment (build 21.0.8+-14196175-b1038.72)
+OpenJDK 64-Bit Server VM (build 21.0.8+-14196175-b1038.72, mixed mode)
+
+🤖 Android SDK:
+android-31
+android-33
+android-34
+
+📱 Android emulator:
+List of devices attached
+emulator-5554	device
+
+
+🚀 Starting development build...
+⏱️  This will take 10-15 minutes on first build...
+
+🧹 Cleaning previous builds...
+🔨 Building and installing app...
+› Building app...
+Starting a Gradle Daemon, 1 incompatible Daemon could not be reused, use --status for details
+Configuration on demand is an incubating feature.
+> Task :gradle-plugin:settings-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle-plugin:shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle-plugin:shared:compileKotlin UP-TO-DATE
+> Task :gradle-plugin:shared:compileJava NO-SOURCE
+> Task :gradle-plugin:shared:processResources NO-SOURCE
+> Task :gradle-plugin:shared:classes UP-TO-DATE
+> Task :gradle-plugin:shared:jar UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:compileKotlin UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:compileJava NO-SOURCE
+> Task :gradle-plugin:settings-plugin:pluginDescriptors UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:processResources UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:classes UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:jar UP-TO-DATE
+
+> Configure project :expo-dev-launcher-gradle-plugin
+w: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-dev-launcher/expo-dev-launcher-gradle-plugin/build.gradle.kts:25:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Configure project :expo-module-gradle-plugin
+w: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/build.gradle.kts:58:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Task :gradle-plugin:react-native-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-module-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-launcher-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-launcher-gradle-plugin:pluginDescriptors UP-TO-DATE
+> Task :expo-module-gradle-plugin:pluginDescriptors UP-TO-DATE
+> Task :expo-module-gradle-plugin:processResources UP-TO-DATE
+> Task :expo-dev-launcher-gradle-plugin:processResources UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:compileKotlin UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:compileJava NO-SOURCE
+> Task :gradle-plugin:react-native-gradle-plugin:pluginDescriptors UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:processResources UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:classes UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:jar UP-TO-DATE
+
+> Task :expo-module-gradle-plugin:compileKotlin
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ExpoModulesGradlePlugin.kt:10:28 Unresolved reference 'extensions'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ExpoModulesGradlePlugin.kt:45:32 Unresolved reference 'extra'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ExpoModulesGradlePlugin.kt:50:32 Unresolved reference 'extra'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ProjectConfiguration.kt:18:28 Unresolved reference 'extensions'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ProjectConfiguration.kt:34:3 Unresolved reference 'extra'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ProjectConfiguration.kt:35:3 Unresolved reference 'extra'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ProjectConfiguration.kt:53:32 Unresolved reference 'extra'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ProjectConfiguration.kt:55:28 Unresolved reference 'extra'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/ProjectConfiguration.kt:57:31 Unresolved reference 'extra'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/gradle/ExpoModuleExtension.kt:10:28 Unresolved reference 'extensions'.
+e: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/gradle/ExpoModuleExtension.kt:34:32 Unresolved reference 'extra'.
+
+> Task :expo-module-gradle-plugin:compileKotlin FAILED
+> Task :expo-dev-launcher-gradle-plugin:compileKotlin
+> Task :expo-dev-launcher-gradle-plugin:compileJava NO-SOURCE
+> Task :expo-dev-launcher-gradle-plugin:classes UP-TO-DATE
+> Task :expo-dev-launcher-gradle-plugin:jar UP-TO-DATE
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':expo-module-gradle-plugin:compileKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 38s
+17 actionable tasks: 2 executed, 15 up-to-date
+Error: /Users/mac1/Desktop/keke/mobile/android/gradlew app:assembleDebug -x lint -x test --configure-on-demand --build-cache -PreactNativeDevServerPort=8081 -PreactNativeArchitectures=arm64-v8a exited with non-zero code: 1
+Error: /Users/mac1/Desktop/keke/mobile/android/gradlew app:assembleDebug -x lint -x test --configure-on-demand --build-cache -PreactNativeDevServerPort=8081 -PreactNativeArchitectures=arm64-v8a exited with non-zero code: 1
+    at ChildProcess.completionListener (/Users/mac1/Desktop/keke/mobile/node_modules/@expo/spawn-async/src/spawnAsync.ts:67:13)
+    at Object.onceWrapper (node:events:622:26)
+    at ChildProcess.emit (node:events:507:28)
+    at maybeClose (node:internal/child_process:1101:16)
+    at Process.ChildProcess._handle.onexit (node:internal/child_process:305:5)
+    ...
+    at spawnAsync (/Users/mac1/Desktop/keke/mobile/node_modules/@expo/spawn-async/src/spawnAsync.ts:28:21)
+    at spawnGradleAsync (/Users/mac1/Desktop/keke/mobile/node_modules/expo/node_modules/@expo/cli/src/start/platforms/android/gradle.ts:134:28)
+    at assembleAsync (/Users/mac1/Desktop/keke/mobile/node_modules/expo/node_modules/@expo/cli/src/start/platforms/android/gradle.ts:83:16)
+    at runAndroidAsync (/Users/mac1/Desktop/keke/mobile/node_modules/expo/node_modules/@expo/cli/src/run/android/runAndroidAsync.ts:62:24)
+
+✅ Build complete!
+› Building app...
+Downloading https://services.gradle.org/distributions/gradle-8.14.3-bin.zip
+.............10%.............20%.............30%.............40%.............50%.............60%.............70%.............80%.............90%..............100%
+
+Welcome to Gradle 8.14.3!
+
+Here are the highlights of this release:
+ - Java 24 support
+ - GraalVM Native Image toolchain selection
+ - Enhancements to test reporting
+ - Build Authoring improvements
+
+For more details see https://docs.gradle.org/8.14.3/release-notes.html
+
+Starting a Gradle Daemon (subsequent builds will be faster)
+Configuration on demand is an incubating feature.
+
+> Configure project :expo-gradle-plugin:expo-autolinking-plugin
+w: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-plugin/build.gradle.kts:25:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Configure project :expo-gradle-plugin:expo-autolinking-settings-plugin
+w: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-settings-plugin/build.gradle.kts:30:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Task :gradle-plugin:settings-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle-plugin:shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle-plugin:settings-plugin:pluginDescriptors
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:pluginDescriptors
+> Task :gradle-plugin:settings-plugin:processResources
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:processResources
+> Task :gradle-plugin:shared:processResources NO-SOURCE
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:processResources NO-SOURCE
+> Task :gradle-plugin:shared:compileKotlin
+> Task :gradle-plugin:shared:compileJava NO-SOURCE
+> Task :gradle-plugin:shared:classes UP-TO-DATE
+> Task :gradle-plugin:shared:jar
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:compileKotlin
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:compileJava NO-SOURCE
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:classes UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:jar
+> Task :gradle-plugin:settings-plugin:compileKotlin
+> Task :gradle-plugin:settings-plugin:compileJava NO-SOURCE
+> Task :gradle-plugin:settings-plugin:classes
+> Task :gradle-plugin:settings-plugin:jar
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:compileKotlin
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:compileJava NO-SOURCE
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:classes
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:jar
+
+> Configure project :expo-dev-launcher-gradle-plugin
+w: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-dev-launcher/expo-dev-launcher-gradle-plugin/build.gradle.kts:25:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Configure project :expo-module-gradle-plugin
+w: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/build.gradle.kts:58:3: 'kotlinOptions(KotlinJvmOptionsDeprecated /* = KotlinJvmOptions */.() -> Unit): Unit' is deprecated. Please migrate to the compilerOptions DSL. More details are here: https://kotl.in/u1r8ln
+
+> Task :expo-gradle-plugin:expo-autolinking-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle-plugin:react-native-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-module-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-launcher-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-module-gradle-plugin:pluginDescriptors
+> Task :expo-dev-launcher-gradle-plugin:pluginDescriptors
+> Task :expo-module-gradle-plugin:processResources
+> Task :expo-dev-launcher-gradle-plugin:processResources
+> Task :expo-gradle-plugin:expo-autolinking-plugin:pluginDescriptors
+> Task :expo-gradle-plugin:expo-autolinking-plugin:processResources
+> Task :expo-gradle-plugin:expo-autolinking-plugin:compileKotlin
+> Task :expo-gradle-plugin:expo-autolinking-plugin:compileJava NO-SOURCE
+> Task :expo-gradle-plugin:expo-autolinking-plugin:classes
+> Task :expo-gradle-plugin:expo-autolinking-plugin:jar
+> Task :gradle-plugin:react-native-gradle-plugin:pluginDescriptors
+> Task :gradle-plugin:react-native-gradle-plugin:processResources
+> Task :gradle-plugin:react-native-gradle-plugin:compileKotlin
+> Task :gradle-plugin:react-native-gradle-plugin:compileJava NO-SOURCE
+> Task :gradle-plugin:react-native-gradle-plugin:classes
+> Task :gradle-plugin:react-native-gradle-plugin:jar
+> Task :expo-dev-launcher-gradle-plugin:compileKotlin
+> Task :expo-dev-launcher-gradle-plugin:compileJava NO-SOURCE
+> Task :expo-dev-launcher-gradle-plugin:classes
+> Task :expo-dev-launcher-gradle-plugin:jar
+
+> Task :expo-module-gradle-plugin:compileKotlin
+w: file:///Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/src/main/kotlin/expo/modules/plugin/android/AndroidLibraryExtension.kt:9:24 'var targetSdk: Int?' is deprecated. Will be removed from library DSL in v9.0. Use testOptions.targetSdk or/and lint.targetSdk instead.
+
+> Task :expo-module-gradle-plugin:compileJava NO-SOURCE
+> Task :expo-module-gradle-plugin:classes
+> Task :expo-module-gradle-plugin:jar
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+A problem occurred configuring root project 'keke'.
+> Multiple build operations failed.
+      Could not make copy of temporary workspace (/Users/mac1/.gradle/caches/8.14.3/transforms/4578e56e3b984ca8fe7d1e6f0c8bf232-ff698e18-2818-4a6d-868b-3fd1378d794e) to (/Users/mac1/.gradle/caches/8.14.3/transforms/4578e56e3b984ca8fe7d1e6f0c8bf232-4f3c552a-22f3-4198-9351-b6f924c917c8)
+      Could not make copy of temporary workspace (/Users/mac1/.gradle/caches/8.14.3/transforms/58919bb40ebe0ee4ee70426cb7d7f801-1086a8da-5fd3-4118-a0f5-deccfe98285b) to (/Users/mac1/.gradle/caches/8.14.3/transforms/58919bb40ebe0ee4ee70426cb7d7f801-a3f0472a-e22d-47cf-9e17-df8e3cc32bb6)
+      Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/207144e57fc20a60e9671d0220baec21-9c9d0332-776b-4e02-a648-3e22d978c900' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/207144e57fc20a60e9671d0220baec21-9c9d0332-776b-4e02-a648-3e22d978c900/transformed'
+      Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/3977b51be7b59345fd2dd2f43bb27bdf-caa77413-fef1-47ba-aaf0-b2420c2f8184' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/3977b51be7b59345fd2dd2f43bb27bdf-caa77413-fef1-47ba-aaf0-b2420c2f8184/transformed'
+      Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b0e59c002d0f98230a1751c3315bad5d-622ce71a-4462-45b7-b752-dfd9676a0d4b' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b0e59c002d0f98230a1751c3315bad5d-622ce71a-4462-45b7-b752-dfd9676a0d4b/transformed'
+      Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9241f492311c9eaba232639e787087aa-0e9b67d8-dbe4-4092-b01f-6f72fb345294' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9241f492311c9eaba232639e787087aa-0e9b67d8-dbe4-4092-b01f-6f72fb345294/transformed'
+      Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/5349a34fa0b83166b7f2fdbcdb00f91c-da86fce3-cb62-4bc7-bf38-627e921acc90' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/5349a34fa0b83166b7f2fdbcdb00f91c-da86fce3-cb62-4bc7-bf38-627e921acc90/transformed'
+      Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0f6e085a664403bc0e8f414e1e16dbe5-9ea85940-db08-410b-abb6-932ae5581257' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0f6e085a664403bc0e8f414e1e16dbe5-9ea85940-db08-410b-abb6-932ae5581257/transformed'
+      Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9a9e695af79780fdfd7769ccd076fadb-70e4ba83-5d70-47ba-84dd-a60f2599e53e' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9a9e695af79780fdfd7769ccd076fadb-70e4ba83-5d70-47ba-84dd-a60f2599e53e/transformed'
+      Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fc219cff0b4c0da8bbc693ecf8eea9c0-d360f6d6-c9d1-476d-8e25-a8dda596101c' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fc219cff0b4c0da8bbc693ecf8eea9c0-d360f6d6-c9d1-476d-8e25-a8dda596101c/transformed'
+      ...and 102 more failures.
+   > Could not make copy of temporary workspace (/Users/mac1/.gradle/caches/8.14.3/transforms/4578e56e3b984ca8fe7d1e6f0c8bf232-ff698e18-2818-4a6d-868b-3fd1378d794e) to (/Users/mac1/.gradle/caches/8.14.3/transforms/4578e56e3b984ca8fe7d1e6f0c8bf232-4f3c552a-22f3-4198-9351-b6f924c917c8)
+   > Could not make copy of temporary workspace (/Users/mac1/.gradle/caches/8.14.3/transforms/58919bb40ebe0ee4ee70426cb7d7f801-1086a8da-5fd3-4118-a0f5-deccfe98285b) to (/Users/mac1/.gradle/caches/8.14.3/transforms/58919bb40ebe0ee4ee70426cb7d7f801-a3f0472a-e22d-47cf-9e17-df8e3cc32bb6)
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/207144e57fc20a60e9671d0220baec21-9c9d0332-776b-4e02-a648-3e22d978c900' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/207144e57fc20a60e9671d0220baec21-9c9d0332-776b-4e02-a648-3e22d978c900/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/3977b51be7b59345fd2dd2f43bb27bdf-caa77413-fef1-47ba-aaf0-b2420c2f8184' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/3977b51be7b59345fd2dd2f43bb27bdf-caa77413-fef1-47ba-aaf0-b2420c2f8184/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b0e59c002d0f98230a1751c3315bad5d-622ce71a-4462-45b7-b752-dfd9676a0d4b' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b0e59c002d0f98230a1751c3315bad5d-622ce71a-4462-45b7-b752-dfd9676a0d4b/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9241f492311c9eaba232639e787087aa-0e9b67d8-dbe4-4092-b01f-6f72fb345294' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9241f492311c9eaba232639e787087aa-0e9b67d8-dbe4-4092-b01f-6f72fb345294/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/5349a34fa0b83166b7f2fdbcdb00f91c-da86fce3-cb62-4bc7-bf38-627e921acc90' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/5349a34fa0b83166b7f2fdbcdb00f91c-da86fce3-cb62-4bc7-bf38-627e921acc90/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0f6e085a664403bc0e8f414e1e16dbe5-9ea85940-db08-410b-abb6-932ae5581257' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0f6e085a664403bc0e8f414e1e16dbe5-9ea85940-db08-410b-abb6-932ae5581257/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9a9e695af79780fdfd7769ccd076fadb-70e4ba83-5d70-47ba-84dd-a60f2599e53e' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9a9e695af79780fdfd7769ccd076fadb-70e4ba83-5d70-47ba-84dd-a60f2599e53e/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fc219cff0b4c0da8bbc693ecf8eea9c0-d360f6d6-c9d1-476d-8e25-a8dda596101c' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fc219cff0b4c0da8bbc693ecf8eea9c0-d360f6d6-c9d1-476d-8e25-a8dda596101c/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/ac9e5e0b96b9e890ce43d9980b7222c3-9c4108ce-b70a-40b9-a8ed-2c4d0f71c1e6' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/ac9e5e0b96b9e890ce43d9980b7222c3-9c4108ce-b70a-40b9-a8ed-2c4d0f71c1e6/transformed'
+   > Could not write workspace metadata to /Users/mac1/.gradle/caches/8.14.3/transforms/ac731af64a884575d9443e643d70c111-efe3df86-4b53-4b61-af0b-e7b7ec90512d/metadata.bin
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/7c12f1b3bdfe120affc441451aaa344d-441b44cc-56ac-467a-87ca-bb11d43fa0aa' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/7c12f1b3bdfe120affc441451aaa344d-441b44cc-56ac-467a-87ca-bb11d43fa0aa/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/613cc539e66f16c4136d8ca5e0ae4024-c0083203-fe0f-405c-bd87-b4e345a3285d/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/ee9936444c918057fdd09b587cba9d1e-09d95738-7edd-426a-a2b7-3ea0699600b1' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/ee9936444c918057fdd09b587cba9d1e-09d95738-7edd-426a-a2b7-3ea0699600b1/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/5a5d30f92b53cad46b0fc643d7949ea6-ae95f514-ccc3-4c96-ba38-ffe9d5d0c41b' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/5a5d30f92b53cad46b0fc643d7949ea6-ae95f514-ccc3-4c96-ba38-ffe9d5d0c41b/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/2481e0f24d52b31848b47a6e8a2865c0-1b1d4af1-bb21-4ddc-b2a6-ba7834371737' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/2481e0f24d52b31848b47a6e8a2865c0-1b1d4af1-bb21-4ddc-b2a6-ba7834371737/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b9ab654b3ab71e3d44bae5b486e0a74c-6207d236-de67-4af8-b532-c07ec1dfd613' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b9ab654b3ab71e3d44bae5b486e0a74c-6207d236-de67-4af8-b532-c07ec1dfd613/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0b3121aec70d053b2c20d20ce591e70a-6d2dd0e3-c817-456a-a6af-3713bc968ad0' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0b3121aec70d053b2c20d20ce591e70a-6d2dd0e3-c817-456a-a6af-3713bc968ad0/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b3ba37e1472d4bbec1c9cf16bc8e9832-55112c65-d75c-4364-a7a4-aecb617fc022' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b3ba37e1472d4bbec1c9cf16bc8e9832-55112c65-d75c-4364-a7a4-aecb617fc022/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c6365d259c3199494dd27186c1062fba-f06ef1e3-9b8b-4f5b-a626-d515dade69f9' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c6365d259c3199494dd27186c1062fba-f06ef1e3-9b8b-4f5b-a626-d515dade69f9/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/aafc234160c4674e856779bf09ba5e57-08c66b43-bce4-4a30-8aec-4db2a40082ed' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/aafc234160c4674e856779bf09ba5e57-08c66b43-bce4-4a30-8aec-4db2a40082ed/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0bb0a231f16735ffb66aad2612377705-2eacc191-b2b6-4c04-b8d1-fd5bc12cfef8' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0bb0a231f16735ffb66aad2612377705-2eacc191-b2b6-4c04-b8d1-fd5bc12cfef8/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a0cf415c5859d2704db176b12fe214b0-5c59763f-354c-4100-a6a2-7bc75c09b9db' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a0cf415c5859d2704db176b12fe214b0-5c59763f-354c-4100-a6a2-7bc75c09b9db/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/34be9b2a574e5c2d2a9aeacee7e62f84-956f0b07-8a9c-4336-aab2-16c3708ce975' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/34be9b2a574e5c2d2a9aeacee7e62f84-956f0b07-8a9c-4336-aab2-16c3708ce975/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/bac7e39d5c8bb5b065b97574720816f0-2f860201-8e50-4ab0-a896-1b5019f8b0e9' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/bac7e39d5c8bb5b065b97574720816f0-2f860201-8e50-4ab0-a896-1b5019f8b0e9/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/bd1c41f17d51634f9ca8575474bb68b3-ffa8daec-706f-4dae-917f-1b765cc10ca6' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/bd1c41f17d51634f9ca8575474bb68b3-ffa8daec-706f-4dae-917f-1b765cc10ca6/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/db7db21fc02cf73edb64bcd8305d0d58-2d0ba3f9-d23b-40f5-9a26-ccb923f5c542' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/db7db21fc02cf73edb64bcd8305d0d58-2d0ba3f9-d23b-40f5-9a26-ccb923f5c542/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/f70d51696201846d8b01a791f122f23d-f7a78ca7-eb97-464c-b2d6-7dfba397351c' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/f70d51696201846d8b01a791f122f23d-f7a78ca7-eb97-464c-b2d6-7dfba397351c/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fa00b437b911a889fc15c4b3f0642014-0a9d1034-b51f-4719-a531-f8ff7f97a9ab' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fa00b437b911a889fc15c4b3f0642014-0a9d1034-b51f-4719-a531-f8ff7f97a9ab/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/7a7b1a16b3dc5b1eff849fa8cb1779c7-8efbb94c-9ddf-4ab5-828f-70ff803e3eaa' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/7a7b1a16b3dc5b1eff849fa8cb1779c7-8efbb94c-9ddf-4ab5-828f-70ff803e3eaa/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/bd4399c265e9b3dbc094e8a5bbec9438-39be2626-e0e9-4ba7-9583-6d5eb531384f' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/bd4399c265e9b3dbc094e8a5bbec9438-39be2626-e0e9-4ba7-9583-6d5eb531384f/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/2f6000fa78c5e80e66003a872249469c-3018f199-465b-481c-b228-b743410b673c' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/2f6000fa78c5e80e66003a872249469c-3018f199-465b-481c-b228-b743410b673c/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/60ea8a8c7cf81a74f790760df956a9d2-e6a7a2b2-e922-417a-a4c9-eb8731a05e14' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/60ea8a8c7cf81a74f790760df956a9d2-e6a7a2b2-e922-417a-a4c9-eb8731a05e14/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8cca61e1622d945efa9e4085826cfa69-222890f1-6032-4601-9707-9e950f0a8368' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8cca61e1622d945efa9e4085826cfa69-222890f1-6032-4601-9707-9e950f0a8368/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/163c9ab396d9072cb9abe2e9e41efc11-7fa9059a-ba00-47d9-937d-de5e0894249d' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/163c9ab396d9072cb9abe2e9e41efc11-7fa9059a-ba00-47d9-937d-de5e0894249d/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8e324198db01ad197f51d29829e4d95d-79ef8017-d2c6-449f-b816-181c60bbae5c' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8e324198db01ad197f51d29829e4d95d-79ef8017-d2c6-449f-b816-181c60bbae5c/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a2534a313e078838eb55ab28887751ca-ba9f1e7b-ac70-4c7a-af32-3211c616f602' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a2534a313e078838eb55ab28887751ca-ba9f1e7b-ac70-4c7a-af32-3211c616f602/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/19ad7833d9f82ba494bf15b3c9cf10b0-32b03d50-e663-49b3-a6fd-77bc0cf6b514' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/19ad7833d9f82ba494bf15b3c9cf10b0-32b03d50-e663-49b3-a6fd-77bc0cf6b514/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/196538601d65b6b19785c18354bd983d-a1324c19-077a-4065-aa49-983d1ad9a72f' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/196538601d65b6b19785c18354bd983d-a1324c19-077a-4065-aa49-983d1ad9a72f/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/f84f2d787af42e25b2ba6926115b8cf8-67b9b1e8-f94c-45be-ad31-42d70fb168f3' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/f84f2d787af42e25b2ba6926115b8cf8-67b9b1e8-f94c-45be-ad31-42d70fb168f3/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/54f9b7f6c3f9b406917ce98ca07ba53f-ba4a5e7f-1bbc-4a91-9719-5bf9374691bf' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/54f9b7f6c3f9b406917ce98ca07ba53f-ba4a5e7f-1bbc-4a91-9719-5bf9374691bf/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b7f67293f26b10ee7a7ec8445e1526f4-c8bbb03a-f149-4fd7-9a67-8ed27cf3a921' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b7f67293f26b10ee7a7ec8445e1526f4-c8bbb03a-f149-4fd7-9a67-8ed27cf3a921/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/237a3cebb34991a81be982333bb90a15-70bb20b5-3f9f-4a3f-9ee8-32d69abe85ef' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/237a3cebb34991a81be982333bb90a15-70bb20b5-3f9f-4a3f-9ee8-32d69abe85ef/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/58ad11b397f6f74827fb9fb161baefe5-68ebe0ac-ba10-4e9c-aa12-d4c741706a3d' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/58ad11b397f6f74827fb9fb161baefe5-68ebe0ac-ba10-4e9c-aa12-d4c741706a3d/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/548ec3d0f443297644d4b1059f8ce48a-189e01ff-c3d6-4594-ba96-923dadfe444b' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/548ec3d0f443297644d4b1059f8ce48a-189e01ff-c3d6-4594-ba96-923dadfe444b/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/e49e42e0e2ce463dd967bfa75ddce1f8-64508ff7-2018-4f66-a23d-82229d8e72de' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/e49e42e0e2ce463dd967bfa75ddce1f8-64508ff7-2018-4f66-a23d-82229d8e72de/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d5f8cb7bf2bcd2094d6292d92b5690e8-d0ed9af9-8f72-4cfd-b220-72d3ec4f7d42' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d5f8cb7bf2bcd2094d6292d92b5690e8-d0ed9af9-8f72-4cfd-b220-72d3ec4f7d42/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/4ae3ec62cab2584d227d37cacd4c2e29-dfe16716-0ed9-485d-9f5b-54561f0071b0' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/4ae3ec62cab2584d227d37cacd4c2e29-dfe16716-0ed9-485d-9f5b-54561f0071b0/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/863a32ab703c6682eb8b1da68b8ede02-d70a7b5a-be3c-4b70-81bb-72f718b9b67f' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/863a32ab703c6682eb8b1da68b8ede02-d70a7b5a-be3c-4b70-81bb-72f718b9b67f/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/6f709fcaacb00a3ba5b614c6bc6819af-d6af66ce-90a8-474f-9ba4-2d8a22be6387' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/6f709fcaacb00a3ba5b614c6bc6819af-d6af66ce-90a8-474f-9ba4-2d8a22be6387/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/e427d2ce90134a474bfa18b80de91a67-dce37d6d-e3af-4f52-bb90-82ca352c2c22' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/e427d2ce90134a474bfa18b80de91a67-dce37d6d-e3af-4f52-bb90-82ca352c2c22/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/1a73762998132f0220f1740545fa7e02-a7cc9acc-ecda-4d93-aebc-97adc7ef8524' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/1a73762998132f0220f1740545fa7e02-a7cc9acc-ecda-4d93-aebc-97adc7ef8524/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b06b8f9c7c3ff77a38d4f58425126d54-d106932e-0162-46e4-a678-e9e7d8e67751' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b06b8f9c7c3ff77a38d4f58425126d54-d106932e-0162-46e4-a678-e9e7d8e67751/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/049f6a86d4594f747de6c36b8636b0fb-6943c177-b2bf-4d15-821c-c88d6c8ac0e7' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/049f6a86d4594f747de6c36b8636b0fb-6943c177-b2bf-4d15-821c-c88d6c8ac0e7/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/5ac5ff992586ea994e9545384bfce1f5-0c97743a-c54a-4afd-958f-aef2ab72a1d3' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/5ac5ff992586ea994e9545384bfce1f5-0c97743a-c54a-4afd-958f-aef2ab72a1d3/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/55c2f01628303d64f94ed8dbfd8765e2-e28c9b6d-b591-4777-99de-a76503c2450a' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/55c2f01628303d64f94ed8dbfd8765e2-e28c9b6d-b591-4777-99de-a76503c2450a/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/76b4d323882c15c9fdc65d65905fd364-b00a3202-ea54-4a38-9b0f-0afbabd415d5' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/76b4d323882c15c9fdc65d65905fd364-b00a3202-ea54-4a38-9b0f-0afbabd415d5/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/aad153158f12baa6baad65ce5755c330-2b4889fa-f094-4777-beca-3c9c52e5c5a9' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/aad153158f12baa6baad65ce5755c330-2b4889fa-f094-4777-beca-3c9c52e5c5a9/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/010c3638eebc2bd3366f9e4c68cd9ed8-3ba0f61f-f1dd-4a26-9881-459d44ca0b62' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/010c3638eebc2bd3366f9e4c68cd9ed8-3ba0f61f-f1dd-4a26-9881-459d44ca0b62/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/1949ad555dac86bfbf26787afbcfecce-c80fd7eb-e5ae-4d0c-9a14-8f0d0e90a45e' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/1949ad555dac86bfbf26787afbcfecce-c80fd7eb-e5ae-4d0c-9a14-8f0d0e90a45e/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/e3b2e1976b7d671e3034782500cbdc90-ab4dfacf-6e36-42c5-8258-0044b82218de' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/e3b2e1976b7d671e3034782500cbdc90-ab4dfacf-6e36-42c5-8258-0044b82218de/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fc9a31e18efb182789563224187c33ea-143bd044-a122-4b48-8de4-d830445ae6b4' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fc9a31e18efb182789563224187c33ea-143bd044-a122-4b48-8de4-d830445ae6b4/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/edfaba043723eed0e63602fd9b3580d9-af537996-e5c9-4da3-8ee2-e6491f7088b8' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/edfaba043723eed0e63602fd9b3580d9-af537996-e5c9-4da3-8ee2-e6491f7088b8/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a3eee2b84449f6c95f4352c1c312a1a0-75fb9e32-96ec-4e95-8159-98c434215928/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/6c7c5d080412805be98ee2af8d08e8a3-d447f665-925b-4f7d-af37-d3b2a0de74be' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/6c7c5d080412805be98ee2af8d08e8a3-d447f665-925b-4f7d-af37-d3b2a0de74be/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8994d40781bd223f59d203b64e8e4f56-0299860d-a808-4d67-8705-3a35eddcce03/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0ae6241866b0ac5efa8ad739fbb01fe6-7c6b72b4-c3c6-48b2-ae14-bb2c6b3ecc18/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/cf4d2483b95099446044241389d93d08-8fa166d3-6b49-4847-b82e-72b942d2a72c' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/cf4d2483b95099446044241389d93d08-8fa166d3-6b49-4847-b82e-72b942d2a72c/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/ff3b3ca0ad558802f6130af36dc9d059-fd1531b2-67b4-43b7-8b73-05a9310fedc7/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c4fd77817769752a19ab7c8e528d3578-69797f52-d65a-471b-94c7-e9e88767154b/transformed'
+   > Could not write workspace metadata to /Users/mac1/.gradle/caches/8.14.3/transforms/4f038ede3602cb88a8e2f021ecaa9b9d-5a1d9bce-0fb2-4433-a16e-4e29b7f1009e/metadata.bin
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/02a1ca026ba040954a992b53385a42ec-e8e1bc2c-e34c-4b3e-a61e-e3319370357c' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/02a1ca026ba040954a992b53385a42ec-e8e1bc2c-e34c-4b3e-a61e-e3319370357c/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/80ce6c1f762dbc8373d63a997ca95405-e17fea54-a4f8-4745-afcd-667aea34727a' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/80ce6c1f762dbc8373d63a997ca95405-e17fea54-a4f8-4745-afcd-667aea34727a/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/6ad4a3207e700ec4c9de455730e64655-522286bc-c40f-4c43-8499-bb7da1ff0ca8' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/6ad4a3207e700ec4c9de455730e64655-522286bc-c40f-4c43-8499-bb7da1ff0ca8/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9b9509aec1b5fd2fed1c9e0d111bca7b-63c91c85-96f9-46a8-9cb0-a3bbd6b72373' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/9b9509aec1b5fd2fed1c9e0d111bca7b-63c91c85-96f9-46a8-9cb0-a3bbd6b72373/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b56a2f270dce15215b09d49e9599bff2-22c10801-f48a-41f8-84ab-b96525e21529' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b56a2f270dce15215b09d49e9599bff2-22c10801-f48a-41f8-84ab-b96525e21529/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/31cd7b4610bd5e77c1cae6e537d0167b-a94d744c-4968-497e-9882-4ebc469d2c8a' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/31cd7b4610bd5e77c1cae6e537d0167b-a94d744c-4968-497e-9882-4ebc469d2c8a/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/005c68ae7e4dcf99e1b7b532de1c72e9-afe24cc8-86ed-415f-a467-426c58e874e0' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/005c68ae7e4dcf99e1b7b532de1c72e9-afe24cc8-86ed-415f-a467-426c58e874e0/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/2217d8dd26f99ffaaeef0fbd7b56f319-52debb42-27e8-4c4d-bcdb-adff21969aa6' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/2217d8dd26f99ffaaeef0fbd7b56f319-52debb42-27e8-4c4d-bcdb-adff21969aa6/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c21a8efc858f97cfee8bf93bdcf1aeea-4b4b2e7e-76fb-4815-b554-e7829654874f' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c21a8efc858f97cfee8bf93bdcf1aeea-4b4b2e7e-76fb-4815-b554-e7829654874f/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d74f9b8b825d87741ab9aeb7855f60fb-d0c11656-492c-4020-9c98-7bc383ebb956' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d74f9b8b825d87741ab9aeb7855f60fb-d0c11656-492c-4020-9c98-7bc383ebb956/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/899c9bbe1cceb0710207efa58c69a292-f8b81d39-f3ad-4f41-9038-5d67948eaf50' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/899c9bbe1cceb0710207efa58c69a292-f8b81d39-f3ad-4f41-9038-5d67948eaf50/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/2fb2029d416c9b04ff671f651af73b41-52d44571-abf7-4aa7-ac6e-f2cef7139409' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/2fb2029d416c9b04ff671f651af73b41-52d44571-abf7-4aa7-ac6e-f2cef7139409/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d26973bfa26c35d4257006ea234c53be-551e0081-8d6d-4767-b981-28fb49ff943d/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/02c7a4d4fad5bfdc97cdc300d1f4963c-b635254d-79af-49ba-a6fa-239f6e374158/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/56c0feb5aa88fbc794910a9a070bebbd-7287743a-9e95-4580-95de-a0e7646a2902' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/56c0feb5aa88fbc794910a9a070bebbd-7287743a-9e95-4580-95de-a0e7646a2902/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/1fb31b6400f53867cf801846a1f8ed2d-97309dca-8916-4b97-8e9b-3859a2c145c6' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/1fb31b6400f53867cf801846a1f8ed2d-97309dca-8916-4b97-8e9b-3859a2c145c6/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/29b34865bd358b95295229e039a62c3c-c47ae4d7-4d52-4c1e-83ec-a605b5557a83' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/29b34865bd358b95295229e039a62c3c-c47ae4d7-4d52-4c1e-83ec-a605b5557a83/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a000b1eae45a8ef751188fa9465e4b9a-d807f862-c821-4564-84dc-3b77a624d92d' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a000b1eae45a8ef751188fa9465e4b9a-d807f862-c821-4564-84dc-3b77a624d92d/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d70399fd31fe55ca010617c21492e513-8bed369d-b329-47d0-87e9-b428c0d3a604' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d70399fd31fe55ca010617c21492e513-8bed369d-b329-47d0-87e9-b428c0d3a604/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c682f2916f3189806140ae6cb0673205-2dd45dba-4bdb-49a6-b421-2d6732441cce' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c682f2916f3189806140ae6cb0673205-2dd45dba-4bdb-49a6-b421-2d6732441cce/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/1d26c77d55f10a544a43581378bbfc09-b0b2b3a4-c0f6-4a84-a145-7d444f28e237' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/1d26c77d55f10a544a43581378bbfc09-b0b2b3a4-c0f6-4a84-a145-7d444f28e237/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/bc9275c56142ea1b06d9a65af72f978d-c322ff3e-d275-4722-a55b-3a28684a3818/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/78b22c0379b8c1973b95c2a164aadfcc-39613ec3-e38c-4c80-b3e4-27e9caa11808' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/78b22c0379b8c1973b95c2a164aadfcc-39613ec3-e38c-4c80-b3e4-27e9caa11808/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c71f191cc1169b358dc5b7e5721881c9-32d4d5d5-5803-4be2-9575-2a23ae512ce3' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/c71f191cc1169b358dc5b7e5721881c9-32d4d5d5-5803-4be2-9575-2a23ae512ce3/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8480e0a1cdf44290632137db5a3c3129-5f9380fb-fca7-4424-9709-2c386b59613d' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8480e0a1cdf44290632137db5a3c3129-5f9380fb-fca7-4424-9709-2c386b59613d/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a6dc937ff4a70df4aa4a666506f2eab2-1ffc8783-3dae-46dd-83ad-667759fd7eff' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/a6dc937ff4a70df4aa4a666506f2eab2-1ffc8783-3dae-46dd-83ad-667759fd7eff/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fb40446515cf2d0c666acdd1932cd1e9-0e6d6a48-bc77-45e1-87e0-e974b7977bc5' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/fb40446515cf2d0c666acdd1932cd1e9-0e6d6a48-bc77-45e1-87e0-e974b7977bc5/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/ade7f607d2e9a3a83d197c23c2e037cb-57f142f7-d9de-4af1-ba83-32b97e840786' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/ade7f607d2e9a3a83d197c23c2e037cb-57f142f7-d9de-4af1-ba83-32b97e840786/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b28a2d8cae0b3c1af4dd407f4d86805d-88ebf6c6-98b2-4d6c-895e-0df23c7a6eda' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/b28a2d8cae0b3c1af4dd407f4d86805d-88ebf6c6-98b2-4d6c-895e-0df23c7a6eda/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/dc2e850fa3a811c3d49051b53133dfea-5ce8dd3c-7621-4ef6-a882-10fe75ba4dfb' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/dc2e850fa3a811c3d49051b53133dfea-5ce8dd3c-7621-4ef6-a882-10fe75ba4dfb/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/f25a2aab25d6d188371d4de2ae41db96-1ed6bc58-6032-4a0e-bf10-9c989d618bd7' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/f25a2aab25d6d188371d4de2ae41db96-1ed6bc58-6032-4a0e-bf10-9c989d618bd7/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8abadb1b9be40a02167fa4b390df0822-6740bb90-4a39-4295-a654-aff9a62d0c75' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/8abadb1b9be40a02167fa4b390df0822-6740bb90-4a39-4295-a654-aff9a62d0c75/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/43adddc2083537fa886b109ef075cc08-47e2b762-0707-4f9b-8125-eb6cf05a28d8' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/43adddc2083537fa886b109ef075cc08-47e2b762-0707-4f9b-8125-eb6cf05a28d8/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d9f4933aca2035e073fdadcd967b088c-a4290db9-5967-43f3-ba1d-e71c89e27f19' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d9f4933aca2035e073fdadcd967b088c-a4290db9-5967-43f3-ba1d-e71c89e27f19/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0aca73dc37a6fe69715be4b44dc529b4-1a865a96-4219-4175-988b-f29cbb8cbb0e' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0aca73dc37a6fe69715be4b44dc529b4-1a865a96-4219-4175-988b-f29cbb8cbb0e/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0e1b4f775e9df59b5738ec7782b956b5-ac0234f9-195d-41f7-abc1-264c68853d05' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/0e1b4f775e9df59b5738ec7782b956b5-ac0234f9-195d-41f7-abc1-264c68853d05/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/471e6bf8f102867cd2de33f61c569051-d328c156-d308-45d5-8004-a8da75b71739' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/471e6bf8f102867cd2de33f61c569051-d328c156-d308-45d5-8004-a8da75b71739/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/327e14df8fa1865c2177ce6b642d6af7-0e7b1e9a-f74f-4603-9b45-c1923c84bdf8' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/327e14df8fa1865c2177ce6b642d6af7-0e7b1e9a-f74f-4603-9b45-c1923c84bdf8/transformed'
+   > Failed to create parent directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d646dccab4f1cd1bc21dd7e7c36dab14-6646ca3d-21f6-4b37-9ff9-7f97e09af10b' when creating directory '/Users/mac1/.gradle/caches/8.14.3/transforms/d646dccab4f1cd1bc21dd7e7c36dab14-6646ca3d-21f6-4b37-9ff9-7f97e09af10b/transformed'
+   > Failed to create directory '/Users/mac1/.gradle/caches/8.14.3/transforms/cafdd5785bd64a75603672152bb2e6da-ba9a6305-158a-4a39-96d2-97aa9cca3de8/transformed'
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 2m 40s
+28 actionable tasks: 28 executed
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Could not stop all services.
+> Failed to release lock on Build Output Cleanup Cache (/Users/mac1/Desktop/keke/mobile/android/.gradle/buildOutputCleanup)
+> Could not stop all services.
+   > Failed to release lock on Build Output Cleanup Cache (/Users/mac1/Desktop/keke/mobile/node_modules/expo-dev-launcher/expo-dev-launcher-gradle-plugin/.gradle/buildOutputCleanup)
+   > Failed to release lock on execution history cache (/Users/mac1/Desktop/keke/mobile/node_modules/expo-dev-launcher/expo-dev-launcher-gradle-plugin/.gradle/8.14.3/executionHistory)
+> Could not stop all services.
+   > Failed to release lock on Build Output Cleanup Cache (/Users/mac1/Desktop/keke/mobile/node_modules/@react-native/gradle-plugin/.gradle/buildOutputCleanup)
+   > Failed to release lock on execution history cache (/Users/mac1/Desktop/keke/mobile/node_modules/@react-native/gradle-plugin/.gradle/8.14.3/executionHistory)
+> Could not stop all services.
+   > Failed to release lock on Build Output Cleanup Cache (/Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/buildOutputCleanup)
+   > Failed to release lock on execution history cache (/Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-core/expo-module-gradle-plugin/.gradle/8.14.3/executionHistory)
+> Could not stop all services.
+   > Failed to release lock on cache directory md-supplier (/Users/mac1/.gradle/caches/8.14.3/md-supplier)
+   > Could not stop all services.
+      > Failed to release lock on Build Output Cleanup Cache (/Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/.gradle/buildOutputCleanup)
+      > Failed to release lock on execution history cache (/Users/mac1/Desktop/keke/mobile/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/.gradle/8.14.3/executionHistory)
+   > Failed to release lock on Build cache (/Users/mac1/.gradle/caches/build-cache-1)
+   > Failed to release lock on cache directory md-rule (/Users/mac1/.gradle/caches/8.14.3/md-rule)
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 2m 40s
+Error: /Users/mac1/Desktop/keke/mobile/android/gradlew app:assembleDebug -x lint -x test --configure-on-demand --build-cache -PreactNativeDevServerPort=8081 -PreactNativeArchitectures=arm64-v8a exited with non-zero code: 1
+Error: /Users/mac1/Desktop/keke/mobile/android/gradlew app:assembleDebug -x lint -x test --configure-on-demand --build-cache -PreactNativeDevServerPort=8081 -PreactNativeArchitectures=arm64-v8a exited with non-zero code: 1
+    at ChildProcess.completionListener (/Users/mac1/Desktop/keke/mobile/node_modules/@expo/spawn-async/src/spawnAsync.ts:67:13)
+    at Object.onceWrapper (node:events:622:26)
+    at ChildProcess.emit (node:events:507:28)
+    at maybeClose (node:internal/child_process:1101:16)
+    at Process.ChildProcess._handle.onexit (node:internal/child_process:305:5)
+    ...
+    at spawnAsync (/Users/mac1/Desktop/keke/mobile/node_modules/@expo/spawn-async/src/spawnAsync.ts:28:21)
+    at spawnGradleAsync (/Users/mac1/Desktop/keke/mobile/node_modules/expo/node_modules/@expo/cli/src/start/platforms/android/gradle.ts:134:28)
+    at assembleAsync (/Users/mac1/Desktop/keke/mobile/node_modules/expo/node_modules/@expo/cli/src/start/platforms/android/gradle.ts:83:16)
+    at runAndroidAsync (/Users/mac1/Desktop/keke/mobile/node_modules/expo/node_modules/@expo/cli/src/run/android/runAndroidAsync.ts:62:24)

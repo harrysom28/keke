@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "739000728443",
+    "project_id": "kekeapp-79989",
+    "storage_bucket": "kekeapp-79989.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:739000728443:android:3138956cc5b08f1ecadbde",
+        "android_client_info": {
+          "package_name": "com.keke.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "739000728443-9rkecl15ccd3mla76qk2ukdl97gr7d4s.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.keke.app",
+            "certificate_hash": "398a661afb227497a36e856f90ad47f2cc7d9316"
+          }
+        },
+        {
+          "client_id": "739000728443-1m6a11h3ahe55khqk7vceigs31r83uhh.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB0Q0zTlazui_1ixJfyQjU_wk2TQTib6T0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "739000728443-1m6a11h3ahe55khqk7vceigs31r83uhh.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
