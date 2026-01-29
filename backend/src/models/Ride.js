@@ -1,0 +1,335 @@
+import mongoose from 'mongoose';
+
+const rideSchema = new mongoose.Schema(
+  {
+    rider: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Rider is required'],
+    },
+    driver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Driver',
+      default: null,
+    },
+    vehicleType: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'VehicleType',
+      required: [true, 'Vehicle type is required'],
+    },
+    pickupLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        required: true,
+      },
+      address: {
+        type: String,
+        required: [true, 'Pickup address is required'],
+      },
+      name: String,
+    },
+    dropoffLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        required: true,
+      },
+      address: {
+        type: String,
+        required: [true, 'Dropoff address is required'],
+      },
+      name: String,
+    },
+    status: {
+      type: String,
+      enum: [
+        'requested',
+        'scheduled',
+        'accepted',
+        'arrived',
+        'in-progress',
+        'completed',
+        'cancelled',
+        'no-driver-found',
+      ],
+      default: 'requested',
+    },
+    acceptedByDriver: {
+      type: Boolean,
+      default: false,
+    },
+    isRideStarted: {
+      type: Boolean,
+      default: false,
+    },
+    dropOffCompleted: {
+      type: Boolean,
+      default: false,
+    },
+    fare: {
+      baseFare: Number,
+      distanceFare: Number,
+      timeFare: Number,
+      surgeMultiplier: {
+        type: Number,
+        default: 1.0,
+      },
+      totalFare: {
+        type: Number,
+        required: true,
+      },
+      currency: {
+        type: String,
+        default: 'USD',
+      },
+    },
+    distance: {
+      value: Number, // in kilometers
+      unit: {
+        type: String,
+        default: 'km',
+      },
+    },
+    duration: {
+      estimated: Number, // in minutes
+      actual: Number, // in minutes (after completion)
+      unit: {
+        type: String,
+        default: 'minutes',
+      },
+    },
+    route: {
+      polyline: String, // Encoded polyline string
+      overviewPolyline: String,
+    },
+    paymentMethod: {
+      type: String,
+      enum: ['cash', 'wallet', 'card', 'bank_transfer'],
+      required: [true, 'Payment method is required'],
+    },
+    paymentStatus: {
+      type: String,
+      enum: ['pending', 'completed', 'failed', 'refunded'],
+      default: 'pending',
+    },
+    promoCode: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Promocode',
+      default: null,
+    },
+    discountAmount: {
+      type: Number,
+      default: 0,
+    },
+    rating: {
+      riderRating: {
+        type: Number,
+        min: 1,
+        max: 5,
+        default: null,
+      },
+      driverRating: {
+        type: Number,
+        min: 1,
+        max: 5,
+        default: null,
+      },
+      riderReview: String,
+      driverReview: String,
+      createdAt: Date,
+    },
+    cancellation: {
+      cancelledBy: {
+        type: String,
+        enum: ['rider', 'driver', 'system'],
+      },
+      reason: String,
+      cancelledAt: Date,
+      cancellationFee: {
+        type: Number,
+        default: 0,
+      },
+    },
+    // Scheduled ride
+    isScheduled: {
+      type: Boolean,
+      default: false,
+    },
+    scheduledAt: {
+      type: Date,
+      default: null,
+    },
+    // Status timestamps
+    acceptedAt: {
+      type: Date,
+      default: null,
+    },
+    arrivedAt: {
+      type: Date,
+      default: null,
+    },
+    startedAt: {
+      type: Date,
+      default: null,
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+    statusHistory: [
+      {
+        status: String,
+        timestamp: {
+          type: Date,
+          default: Date.now,
+        },
+        note: String,
+      },
+    ],
+    // Driver arrival
+    arrivalDistance: {
+      type: Number, // in meters
+      default: null,
+    },
+    arrivalTime: {
+      type: Number, // in minutes
+      default: null,
+    },
+    // Real-time tracking
+    tracking: {
+      currentLocation: {
+        type: {
+          type: String,
+          enum: ['Point'],
+        },
+        coordinates: [Number],
+      },
+      lastUpdated: Date,
+    },
+    // Change/refund
+    changeAmount: {
+      type: Number,
+      default: 0,
+    },
+    refundAmount: {
+      type: Number,
+      default: 0,
+    },
+  },
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+// Indexes
+rideSchema.index({ rider: 1, createdAt: -1 });
+rideSchema.index({ driver: 1, createdAt: -1 });
+rideSchema.index({ status: 1 });
+rideSchema.index({ 'pickupLocation': '2dsphere' });
+rideSchema.index({ 'dropoffLocation': '2dsphere' });
+rideSchema.index({ paymentStatus: 1 });
+rideSchema.index({ scheduledAt: 1 });
+rideSchema.index({ createdAt: -1 });
+
+// Virtual for ride ID (for compatibility with mobile app)
+rideSchema.virtual('ride_id').get(function () {
+  return this._id.toString();
+});
+
+// Virtual for cost (alias for fare.totalFare for mobile app compatibility)
+rideSchema.virtual('cost').get(function () {
+  return this.fare.totalFare;
+});
+
+// Update status and add to history
+rideSchema.methods.updateStatus = async function (newStatus, note = null) {
+  this.status = newStatus;
+  this.statusHistory.push({
+    status: newStatus,
+    timestamp: new Date(),
+    note,
+  });
+  await this.save();
+};
+
+// Mark ride as started
+rideSchema.methods.startRide = async function () {
+  this.status = 'in-progress';
+  this.isRideStarted = true;
+  this.startedAt = new Date();
+  this.statusHistory.push({
+    status: 'in-progress',
+    timestamp: new Date(),
+    note: 'Ride started',
+  });
+  await this.save();
+};
+
+// Complete ride
+rideSchema.methods.completeRide = async function () {
+  this.status = 'completed';
+  this.dropOffCompleted = true;
+  this.completedAt = new Date();
+  this.paymentStatus = 'completed';
+  this.statusHistory.push({
+    status: 'completed',
+    timestamp: new Date(),
+    note: 'Ride completed',
+  });
+  await this.save();
+};
+
+// Cancel ride
+rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee = 0) {
+  this.status = 'cancelled';
+  this.cancellation = {
+    cancelledBy,
+    reason,
+    cancelledAt: new Date(),
+    cancellationFee: fee,
+  };
+  this.statusHistory.push({
+    status: 'cancelled',
+    timestamp: new Date(),
+    note: `Cancelled by ${cancelledBy}: ${reason || 'No reason provided'}`,
+  });
+  await this.save();
+};
+
+// Static method to find active ride for rider
+rideSchema.statics.findActiveRideForRider = async function (riderId) {
+  return this.findOne({
+    rider: riderId,
+    status: { $in: ['requested', 'accepted', 'arrived', 'in-progress'] },
+  })
+    .populate('driver', 'user vehicleDetails currentLocation')
+    .populate('driver.user', 'name phone profileImage rating')
+    .populate('vehicleType')
+    .sort({ createdAt: -1 });
+};
+
+// Static method to find active ride for driver
+rideSchema.statics.findActiveRideForDriver = async function (driverId) {
+  return this.findOne({
+    driver: driverId,
+    status: { $in: ['accepted', 'arrived', 'in-progress'] },
+  })
+    .populate('rider', 'name phone profileImage rating')
+    .populate('vehicleType')
+    .sort({ createdAt: -1 });
+};
+
+const Ride = mongoose.model('Ride', rideSchema);
+
+export default Ride;
