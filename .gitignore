@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 yarn.lock
 
 # Environment variables
@@ -100,3 +99,5 @@ web-build/
 # Misc
 *.orig
 .cache/
+mobile/Vendor/
+mobile/ios/Pods/
