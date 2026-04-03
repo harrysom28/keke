@@ -1,4 +1,11 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { existsSync, mkdirSync } from 'fs';
+import { writeFile } from 'fs/promises';
+import { v4 as uuidv4 } from 'uuid';
 import Driver from '../models/Driver.js';
+import DriverKyc from '../models/DriverKyc.js';
+import DriverVehicle from '../models/DriverVehicle.js';
 import User from '../models/User.js';
 import Ride from '../models/Ride.js';
 import Payment from '../models/Payment.js';
@@ -7,6 +14,89 @@ import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.j
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { calculateDistance } from '../utils/geolocation.js';
+import { learnFromRide } from '../services/placeIntelligence.js';
+import { getFileUrl, uploadToCloudinary } from '../services/fileUploadService.js';
+import { cache } from '../config/redis.js';
+
+/**
+ * Map multipart field name from mobile / driver create to upload category.
+ */
+function categorizeDriverCreateUploadField(fieldname) {
+  if (!fieldname || typeof fieldname !== 'string') return null;
+  const f = fieldname.toLowerCase();
+
+  if (['selfie', 'selfieimage', 'selfie_image', 'image_name'].includes(f)) return 'selfie';
+
+  const idExact = new Set([
+    'licenceimage',
+    'licence_image',
+    'licence_image_name',
+    'idimage',
+    'id_image',
+    'id_card_image_name',
+    'driverlicence',
+    'driver_licence',
+    'driverlicense',
+    'driver_license',
+  ]);
+  if (idExact.has(f)) return 'id_image';
+  if (f.includes('licence') && f.includes('image')) return 'id_image';
+  if (f.includes('license') && f.includes('image') && !f.includes('vehicle')) return 'id_image';
+  if (f.includes('id_card')) return 'id_image';
+
+  const vehicleImg = new Set(['vehicleimage', 'vehicle_image', 'vehiclephoto', 'vehicle_image_name']);
+  if (vehicleImg.has(f)) return 'vehicle_image';
+  if (f.includes('vehicle') && f.includes('image') && !f.includes('document')) return 'vehicle_image';
+
+  if (['insurancedocument', 'insurance_document', 'insurance'].includes(f) || f.includes('insurance')) {
+    return 'insurance';
+  }
+
+  if (['vehicledocument', 'vehicle_document', 'registration'].includes(f)) return 'vehicle_document';
+
+  return null;
+}
+
+function mapVehicleDocumentType(fieldname) {
+  const f = (fieldname || '').toLowerCase();
+  if (f === 'registration') return 'registration';
+  if (f.includes('road')) return 'roadworthiness';
+  return 'other';
+}
+
+/**
+ * Resolve public URL for a file from driver /create (multer memory or disk).
+ */
+async function persistDriverCreateFileAndGetUrl(file) {
+  const provider = process.env.UPLOAD_PROVIDER || 'local';
+
+  if (provider === 'cloudinary' && file.buffer) {
+    const result = await uploadToCloudinary(file.buffer, 'driver-documents', {
+      resource_type: file.mimetype === 'application/pdf' ? 'raw' : 'auto',
+    });
+    return result.url;
+  }
+
+  if (file.path) {
+    return getFileUrl(file);
+  }
+
+  if (file.buffer) {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const uploadsDir = path.join(__dirname, '../../uploads');
+    const sub = file.fieldname || 'general';
+    const destDir = path.join(uploadsDir, sub);
+    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true });
+    const ext = path.extname(file.originalname || '') || '.bin';
+    const uniqueName = `${uuidv4()}${ext}`;
+    const fullPath = path.join(destDir, uniqueName);
+    await writeFile(fullPath, file.buffer);
+    return getFileUrl({ path: fullPath });
+  }
+
+  return getFileUrl(file);
+}
 
 /**
  * Create driver profile - POST /api/driver/create
@@ -41,17 +131,21 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
     }
   }
 
-  // Create driver profile
+  // Create driver profile (coerce year to number for schema)
+  const vehicleYear = typeof vehicleDetails.year === 'number'
+    ? vehicleDetails.year
+    : parseInt(String(vehicleDetails.year), 10) || new Date().getFullYear();
+
   const driverData = {
     user: userId,
-    licenseNumber,
+    licenseNumber: String(licenseNumber).trim(),
     licenseExpiry: new Date(licenseExpiry),
     vehicleDetails: {
-      make: vehicleDetails.make,
-      model: vehicleDetails.model,
-      year: vehicleDetails.year,
-      plateNumber: vehicleDetails.plateNumber,
-      color: vehicleDetails.color,
+      make: String(vehicleDetails.make || '').trim(),
+      model: String(vehicleDetails.model || '').trim(),
+      year: vehicleYear,
+      plateNumber: String(vehicleDetails.plateNumber || '').trim().toUpperCase(),
+      color: String(vehicleDetails.color || '').trim(),
       vehicleType: vehicleDetails.vehicleType,
     },
     documentsVerified: false,
@@ -73,9 +167,131 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
     };
   }
 
-  const driver = await Driver.create(driverData);
+  let driver;
+  try {
+    driver = await Driver.create(driverData);
+  } catch (createErr) {
+    if (createErr.code === 11000) {
+      const field = createErr.message?.includes('licenseNumber') ? 'License number' : createErr.message?.includes('plateNumber') ? 'Plate number' : 'Driver';
+      throw new ConflictError(`${field} is already registered. Please use different details.`);
+    }
+    throw createErr;
+  }
   await driver.populate('user', 'name email phone profileImage role');
   await driver.populate('vehicleDetails.vehicleType');
+
+  const files = Array.isArray(req.files) ? req.files : [];
+  let idImageUrlLicence = null;
+  let idImageUrlOther = null;
+  let selfieUrl = null;
+  const vehicleImagePush = [];
+  let insuranceDocumentUrl = null;
+  const vehicleDocPush = [];
+
+  for (const file of files) {
+    try {
+      const url = await persistDriverCreateFileAndGetUrl(file);
+      if (!url) {
+        logger.warn(`Driver create upload: no URL for field ${file.fieldname}`);
+        continue;
+      }
+      const cat = categorizeDriverCreateUploadField(file.fieldname);
+      if (!cat) continue;
+
+      const fn = (file.fieldname || '').toLowerCase();
+      if (cat === 'id_image') {
+        if (
+          fn.includes('licence') ||
+          fn.includes('license') ||
+          fn.includes('driver')
+        ) {
+          idImageUrlLicence = url;
+        } else {
+          idImageUrlOther = url;
+        }
+      } else if (cat === 'selfie') {
+        selfieUrl = url;
+      } else if (cat === 'vehicle_image') {
+        vehicleImagePush.push({
+          type: 'front',
+          url,
+          createdAt: new Date(),
+        });
+      } else if (cat === 'insurance') {
+        insuranceDocumentUrl = url;
+      } else if (cat === 'vehicle_document') {
+        vehicleDocPush.push({
+          type: mapVehicleDocumentType(file.fieldname),
+          url,
+          uploadedAt: new Date(),
+        });
+      }
+    } catch (err) {
+      logger.error(`Driver create file upload failed (${file.fieldname}): ${err.message}`);
+    }
+  }
+
+  const idImageUrl = idImageUrlLicence || idImageUrlOther;
+
+  if (vehicleImagePush.length > 0) {
+    await Driver.findByIdAndUpdate(driver._id, {
+      $push: { vehicleImages: { $each: vehicleImagePush } },
+    });
+  }
+
+  const kycUserId = driver.user?._id || driver.user;
+
+  if (idImageUrl != null || selfieUrl != null) {
+    const kycSet = {};
+    if (idImageUrl) kycSet.idImageUrl = idImageUrl;
+    if (selfieUrl) kycSet.selfieUrl = selfieUrl;
+    await DriverKyc.findOneAndUpdate(
+      { userId: kycUserId },
+      {
+        $set: { ...kycSet, updatedAt: new Date() },
+        $setOnInsert: {
+          userId: kycUserId,
+          idType: 'drivers_license',
+          idNumber: String(licenseNumber || '').trim() || 'pending',
+          idImageUrl: idImageUrl || 'pending',
+          selfieUrl: selfieUrl || 'pending',
+          verificationStatus: 'pending',
+        },
+      },
+      { upsert: true, new: true }
+    );
+  }
+
+  if (insuranceDocumentUrl != null || vehicleDocPush.length > 0) {
+    const vd = driver.vehicleDetails;
+    const vehicleTypeId = vd.vehicleType?._id || vd.vehicleType;
+    const updateOps = {
+      $setOnInsert: {
+        userId: kycUserId,
+        vehicleType: vehicleTypeId,
+        plateNumber: String(vd.plateNumber || '').toUpperCase(),
+        make: vd.make || null,
+        model: vd.model || null,
+        year: vd.year || null,
+        color: vd.color || null,
+        verificationStatus: 'pending',
+      },
+    };
+    if (insuranceDocumentUrl != null) {
+      updateOps.$set = { insuranceDocumentUrl: insuranceDocumentUrl };
+    }
+    if (vehicleDocPush.length > 0) {
+      updateOps.$push = { vehicleDocuments: { $each: vehicleDocPush } };
+    }
+    await DriverVehicle.findOneAndUpdate({ userId: kycUserId }, updateOps, {
+      upsert: true,
+      new: true,
+    });
+  }
+
+  driver = await Driver.findById(driver._id)
+    .populate('user', 'name email phone profileImage role')
+    .populate('vehicleDetails.vehicleType');
 
   // Update user role to driver
   user.role = 'driver';
@@ -221,17 +437,20 @@ export const updateLocation = asyncHandler(async (req, res) => {
   if (user.role === 'driver') {
     const driver = await Driver.findOne({ user: userId });
     if (driver) {
-      await driver.updateLocation([longitude, latitude], address);
-      
-      // Emit location update via Socket.io and Pusher
-      // This is called frequently during rides, so location updates will be real-time
+      const { updateDriverLocation, persistDriverLocationMongo } = await import('../services/locationService.js');
+      await updateDriverLocation(driver._id, longitude, latitude, address || '');
+      persistDriverLocationMongo(driver._id, longitude, latitude, address).catch((err) => {
+        logger.warn(`Mongo driver location persist failed: ${err.message}`);
+      });
+
+      const { updateDriverLocationForAcceptedRide } = await import('../services/rideMovementService.js');
+      await updateDriverLocationForAcceptedRide(driver._id, { lat: latitude, lng: longitude });
+
       const { getSocketService } = await import('../services/socketService.js');
       const socketService = getSocketService();
       if (socketService) {
-        // Check if driver has active ride and emit to rider
         const activeRide = await Ride.findActiveRideForDriver(driver._id);
         if (activeRide) {
-          // Emit location update (this will also emit via Pusher)
           await socketService.emitDriverLocationUpdate(activeRide, driver);
         }
       }
@@ -272,13 +491,14 @@ export const getLocations = asyncHandler(async (req, res) => {
   let locations = [];
 
   if (type === 'drivers' || !type) {
-    // Get all online available drivers
+    const MAX_DRIVERS = 500;
     const drivers = await Driver.find({
       isOnline: true,
       isAvailable: true,
       documentsVerified: true,
       verificationStatus: 'approved',
     })
+      .limit(MAX_DRIVERS)
       .populate('user', 'name phone profileImage')
       .select('currentLocation user vehicleDetails');
 
@@ -327,6 +547,46 @@ export const getLocations = asyncHandler(async (req, res) => {
       locations,
     },
   });
+});
+
+/**
+ * Nearby driver count - GET /api/drivers/nearby-count?lat=&lng=&radiusKm=3
+ */
+export const getNearbyDriverCount = asyncHandler(async (req, res) => {
+  const { lat, lng, radiusKm = 3 } = req.query;
+  const latitude = parseFloat(lat);
+  const longitude = parseFloat(lng);
+  const radius = parseFloat(radiusKm) || 3;
+
+  let count = 0;
+  try {
+    count = await Driver.countDocuments({
+      isOnline: true,
+      currentLocation: {
+        $near: {
+          $geometry: { type: 'Point', coordinates: [longitude, latitude] },
+          $maxDistance: radius * 1000,
+        },
+      },
+    });
+  } catch (err) {
+    // Geospatial query can fail if 2dsphere index is missing or data is invalid
+    logger.warn(`Nearby count geo query failed, using fallback: ${err.message}`);
+    count = await Driver.countDocuments({
+      isOnline: true,
+      currentLocation: { $exists: true, $ne: null },
+    });
+  }
+
+  const capped = count > 10 ? '10+' : String(count);
+  const label =
+    count === 0
+      ? 'No drivers nearby'
+      : count === 1
+        ? '1 driver nearby'
+        : `${capped} drivers nearby`;
+
+  return res.json({ count, label });
 });
 
 /**
@@ -395,6 +655,10 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
     return res.json({
       status: 'success',
       data: {
+        is_online: false,
+        is_available: false,
+        verification_status: 'pending',
+        documents_verified: false,
         earnings: {
           total: 0,
           today: 0,
@@ -437,13 +701,17 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
   res.json({
     status: 'success',
     data: {
+      is_online: driver.isOnline,
+      is_available: driver.isAvailable,
+      verification_status: driver.verificationStatus || 'pending',
+      documents_verified: !!driver.documentsVerified,
       earnings: {
         total: driver.earnings.total,
         today: driver.earnings.today,
         thisWeek: driver.earnings.thisWeek,
         thisMonth: driver.earnings.thisMonth,
         period: earnings,
-        currency: 'USD',
+        currency: 'NGN',
       },
       statistics: {
         totalRides: driver.totalRides,
@@ -457,7 +725,169 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
         payment_status: ride.paymentStatus,
         completed_at: ride.completedAt,
       })),
+      // Bank details for withdrawal UI (mobile expects driver_* keys)
+      driver_bank_name: driver.bankAccount?.bankName || null,
+      driver_account_number: driver.bankAccount?.accountNumber || null,
+      driver_account_name: driver.bankAccount?.accountName || null,
+      bank_account: driver.bankAccount || null,
     },
+  });
+});
+
+/**
+ * List my withdrawals - GET /api/driver/withdrawals
+ */
+export const getMyWithdrawals = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { page = 1, limit = 20 } = req.query;
+  const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+  const filter = {
+    user: userId,
+    amount: { $lt: 0 },
+    'metadata.type': 'withdrawal',
+  };
+
+  const [withdrawals, total] = await Promise.all([
+    Payment.find(filter).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit, 10)).lean(),
+    Payment.countDocuments(filter),
+  ]);
+
+  res.json({
+    status: 'success',
+    data: {
+      withdrawals: withdrawals.map((p) => ({
+        withdrawal_id: p._id.toString(),
+        amount: Math.abs(p.amount),
+        status: p.status,
+        created_at: p.createdAt,
+        completed_at: p.paidAt || null,
+        bank_name: (p.metadata && typeof p.metadata.get === 'function' ? p.metadata.get('bankName') : p.metadata?.bankName) || null,
+        account_number: (p.metadata && typeof p.metadata.get === 'function' ? p.metadata.get('accountNumber') : p.metadata?.accountNumber) || null,
+      })),
+      pagination: {
+        page: parseInt(page, 10),
+        limit: parseInt(limit, 10),
+        total,
+        pages: Math.ceil(total / parseInt(limit, 10)) || 1,
+      },
+    },
+  });
+});
+
+/**
+ * Get driver account setup status - GET /api/driver/setup-status
+ * Returns completeness %, verification status, rejection reason, and steps to complete.
+ */
+export const getDriverSetupStatus = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const driver = await Driver.findOne({ user: userId })
+    .populate('user', 'name phone')
+    .populate('vehicleDetails.vehicleType');
+
+  if (!driver) {
+    return res.json({
+      status: 'success',
+      data: {
+        has_driver_profile: false,
+        completeness_percent: 0,
+        verification_status: 'pending',
+        rejection_reason: null,
+        steps: [],
+        action_message: null,
+      },
+    });
+  }
+
+  const requiredImageTypes = ['front', 'back', 'side', 'interior', 'license'];
+  const vehicleImages = driver.vehicleImages || [];
+  const hasImageType = (type) => vehicleImages.some((img) => (img.type || '').toLowerCase() === type);
+  const licenseOk = !!(driver.licenseNumber && driver.licenseExpiry);
+  const vehicleDetailsOk = !!(
+    driver.vehicleDetails?.make &&
+    driver.vehicleDetails?.model &&
+    driver.vehicleDetails?.plateNumber &&
+    driver.vehicleDetails?.vehicleType
+  );
+  const vehicleImagesOk = requiredImageTypes.every((t) => hasImageType(t));
+  const bankOk = !!(
+    driver.bankAccount?.accountNumber &&
+    driver.bankAccount?.bankName
+  );
+
+  const steps = [
+    {
+      id: 'license',
+      label: 'Driver license',
+      description: 'Valid license number and expiry date',
+      completed: licenseOk,
+      action_required: licenseOk ? null : 'Add or update your driver license number and expiry in your driver profile.',
+    },
+    {
+      id: 'vehicle_details',
+      label: 'Vehicle details',
+      description: 'Make, model, plate number, and vehicle type',
+      completed: vehicleDetailsOk,
+      action_required: vehicleDetailsOk ? null : 'Complete vehicle details (make, model, plate number, vehicle type) in your driver profile.',
+    },
+    {
+      id: 'vehicle_images',
+      label: 'Vehicle photos',
+      description: 'Front, back, side, interior, and license plate photos',
+      completed: vehicleImagesOk,
+      action_required: vehicleImagesOk ? null : 'Upload all required vehicle photos (front, back, side, interior, license) in your driver profile.',
+    },
+    {
+      id: 'bank_account',
+      label: 'Bank account',
+      description: 'For receiving withdrawals',
+      completed: bankOk,
+      action_required: bankOk ? null : 'Add your bank account (account number and bank name) in your driver profile to receive withdrawals.',
+    },
+  ];
+
+  const completedCount = steps.filter((s) => s.completed).length;
+  const completenessPercent = steps.length ? Math.round((completedCount / steps.length) * 100) : 0;
+
+  let actionMessage = null;
+  if (driver.verificationStatus === 'rejected' && driver.rejectionReason) {
+    actionMessage = 'Your account was not approved. Please address the reason below and update your profile. You may need to re-upload documents or correct details. After updating, contact support or wait for re-review.';
+  } else if (completenessPercent < 100) {
+    actionMessage = 'Complete all steps below to submit your account for verification.';
+  } else if (driver.verificationStatus === 'pending') {
+    actionMessage = 'Your profile is complete and under review. You will be notified once approved.';
+  }
+
+  res.json({
+    status: 'success',
+    data: {
+      has_driver_profile: true,
+      completeness_percent: completenessPercent,
+      verification_status: driver.verificationStatus,
+      rejection_reason: driver.rejectionReason || null,
+      steps,
+      action_message: actionMessage,
+    },
+  });
+});
+
+/**
+ * Get driver challenges (gamified tasks) - GET /api/driver/challenges
+ */
+export const getDriverChallenges = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const driver = await Driver.findOne({ user: userId });
+  if (!driver) {
+    return res.json({
+      status: 'success',
+      data: { challenges: [] },
+    });
+  }
+  const { getChallengesForDriver } = await import('../services/driverTaskService.js');
+  const challenges = await getChallengesForDriver(driver._id);
+  res.json({
+    status: 'success',
+    data: { challenges },
   });
 });
 
@@ -542,33 +972,71 @@ export const acceptRide = asyncHandler(async (req, res) => {
     throw new ConflictError('Driver already has an active ride');
   }
 
-  const ride = await Ride.findById(rideId);
+  const acceptedAt = new Date();
+  const ride = await Ride.findOneAndUpdate(
+    { _id: rideId, status: 'requested', driver: null },
+    {
+      $set: {
+        driver: driver._id,
+        status: 'accepted',
+        acceptedAt,
+        acceptedByDriver: true,
+      },
+      $push: {
+        statusHistory: {
+          status: 'accepted',
+          timestamp: acceptedAt,
+          note: `Accepted by driver ${driver._id}`,
+        },
+      },
+    },
+    { new: true }
+  );
+
   if (!ride) {
-    throw new NotFoundError('Ride');
+    throw new ConflictError('Ride already accepted');
   }
 
-  if (ride.status !== 'requested') {
-    throw new ValidationError('Ride is no longer available');
-  }
+  await cache.set(`ride_accepted:${rideId}`, driver._id.toString(), 30);
 
-  if (ride.driver) {
-    throw new ConflictError('Ride has already been accepted');
-  }
-
-  // Assign driver to ride
-  ride.driver = driver._id;
-  ride.status = 'accepted';
-  ride.acceptedByDriver = true;
-  ride.acceptedAt = new Date();
-  ride.statusHistory.push({
-    status: 'accepted',
-    timestamp: new Date(),
-    note: `Accepted by driver ${driver._id}`,
-  });
-
-  await ride.save();
-  await ride.populate('rider', 'name phone profileImage rating');
+  await ride.populate('rider', 'name phone profileImage rating deviceToken');
   await ride.populate('vehicleType');
+
+  // Rider notifications: driver accepted + locked fare
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    const driverUser = await User.findById(userId).select('name').lean();
+    const driverName = driverUser?.name || 'Your driver';
+    const fareAmount = Math.round(Number(ride?.fare?.totalFare || 0));
+    const fareLabel = fareAmount.toLocaleString();
+
+    await sendToUser(ride.rider._id, 'rider', {
+      title: 'Driver on the way! 🛺',
+      message: `${driverName} has accepted your ride and is heading to you.`,
+      type: 'alert',
+      priority: 'high',
+      screen: 'ride',
+      ride_id: ride._id,
+      action_type: 'navigate',
+      action_payload: { screen: 'ActiveRide', rideId: ride._id.toString() },
+      event_key: 'ride_accepted',
+      data: { subType: 'ride_accepted', rideId: ride._id.toString() },
+    });
+
+    await sendToUser(ride.rider._id, 'rider', {
+      title: 'Your fare is locked 🔒',
+      message: `Your fare of ₦${fareLabel} is fixed in the app. No cash needed at pickup.`,
+      type: 'banner',
+      priority: 'normal',
+      screen: 'ride',
+      duration_ms: 8000,
+      ride_id: ride._id,
+      event_key: 'fare_locked',
+      data: { subType: 'fare_locked', rideId: ride._id.toString() },
+    });
+  } catch (err) {
+    logger.error(`Ride accepted notification failed: ${err.message}`);
+  }
 
   // Make driver unavailable temporarily
   driver.isAvailable = false;
@@ -850,6 +1318,22 @@ export const rejectRide = asyncHandler(async (req, res) => {
     }
   }
 
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    await sendToUser(ride.rider, 'rider', {
+      title: 'Driver cancelled',
+      message: 'Your driver cancelled the ride. We are finding you a new driver.',
+      type: 'alert',
+      priority: 'high',
+      screen: 'home',
+      ride_id: ride._id,
+      event_key: 'ride_cancelled_by_driver',
+      data: { subType: 'driver_cancelled', rideId: ride._id.toString() },
+    });
+  } catch (err) {
+    logger.error(`Ride rejected notification failed: ${err.message}`);
+  }
+
   // Update driver cancellation rate
   try {
     const { updateDriverCancellationRate } = await import('../services/driverStatisticsService.js');
@@ -864,6 +1348,104 @@ export const rejectRide = asyncHandler(async (req, res) => {
   res.json({
     status: 'success',
     message: 'Ride rejected successfully',
+    data: {
+      ride: formatRideForDriver(ride),
+    },
+  });
+});
+
+/**
+ * Mark arrived at pickup - POST /api/driver/rides/arrived
+ * Validates driver is within 150m of pickup; for wallet payments charges ₦100 service fee.
+ */
+export const markArrived = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { rideId, lat, lng } = req.body;
+
+  const driver = await Driver.findOne({ user: userId });
+  if (!driver) {
+    throw new NotFoundError('Driver profile');
+  }
+
+  const ride = await Ride.findById(rideId);
+  if (!ride) {
+    throw new NotFoundError('Ride');
+  }
+
+  if (ride.driver?.toString() !== driver._id.toString()) {
+    throw new ValidationError('You are not assigned to this ride');
+  }
+
+  if (ride.status !== 'accepted') {
+    throw new ValidationError('Ride must be in accepted state to mark arrived');
+  }
+
+  const { getSettings } = await import('../services/settingsService.js');
+  const { chargeServiceFee } = await import('../services/escrowWalletService.js');
+
+  const [pickupLng, pickupLat] = ride.pickupLocation?.coordinates ?? [];
+  if (lat != null && lng != null && pickupLat != null && pickupLng != null) {
+    const s = await getSettings();
+    const maxRadius = s.arrival?.maxRadiusMeters ?? 150;
+    const distanceKm = calculateDistance(pickupLat, pickupLng, Number(lat), Number(lng));
+    const distanceMeters = distanceKm * 1000;
+    if (distanceMeters > maxRadius) {
+      throw new ValidationError(
+        `You must be within ${maxRadius}m of the pickup point (currently ${Math.round(distanceMeters)}m)`
+      );
+    }
+  }
+
+  if (ride.paymentMethod === 'wallet' && ride.paymentStatus === 'held') {
+    const riderId = ride.rider?._id ?? ride.rider;
+    await chargeServiceFee(riderId, ride._id);
+  }
+
+  ride.status = 'arrived';
+  ride.arrivedAt = new Date();
+  if (ride.paymentMethod === 'wallet' && ride.paymentStatus === 'held') {
+    ride.paymentStatus = 'charged';
+  }
+  ride.statusHistory.push({
+    status: 'arrived',
+    timestamp: new Date(),
+    note: 'Driver arrived at pickup',
+  });
+  await ride.save();
+  await ride.populate('rider', 'name phone profileImage rating deviceToken');
+  await ride.populate('vehicleType');
+
+  const { getSocketService } = await import('../services/socketService.js');
+  const socketService = getSocketService();
+  if (socketService) {
+    socketService.emitRideStatusUpdate(ride, 'arrived', driver);
+  }
+
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    const driverUser = await User.findById(userId).select('name').lean();
+    const driverName = driverUser?.name || 'Your driver';
+    await sendToUser(ride.rider._id, 'rider', {
+      title: 'Driver arrived! 📍',
+      message: `${driverName} is at your pickup point. Please come out now.`,
+      type: 'alert',
+      priority: 'critical',
+      screen: 'ride',
+      ride_id: ride._id,
+      action_type: 'navigate',
+      action_payload: { screen: 'ActiveRide', rideId: ride._id.toString() },
+      event_key: 'driver_arrived',
+      data: { subType: 'driver_arrived', rideId: ride._id.toString() },
+    });
+  } catch (err) {
+    logger.error(`Ride arrived notification failed: ${err.message}`);
+  }
+
+  logger.info(`Ride ${rideId} marked arrived by driver ${driver._id}`);
+
+  res.json({
+    status: 'success',
+    message: 'Marked as arrived at pickup',
     data: {
       ride: formatRideForDriver(ride),
     },
@@ -906,8 +1488,30 @@ export const startRide = asyncHandler(async (req, res) => {
   });
 
   await ride.save();
-  await ride.populate('rider', 'name phone profileImage rating');
+  await ride.populate('rider', 'name phone profileImage rating deviceToken');
   await ride.populate('vehicleType');
+
+  // Rider notification: ride started
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    const dropoffName =
+      ride.dropoffLocation?.name ||
+      ride.dropoffLocation?.address ||
+      'your destination';
+    await sendToUser(ride.rider._id, 'rider', {
+      title: 'Ride started 🚀',
+      message: `You are on your way to ${dropoffName}. Enjoy your ride!`,
+      type: 'alert',
+      priority: 'normal',
+      screen: 'ride',
+      duration_ms: 4000,
+      ride_id: ride._id,
+      event_key: 'ride_started',
+      data: { subType: 'ride_started', rideId: ride._id.toString() },
+    });
+  } catch (err) {
+    logger.error(`Ride started notification failed: ${err.message}`);
+  }
 
   // Send real-time notification to rider
   const { getSocketService } = await import('../services/socketService.js');
@@ -960,13 +1564,9 @@ export const completeRide = asyncHandler(async (req, res) => {
   ride.status = 'completed';
   ride.dropOffCompleted = true;
   ride.completedAt = new Date();
-  ride.paymentStatus = paymentStatus || ride.paymentMethod === 'cash' ? 'pending' : 'completed';
-
-  // Update driver earnings
-  if (ride.paymentStatus === 'completed') {
-    await driver.addEarnings(ride.fare.totalFare);
-    driver.totalRides += 1;
-    await driver.save();
+  const isEscrowWallet = ride.paymentMethod === 'wallet' && ['held', 'charged'].includes(ride.paymentStatus);
+  if (!isEscrowWallet) {
+    ride.paymentStatus = paymentStatus || (ride.paymentMethod === 'cash' ? 'pending' : 'completed');
   }
 
   ride.statusHistory.push({
@@ -1015,6 +1615,40 @@ export const completeRide = asyncHandler(async (req, res) => {
     await socketService.emitRideStatusUpdate(ride, 'completed', driver);
   }
 
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    const fareAmount = Math.round(Number(ride?.fare?.totalFare || payment?.amount || 0));
+    const driverEarnings = Math.round(
+      Number(ride?.fare?.driverNetAmount ?? ride?.fare?.totalFare ?? 0)
+    );
+
+    await sendToUser(ride.rider._id, 'rider', {
+      title: 'Ride completed ✅',
+      message: `₦${fareAmount.toLocaleString()} has been deducted from your wallet. Thanks for riding with Keke!`,
+      type: 'alert',
+      priority: 'high',
+      screen: 'home',
+      ride_id: ride._id,
+      action_type: 'navigate',
+      action_payload: { screen: 'RideDetails', rideId: ride._id.toString() },
+      event_key: 'ride_completed',
+      data: { subType: 'ride_completed', rideId: ride._id.toString() },
+    });
+
+    await sendToUser(userId, 'driver', {
+      title: 'Fare received 💰',
+      message: `₦${driverEarnings.toLocaleString()} has been added to your wallet.`,
+      type: 'alert',
+      priority: 'high',
+      screen: 'home',
+      ride_id: ride._id,
+      event_key: 'fare_received',
+      data: { subType: 'fare_received', rideId: ride._id.toString() },
+    });
+  } catch (err) {
+    logger.error(`Ride completion notification failed: ${err.message}`);
+  }
+
   // Request rating/review from rider
   try {
     const { requestRiderReview } = await import('../services/reviewService.js');
@@ -1024,7 +1658,32 @@ export const completeRide = asyncHandler(async (req, res) => {
     // Don't fail the ride completion if review request fails
   }
 
+  // Check and award driver challenges (gamified tasks)
+  try {
+    const { checkAndAwardTasks } = await import('../services/driverTaskService.js');
+    await checkAndAwardTasks(driver._id, ride);
+  } catch (error) {
+    logger.error(`Driver task check failed for ride ${rideId}: ${error.message}`);
+  }
+
   logger.info(`Ride ${rideId} completed by driver ${driver._id}`);
+
+  // Self-learning: teach places from completed ride (fire-and-forget)
+  const pickup = ride.pickupLocation;
+  const drop = ride.dropoffLocation;
+  learnFromRide({
+    _id: ride._id.toString(),
+    origin: {
+      lat: pickup?.coordinates?.[1],
+      lng: pickup?.coordinates?.[0],
+      label: pickup?.name || pickup?.address,
+    },
+    destination: {
+      lat: drop?.coordinates?.[1],
+      lng: drop?.coordinates?.[0],
+      label: drop?.name || drop?.address,
+    },
+  }).catch((err) => logger.warn('[Learn]', err.message));
 
   res.json({
     status: 'success',
@@ -1067,11 +1726,21 @@ export const confirmPayment = asyncHandler(async (req, res) => {
   ride.paymentStatus = 'completed';
   await ride.save();
 
-  // Update driver earnings if not already updated
-  if (driver.earnings.lastUpdated < ride.completedAt) {
-    await driver.addEarnings(ride.fare.totalFare);
+  try {
+    const { applyRideEarningToWallet } = await import('../services/paymentService.js');
+    await applyRideEarningToWallet(ride);
     driver.totalRides += 1;
     await driver.save();
+  } catch (err) {
+    logger.error(`applyRideEarningToWallet failed for ride ${rideId}: ${err.message}`);
+  }
+
+  // Check and award driver challenges (in case payment was confirmed after ride complete)
+  try {
+    const { checkAndAwardTasks } = await import('../services/driverTaskService.js');
+    await checkAndAwardTasks(driver._id, ride);
+  } catch (error) {
+    logger.error(`Driver task check failed for ride ${rideId}: ${error.message}`);
   }
 
   // Process payment transaction (if Stripe)
@@ -1120,7 +1789,7 @@ export const confirmPayment = asyncHandler(async (req, res) => {
  */
 export const changePaymentMethod = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { rideId, paymentMethod } = req.body;
+  const { rideId, paymentMethod, amount } = req.body;
 
   const driver = await Driver.findOne({ user: userId });
   if (!driver) {
@@ -1140,15 +1809,23 @@ export const changePaymentMethod = asyncHandler(async (req, res) => {
     throw new ValidationError('Cannot change payment method for completed or cancelled rides');
   }
 
-  const validMethods = ['cash', 'wallet', 'card', 'bank_transfer'];
-  if (!validMethods.includes(paymentMethod)) {
-    throw new ValidationError('Invalid payment method');
+  if (paymentMethod) {
+    const validMethods = ['cash', 'wallet', 'card', 'bank_transfer'];
+    if (!validMethods.includes(paymentMethod)) {
+      throw new ValidationError('Invalid payment method');
+    }
+    ride.paymentMethod = paymentMethod;
   }
-
-  ride.paymentMethod = paymentMethod;
+  if (amount != null && amount !== '' && !Number.isNaN(parseFloat(amount))) {
+    ride.changeAmount = parseFloat(amount);
+  }
   await ride.save();
 
-  logger.info(`Payment method changed to ${paymentMethod} for ride ${rideId}`);
+  logger.info(
+    `Ride ${rideId} updated` +
+    (paymentMethod ? ` payment method ${paymentMethod}` : '') +
+    (amount != null && amount !== '' ? ` change amount ${amount}` : '')
+  );
 
   res.json({
     status: 'success',

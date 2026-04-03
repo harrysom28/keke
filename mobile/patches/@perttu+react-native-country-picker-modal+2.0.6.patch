@@ -1,0 +1,55 @@
+diff --git a/node_modules/@perttu/react-native-country-picker-modal/lib/src/CloseButton.js b/node_modules/@perttu/react-native-country-picker-modal/lib/src/CloseButton.js
+index 06a4616..277c4f3 100644
+--- a/node_modules/@perttu/react-native-country-picker-modal/lib/src/CloseButton.js
++++ b/node_modules/@perttu/react-native-country-picker-modal/lib/src/CloseButton.js
+@@ -1,5 +1,5 @@
+ import React from 'react';
+-import { Image, Platform, StyleSheet, TouchableNativeFeedback, TouchableOpacity, View, } from 'react-native';
++import { Image, Platform, StyleSheet, TouchableOpacity, View, } from 'react-native';
+ import { useTheme } from './CountryTheme';
+ const styles = StyleSheet.create({
+     container: {
+@@ -21,15 +21,12 @@ const CloseButtonAndroid = (props) => {
+     }
+     const { onBackgroundTextColor } = useTheme();
+     return (React.createElement(View, { style: [styles.container, props.style] },
+-        React.createElement(TouchableNativeFeedback, { background: typeof Platform.Version === 'number' && Platform.Version < 21
+-                ? TouchableNativeFeedback.SelectableBackground()
+-                : TouchableNativeFeedback.SelectableBackgroundBorderless(), onPress: props.onPress },
+-            React.createElement(View, null,
+-                React.createElement(Image, { source: closeImage, style: [
+-                        styles.imageStyle,
+-                        props.imageStyle,
+-                        { tintColor: onBackgroundTextColor },
+-                    ] })))));
++        React.createElement(TouchableOpacity, { onPress: props.onPress, activeOpacity: 0.7, hitSlop: { top: 12, bottom: 12, left: 12, right: 12 }, style: { minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center' } },
++            React.createElement(Image, { source: closeImage, style: [
++                    styles.imageStyle,
++                    props.imageStyle,
++                    { tintColor: onBackgroundTextColor },
++                ] }))));
+ };
+ const CloseButtonIOS = (props) => {
+     let closeImage = require('../assets/images/close.ios.png');
+@@ -38,7 +35,7 @@ const CloseButtonIOS = (props) => {
+     }
+     const { onBackgroundTextColor } = useTheme();
+     return (React.createElement(View, { style: [styles.container, props.style] },
+-        React.createElement(TouchableOpacity, { onPress: props.onPress },
++        React.createElement(TouchableOpacity, { onPress: props.onPress, activeOpacity: 0.7, hitSlop: { top: 12, bottom: 12, left: 12, right: 12 } },
+             React.createElement(Image, { source: closeImage, style: [
+                     styles.imageStyle,
+                     props.imageStyle,
+diff --git a/node_modules/@perttu/react-native-country-picker-modal/lib/src/HeaderModal.js b/node_modules/@perttu/react-native-country-picker-modal/lib/src/HeaderModal.js
+index 71afbc9..8557729 100644
+--- a/node_modules/@perttu/react-native-country-picker-modal/lib/src/HeaderModal.js
++++ b/node_modules/@perttu/react-native-country-picker-modal/lib/src/HeaderModal.js
+@@ -5,6 +5,8 @@ const styles = StyleSheet.create({
+     container: {
+         flexDirection: 'row',
+         alignItems: 'center',
++        paddingTop: 24,
++        paddingBottom: 8,
+     },
+ });
+ export const HeaderModal = (props) => {

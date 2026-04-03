@@ -7,43 +7,32 @@ import {
   Image,
   ImageBackground,
   Keyboard,
+  KeyboardAvoidingView,
   KeyboardTypeOptions,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import { AntDesign, Feather } from "@expo/vector-icons";
-import BottomSheet, {
-  BottomSheetBackdrop,
-  BottomSheetBackdropProps,
-  BottomSheetTextInput,
-  BottomSheetView,
-  WINDOW_HEIGHT,
-} from "@gorhom/bottom-sheet";
-import { CHANGE_PASSWORD, PROFILE, PROFILE_UPDATE, SERVER_URL } from "@/constants";
+import { AntDesign, Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { City, Country, State } from "country-state-city";
-import React, {
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import React, { useContext, useEffect, useState } from "react";
 
 import { AppContext } from "@/app/context";
-import { BottomSheetMethods } from "@gorhom/bottom-sheet/lib/typescript/types";
 import { Dropdown } from "react-native-element-dropdown";
-import { ScrollView as GHScrollView } from "react-native-gesture-handler";
-import { Portal } from "@gorhom/portal";
-import axios from "axios";
-import { router } from "expo-router";
+import apiClient from "@/utils/apiClient";
+import { getApiUrlWithOverride } from "@/utils/apiUrlOverride";
+import { router, useNavigation } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import useImagePicker from "@/hooks/useImagePicker";
+import { formatPhoneForDisplay, normalisePhoneForStorage } from "@/utils/phoneFormat";
 import { useIsFocused } from "@react-navigation/native";
 
 interface IProps {
@@ -64,7 +53,7 @@ function InputItem({
   const [show, setShow] = useState(secure);
   return (
     <View style={tw`relative`}>
-      <BottomSheetTextInput
+      <TextInput
         keyboardType={type}
         style={tw.style(
           `text-[16px] text-black px-5 h-[45px] border border-[#B8B8B8] rounded-[8px]`,
@@ -137,34 +126,27 @@ const SelectItem = ({
   );
 };
 
-interface IPBSheet {
+interface IUpdateProfileModal {
+  visible: boolean;
+  onClose: () => void;
   user: IUser;
   apiConfig: object;
   apiConfigFormData: object;
-  onUpdateComplete: () => void;
-  isPassword: boolean;
-  renderBackdrop: (props: BottomSheetBackdropProps) => React.JSX.Element;
-  bottomSheetRef: React.RefObject<BottomSheetMethods>;
+  onUpdateComplete: (newImageUrl?: string) => void;
 }
 
-function PortalBottomSheet({
+function UpdateProfileModal({
+  visible,
+  onClose,
   user,
   apiConfig,
-  bottomSheetRef,
-  renderBackdrop,
-  isPassword,
   apiConfigFormData,
   onUpdateComplete,
-}: Readonly<IPBSheet>) {
+}: Readonly<IUpdateProfileModal>) {
   const { showImagePicker, selectedImage, clearImage } = useImagePicker({
     filetype: "image",
   });
 
-  const [passwordState, setPasswordState] = useState({
-    old_password: "",
-    new_password: "",
-    new_password_confirmation: "",
-  });
   const [updateState, setUpdateState] = useState({
     name: "",
     email: "",
@@ -189,54 +171,6 @@ function PortalBottomSheet({
       ? [{ name: "Please Select a state" }]
       : City.getCitiesOfState("NG", StateIndex?.isoCode);
 
-  const handleSubmit = () => {
-    if (passwordState.old_password === passwordState.new_password)
-      return showMessage({
-        type: "warning",
-        message: "Old Password cannot be new password",
-      });
-
-    if (passwordState.new_password !== passwordState.new_password_confirmation)
-      return showMessage({
-        type: "warning",
-        message: "Passwords do not match",
-      });
-
-    setLoading(true);
-    axios
-      .post(CHANGE_PASSWORD, passwordState, apiConfig)
-      .then(({ data }) => {
-        console.log(data, "done");
-        showMessage({
-          type: "success",
-          message: data.message,
-        });
-
-        bottomSheetRef?.current?.close();
-      })
-      .catch((err) => {
-        console.log(err?.response?.data, "error");
-        if (err?.response?.data?.message) {
-          showMessage({
-            type: "danger",
-            message: err?.response?.data.message,
-          });
-        }
-        if (err?.response?.data?.error) {
-          // Handle error object - extract message string
-          const errorData = err.response.data.error;
-          const errorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        }
-      })
-      .finally(() => setLoading(false));
-  };
-
   useEffect(() => {
     if (selectedImage !== null) {
       setUpdateState((prev) => ({ ...prev, image_name: selectedImage }));
@@ -250,7 +184,7 @@ function PortalBottomSheet({
         ...prev,
         name: user?.name || "",
         email: user?.email || "",
-        phone_number: user?.phone || "",
+        phone_number: formatPhoneForDisplay(user?.phone || ""),
         gender: user?.gender || "",
         country: user?.country || "",
         state: user?.state || "",
@@ -273,22 +207,26 @@ function PortalBottomSheet({
     setLoading(true);
 
     try {
-      let imageUrl = updateState.image_name || user?.image || "";
+      // Only ever send a string URL for profileImage. image_name state may hold the picker object.
+      const existingImageUrl = typeof updateState.image_name === "string" ? updateState.image_name : "";
+      let imageUrl = existingImageUrl || user?.image || "";
 
       // Upload image first if a new image is selected
       if (selectedImage) {
         try {
           const imageData = new FormData();
+          // Send as JPEG for compatibility (iOS often gives HEIC)
+          const type = selectedImage.type === "image/heic" ? "image/jpeg" : (selectedImage.type || "image/jpeg");
+          const name = (selectedImage.fileName || `profile_${Date.now()}.jpg`).replace(/\.heic$/i, ".jpg");
           imageData.append("image", {
             uri: selectedImage.uri,
-            type: selectedImage.type || "image/jpeg",
-            name: selectedImage.fileName || `profile_${Date.now()}.jpg`,
+            type,
+            name,
           } as any);
 
-          const uploadResponse = await axios.post(
-            `${SERVER_URL}user/profile/upload-image`,
-            imageData,
-            apiConfigFormData
+          const uploadResponse = await apiClient.post(
+            "user/profile/upload-image",
+            imageData
           );
 
           if (uploadResponse?.data?.data?.image_url) {
@@ -300,34 +238,34 @@ function PortalBottomSheet({
             type: "warning",
             message: uploadErr?.response?.data?.message || "Failed to upload image. Profile will be updated without image.",
           });
-          // Continue with profile update even if image upload fails
+          // Keep previous URL; do not send the file object as profileImage
         }
       }
 
-      // Update profile with text fields and image URL
+      // Update profile with text fields and image URL (only string URLs)
       const updateData: any = {
         name: updateState.name,
       };
 
       if (updateState.email) updateData.email = updateState.email;
       if (updateState.phone_number && updateState.phone_number.trim() !== '') {
-        updateData.phone = updateState.phone_number.trim();
+        updateData.phone = normalisePhoneForStorage(updateState.phone_number.trim());
       }
       if (updateState.gender) updateData.gender = updateState.gender.toLowerCase();
       if (updateState.city) updateData.city = updateState.city;
       if (updateState.state) updateData.state = updateState.state;
       if (updateState.country) updateData.country = updateState.country;
-      if (imageUrl) updateData.profileImage = imageUrl;
+      if (typeof imageUrl === "string" && imageUrl) updateData.profileImage = imageUrl;
 
-      const { data } = await axios.patch(PROFILE_UPDATE, updateData, apiConfig);
+      const { data } = await apiClient.patch("user/profile/update-details", updateData);
 
       showMessage({
         type: "success",
         message: data.message || "Profile updated successfully",
       });
 
-      bottomSheetRef?.current?.close();
-      onUpdateComplete();
+      onClose();
+      onUpdateComplete(typeof imageUrl === "string" ? imageUrl : undefined);
     } catch (err: any) {
       console.log("Update error:", err?.response?.data);
       if (err?.response?.data?.message) {
@@ -361,90 +299,78 @@ function PortalBottomSheet({
   };
 
   return (
-    <BottomSheet
-      index={-1}
-      snapPoints={["50%", "90%"]}
-      ref={bottomSheetRef}
-      backdropComponent={renderBackdrop}
-      handleComponent={() => (
-        <BottomSheetView
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <View style={tw`flex-1 bg-white`}>
+        <View
           style={tw.style(
-            `flex-row items-center bg-[#F6F6F6] justify-between w-[99%] mt-5 py-3 px-4 rounded-t-[16px]`,
-            {
-              elevation: 5,
-            }
+            "flex-row items-center bg-[#F6F6F6] justify-between w-full py-3 px-4 border-b border-gray-200",
+            { paddingTop: Platform.OS === "ios" ? 56 : 24 }
           )}
         >
           <Text
-            style={tw.style(`text-xl text-black text-center basis-[90%]`, {
+            style={tw.style("text-xl text-black flex-1 text-center", {
               fontFamily: "RobotoRegular",
             })}
           >
-            {isPassword ? "Change Password" : "Update Profile"}
+            Update Profile
           </Text>
           <TouchableOpacity
-            onPress={() => bottomSheetRef?.current?.close()}
-            style={tw`h-[34px] w-[34px] flex-col items-center justify-center bg-black p-1 rounded-full`}
+            onPress={onClose}
+            style={tw`h-[34px] w-[34px] items-center justify-center bg-black rounded-full`}
           >
             <AntDesign name="close" size={20} color="white" />
           </TouchableOpacity>
-        </BottomSheetView>
-      )}
-      style={tw`px-4 flex-1 rounded-t-[40px] border`} //   enablePanDownToClose
-    >
-      <BottomSheetView
-        style={tw.style(`flex-col gap-y-5 mt-8 `, {
-          height: WINDOW_HEIGHT * 0.75,
-        })}
-      >
-        {isPassword ? (
-          <>
-            <InputItem
-              value={passwordState?.old_password}
-              onChangeText={(old_password) =>
-                setPasswordState((prev) => ({ ...prev, old_password }))
-              }
-              placeholder="Old Password"
-            />
-            <InputItem
-              value={passwordState?.new_password}
-              onChangeText={(new_password) =>
-                setPasswordState((prev) => ({ ...prev, new_password }))
-              }
-              secure
-              placeholder="New Password"
-            />
-            <InputItem
-              value={passwordState?.new_password_confirmation}
-              onChangeText={(new_password_confirmation) =>
-                setPasswordState((prev) => ({
-                  ...prev,
-                  new_password_confirmation,
-                }))
-              }
-              secure
-              placeholder="Re-password"
-            />
-          </>
-        ) : (
-          <GHScrollView contentContainerStyle={tw`flex-col gap-y-5 pb-4`}>
-            <TouchableOpacity
-              onPress={showImagePicker}
-              style={tw`flex-col items-center self-center relative`}
-            >
-              <Image
-                source={{
-                  uri: selectedImage?.uri ?? user?.image,
-                }}
-                style={tw`h-[87px] w-[87px] rounded-full`}
-              />
-              <Feather
-                name="edit"
-                size={20}
-                style={tw`absolute bottom-0 right-0`}
-                color={tw.color("base-green")}
-              />
-            </TouchableOpacity>
+        </View>
+        <KeyboardAvoidingView
+          style={tw`flex-1`}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+        >
+          <ScrollView
+            contentContainerStyle={tw`flex-col gap-y-5 px-4 pt-6 pb-8`}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={tw`w-full items-center mt-4 mb-1`}>
+              <TouchableOpacity
+                onPress={showImagePicker}
+                style={[tw`flex-col items-center justify-center relative`, { overflow: "visible" }]}
+              >
+                <>
+                  {(() => {
+                    const raw = selectedImage?.uri ?? user?.image;
+                    const uri = typeof raw === "string" ? raw.trim() : "";
+                    return uri ? (
+                      <Image
+                        source={{ uri }}
+                        style={tw`h-[88px] w-[88px] rounded-full`}
+                      />
+                    ) : (
+                      <View style={tw`h-[88px] w-[88px] rounded-full bg-gray-200 items-center justify-center`}>
+                        <Feather name="user" size={40} color="#9CA3AF" />
+                      </View>
+                    );
+                  })()}
+                  <View
+                    style={tw.style(
+                      "absolute bottom-1.5 right-1.5 h-9 w-9 rounded-full items-center justify-center",
+                      { backgroundColor: tw.color("base-green") }
+                    )}
+                  >
+                    <Feather
+                      name="camera"
+                      size={18}
+                      color="white"
+                    />
+                  </View>
+                </>
+              </TouchableOpacity>
+            </View>
 
             <InputItem
               value={updateState?.name}
@@ -459,7 +385,7 @@ function PortalBottomSheet({
               onChangeText={(email) =>
                 setUpdateState((prev) => ({ ...prev, email }))
               }
-              placeholder="Email (Required for DVA account)"
+              placeholder="Email (for account recovery & receipts)"
               type="email-address"
             />
             <InputItem
@@ -521,27 +447,26 @@ function PortalBottomSheet({
                 value: name,
               }))}
             />
-          </GHScrollView>
-        )}
-
-        <TouchableOpacity
-          onPress={() => (isPassword ? handleSubmit() : handleUpdate())}
-          style={tw.style(`bg-base-green py-3`, isPassword ? " mt-4" : "mt-0")}
-        >
-          {loading ? (
-            <ActivityIndicator color="white" />
-          ) : (
-            <Text
-              style={tw.style(`text-[17px] text-white text-center`, {
-                fontFamily: "RobotoRegular",
-              })}
+            <TouchableOpacity
+              onPress={() => handleUpdate()}
+              style={tw`bg-base-green py-3 mt-2`}
             >
-              Save
-            </Text>
-          )}
-        </TouchableOpacity>
-      </BottomSheetView>
-    </BottomSheet>
+              {loading ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text
+                  style={tw.style("text-[17px] text-white text-center", {
+                    fontFamily: "RobotoRegular",
+                  })}
+                >
+                  Save
+                </Text>
+              )}
+            </TouchableOpacity>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
   );
 }
 
@@ -556,11 +481,29 @@ interface IUser {
   image: string;
 }
 
+interface ISetupStep {
+  id: string;
+  label: string;
+  description: string;
+  completed: boolean;
+  action_required: string | null;
+}
+
+interface ISetupStatus {
+  has_driver_profile: boolean;
+  completeness_percent: number;
+  verification_status: "pending" | "approved" | "rejected";
+  rejection_reason: string | null;
+  steps: ISetupStep[];
+  action_message: string | null;
+}
+
 interface Props {
   type: "passenger" | "driver";
 }
 
 const SharedAccountSettings = ({ type }: Props) => {
+  const navigation = useNavigation();
   const {
     LogoutUser,
     DeleteUser,
@@ -568,9 +511,8 @@ const SharedAccountSettings = ({ type }: Props) => {
     apiConfigFormData,
     getCurrentUser,
   } = useContext(AppContext);
-  let isFocused = useIsFocused();
-  const bottomSheetRef = useRef<BottomSheet>(null);
-  const [isPassword, setIsPassword] = useState(true);
+  const isFocused = useIsFocused();
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [user, setUser] = useState<IUser>({
     name: "",
     email: "",
@@ -583,21 +525,8 @@ const SharedAccountSettings = ({ type }: Props) => {
   });
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
-
-  const renderBackdrop = useCallback(
-    (props: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop
-        {...props}
-        disappearsOnIndex={-1}
-        appearsOnIndex={0}
-        style={[
-          { backgroundColor: "#1919194D" },
-          StyleSheet.absoluteFillObject,
-        ]}
-      />
-    ),
-    []
-  );
+  const [setupStatus, setSetupStatus] = useState<ISetupStatus | null>(null);
+  const [setupLoading, setSetupLoading] = useState(false);
 
   const style = {
     container: tw`flex-row justify-between py-3.5 px-5`,
@@ -611,31 +540,9 @@ const SharedAccountSettings = ({ type }: Props) => {
     }),
   };
 
-  useEffect(() => {
-    if (isFocused) {
-      // Listener for when the keyboard is hidden
-      const keyboardHideListener = Keyboard.addListener(
-        "keyboardDidHide",
-        () => {
-          // Do something here when the keyboard is closed
-          if (isPassword) {
-            bottomSheetRef?.current?.snapToPosition("50%");
-          } else {
-            bottomSheetRef?.current?.snapToPosition("90%");
-          }
-        }
-      );
-
-      // Cleanup the listener on component unmount
-      return () => {
-        keyboardHideListener.remove();
-      };
-    }
-  }, [isPassword, isFocused]);
-
   const getUserProfile = () => {
-    axios
-      .get(PROFILE, apiConfig)
+    apiClient
+      .get("user/profile/details")
       .then(({ data }) => {
         // Backend returns: { status: 'success', data: { user: {...}, driver: {...} } }
         const userData = data?.data?.user || data?.data;
@@ -663,11 +570,24 @@ const SharedAccountSettings = ({ type }: Props) => {
       });
   };
 
+  const fetchSetupStatus = () => {
+    if (type !== "driver") return;
+    setSetupLoading(true);
+    apiClient
+      .get("driver/setup-status")
+      .then(({ data }) => {
+        setSetupStatus(data?.data ?? null);
+      })
+      .catch(() => setSetupStatus(null))
+      .finally(() => setSetupLoading(false));
+  };
+
   useEffect(() => {
     if (isFocused) {
       getUserProfile();
+      if (type === "driver") fetchSetupStatus();
     }
-  }, [isFocused]);
+  }, [isFocused, type]);
 
   const handleDelete = () => {
     Alert.alert(
@@ -726,11 +646,145 @@ const SharedAccountSettings = ({ type }: Props) => {
           </View>
         </View>
         <ScrollView contentContainerStyle={tw`flex-col gap-y-6 pt-4 pb-8 px-6`}>
+          {type === "driver" && (
+            <View style={{ ...style.shadow }}>
+              <View style={{ ...style.container, ...style.line }}>
+                <Text style={tw.style("text-[15px] text-[#030303]", { fontFamily: "RobotoBold" })}>
+                  Driver account setup
+                </Text>
+                {setupLoading ? (
+                  <ActivityIndicator size="small" color={tw.color("base-green")} />
+                ) : (
+                  <Text style={style.text}>
+                    {setupStatus?.completeness_percent ?? 0}%
+                  </Text>
+                )}
+              </View>
+              <View style={tw`px-5 pb-3`}>
+                <View style={tw`h-1.5 bg-[#EFEFF4] rounded-full overflow-hidden`}>
+                  <View
+                    style={[
+                      tw`h-full rounded-full bg-base-green`,
+                      { width: `${Math.min(setupStatus?.completeness_percent ?? 0, 100)}%` },
+                    ]}
+                  />
+                </View>
+                {setupStatus?.verification_status && (
+                  <View style={tw`flex-row items-center mt-3`}>
+                    <View
+                      style={tw.style(
+                        "px-2.5 py-1 rounded-full",
+                        setupStatus.verification_status === "approved" && "bg-base-green",
+                        setupStatus.verification_status === "pending" && "bg-[#EFEFF4]",
+                        setupStatus.verification_status === "rejected" && "bg-[#FEE2E2]"
+                      )}
+                    >
+                      <Text
+                        style={tw.style(
+                          "text-xs",
+                          { fontFamily: "RobotoMedium" },
+                          setupStatus.verification_status === "approved" && "text-white",
+                          setupStatus.verification_status === "pending" && "text-[#030303]",
+                          setupStatus.verification_status === "rejected" && "text-[#991B1B]"
+                        )}
+                      >
+                        {setupStatus.verification_status === "approved"
+                          ? "Approved"
+                          : setupStatus.verification_status === "pending"
+                            ? "Pending review"
+                            : "Not approved"}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                {setupStatus?.rejection_reason && (
+                  <View style={tw`mt-3 p-3 bg-[#FEF2F2] rounded-lg border border-[#EFEFF4]`}>
+                    <Text style={tw.style("text-xs text-[#991B1B] mb-1", { fontFamily: "RobotoMedium" })}>
+                      Reason not approved
+                    </Text>
+                    <Text style={tw.style("text-[14px] text-[#030303]", { fontFamily: "RobotoRegular" })}>
+                      {setupStatus.rejection_reason}
+                    </Text>
+                    {setupStatus.action_message && (
+                      <Text style={tw.style("text-xs text-[#C8C7CC] mt-2", { fontFamily: "RobotoRegular" })}>
+                        {setupStatus.action_message}
+                      </Text>
+                    )}
+                  </View>
+                )}
+                {setupStatus?.action_message && !setupStatus?.rejection_reason && (
+                  <Text style={[tw.style("text-[14px] mt-2", { fontFamily: "RobotoRegular" }), { color: "#C8C7CC" }]}>
+                    {setupStatus.action_message}
+                  </Text>
+                )}
+              </View>
+              {setupStatus?.steps && setupStatus.steps.length > 0 && (
+                <>
+                  {setupStatus.steps.map((step, index) => (
+                    <View
+                      key={step.id}
+                      style={tw.style(
+                        "flex-row items-start gap-x-3 py-3.5 px-5",
+                        index < setupStatus.steps.length - 1 && "border-b border-[#EFEFF4]"
+                      )}
+                    >
+                      <View
+                        style={tw.style(
+                          "w-6 h-6 rounded-full items-center justify-center mt-0.5",
+                          step.completed ? "bg-base-green" : "bg-[#EFEFF4]"
+                        )}
+                      >
+                        {step.completed ? (
+                          <AntDesign name="check" size={14} color="white" />
+                        ) : (
+                          <MaterialCommunityIcons name="circle-outline" size={14} color="#9CA3AF" />
+                        )}
+                      </View>
+                      <View style={tw`flex-1`}>
+                        <Text style={style.title}>
+                          {step.label}
+                        </Text>
+                        <Text style={tw.style("text-[12px] mt-0.5", { fontFamily: "RobotoRegular", color: "#9CA3AF" })}>
+                          {step.description}
+                        </Text>
+                        {step.action_required && (
+                          <Text style={tw.style("text-[12px] mt-1", { fontFamily: "RobotoRegular", color: "#6B7280" })}>
+                            {step.action_required}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                  ))}
+                </>
+              )}
+              <View style={tw`px-5 pb-5 pt-2`}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    // Open the actual driver setup form (license, vehicle, bank, etc.). It lives at (auth)/driverinfo; back from there returns to driver app.
+                    router.navigate("/driverinfo");
+                  }}
+                  style={tw`bg-base-green py-3.5 flex-row items-center justify-center gap-x-2`}
+                >
+                  <Feather name="edit-2" size={18} color="white" />
+                  <Text style={tw.style("text-[17px] text-white", { fontFamily: "RobotoRegular" })}>
+                    Complete setup / Edit driver profile
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
           <View style={tw`flex-col items-center`}>
-            {user?.image ? (
+            {user?.image && String(user.image).trim() ? (
               <Image
                 source={{
-                  uri: user.image,
+                  uri: (() => {
+                    const raw = String(user.image).trim();
+                    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+                    const base = getApiUrlWithOverride().replace(/\/$/, "");
+                    return raw.startsWith("/") ? `${base}${raw}` : `${base}/${raw}`;
+                  })(),
                 }}
                 style={tw`h-[87px] w-[87px] rounded-full border border-zinc-200`}
               />
@@ -783,7 +837,7 @@ const SharedAccountSettings = ({ type }: Props) => {
             </Pressable> */}
             <View style={{ ...style.container, ...style.line }}>
               <Text style={style.title}>Phone number</Text>
-              <Text style={style.text}>{user?.phone || "Not set"}</Text>
+              <Text style={style.text}>{formatPhoneForDisplay(user?.phone || "") || "Not set"}</Text>
             </View>
             <View style={{ ...style.container, ...style.line }}>
               <Text style={style.title}>City</Text>
@@ -800,21 +854,7 @@ const SharedAccountSettings = ({ type }: Props) => {
           </View>
 
           <Pressable
-            onPress={() => {
-              setIsPassword(true);
-              bottomSheetRef?.current?.snapToIndex(0);
-            }}
-            style={{ ...style.container, ...style.shadow }}
-          >
-            <Text style={style.title}>Change Password</Text>
-            <AntDesign name="right" size={14} color="#00000040" />
-          </Pressable>
-
-          <Pressable
-            onPress={() => {
-              setIsPassword(false);
-              bottomSheetRef?.current?.snapToPosition("90%");
-            }}
+            onPress={() => setShowUpdateModal(true)}
             style={tw`bg-base-green py-3.5`}
           >
             <Text
@@ -855,20 +895,20 @@ const SharedAccountSettings = ({ type }: Props) => {
           </TouchableOpacity>
         </ScrollView>
       </ImageBackground>
-      <Portal>
-        <PortalBottomSheet
-          bottomSheetRef={bottomSheetRef}
-          isPassword={isPassword}
-          user={user}
-          renderBackdrop={renderBackdrop}
-          apiConfig={apiConfig}
-          apiConfigFormData={apiConfigFormData}
-          onUpdateComplete={() => {
-            getUserProfile();
-            getCurrentUser();
-          }}
-        />
-      </Portal>
+      <UpdateProfileModal
+        visible={showUpdateModal}
+        onClose={() => setShowUpdateModal(false)}
+        user={user}
+        apiConfig={apiConfig}
+        apiConfigFormData={apiConfigFormData}
+        onUpdateComplete={(newImageUrl) => {
+          if (newImageUrl !== undefined && newImageUrl) {
+            setUser((prev) => ({ ...prev, image: newImageUrl }));
+          }
+          getUserProfile();
+          getCurrentUser();
+        }}
+      />
     </>
   );
 };

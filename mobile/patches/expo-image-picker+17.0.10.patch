@@ -1,0 +1,15 @@
+diff --git a/node_modules/expo-image-picker/ios/ImagePickerModule.swift b/node_modules/expo-image-picker/ios/ImagePickerModule.swift
+index 4b7bf34..d2292be 100644
+--- a/node_modules/expo-image-picker/ios/ImagePickerModule.swift
++++ b/node_modules/expo-image-picker/ios/ImagePickerModule.swift
+@@ -159,7 +159,9 @@ public class ImagePickerModule: Module, OnMediaPickingResultHandler {
+     configuration.selectionLimit = options.allowsMultipleSelection ? options.selectionLimit : SINGLE_SELECTION
+     configuration.filter = options.toPickerFilter()
+     configuration.preferredAssetRepresentationMode = options.preferredAssetRepresentationMode.toAssetRepresentationMode()
+-    configuration.selection = options.orderedSelection ? .ordered : .default
++    if #available(iOS 15.0, *) {
++      configuration.selection = options.orderedSelection ? .ordered : .default
++    }
+ 
+     let picker = PHPickerViewController(configuration: configuration)
+ 

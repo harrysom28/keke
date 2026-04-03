@@ -1,0 +1,67 @@
+diff --git a/node_modules/@devvie/bottom-sheet/src/components/bottomSheet/index.tsx b/node_modules/@devvie/bottom-sheet/src/components/bottomSheet/index.tsx
+index 0000000..1111111 100644
+--- a/node_modules/@devvie/bottom-sheet/src/components/bottomSheet/index.tsx
++++ b/node_modules/@devvie/bottom-sheet/src/components/bottomSheet/index.tsx
+@@ -119,18 +119,23 @@
+     );
+ 
+     // Animation utility
+-    const Animators = useMemo(
+-      () => ({
++    const Animators = useMemo(() => {
++      const slideEasingFn = (value: number) =>
++        value === 1 ? 1 : 1 - Math.pow(2, -10 * value);
++      const springEasingFn = (value: number) => {
++        const c4 = (2 * Math.PI) / 2.5;
++        return value === 0
++          ? 0
++          : value === 1
++          ? 1
++          : Math.pow(2, -9 * value) * Math.sin((value * 4.5 - 0.75) * c4) + 1;
++      };
++      return {
+         _slideEasingFn(value: number) {
+-          return value === 1 ? 1 : 1 - Math.pow(2, -10 * value);
++          return slideEasingFn(value);
+         },
+         _springEasingFn(value: number) {
+-          const c4 = (2 * Math.PI) / 2.5;
+-          return value === 0
+-            ? 0
+-            : value === 1
+-            ? 1
+-            : Math.pow(2, -9 * value) * Math.sin((value * 4.5 - 0.75) * c4) + 1;
++          return springEasingFn(value);
+         },
+         animateContainerHeight(toValue: ToValue, duration: number = 0) {
+           return Animated.timing(_animatedContainerHeight, {
+@@ -160,19 +165,18 @@
+               customEasingFunction && typeof customEasingFunction === 'function'
+                 ? customEasingFunction
+                 : animationType === ANIMATIONS.SLIDE
+-                ? this._slideEasingFn
+-                : this._springEasingFn,
++                ? slideEasingFn
++                : springEasingFn,
+           });
+         },
+-      }),
+-      [
+-        animationType,
+-        customEasingFunction,
+-        _animatedContainerHeight,
+-        _animatedBackdropMaskOpacity,
+-        _animatedHeight,
+-      ]
+-    );
++      };
++    }, [
++      animationType,
++      customEasingFunction,
++      _animatedContainerHeight,
++      _animatedBackdropMaskOpacity,
++      _animatedHeight,
++    ]);
+ 
+     const interpolatedOpacity = useMemo(
+       () =>

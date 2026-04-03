@@ -1,0 +1,39 @@
+{
+  "tabs": {
+    "home": "Inicio",
+    "offers": "Ofertas",
+    "rides": "Viajes",
+    "profile": "Perfil"
+  },
+  "driver_tabs": {
+    "home": "Inicio",
+    "bookings": "Reservas",
+    "tasks": "Tareas",
+    "profile": "Perfil"
+  },
+  "home": {
+    "welcome": "Bienvenido de nuevo",
+    "where_to": "¿A dónde?"
+  },
+  "notifications": {
+    "title": "Notificaciones",
+    "mark_all_read": "Marcar todo como leído",
+    "no_notifications": "Aún no hay notificaciones"
+  },
+  "language": {
+    "title": "Idioma",
+    "subtitle": "Selecciona tu idioma preferido",
+    "note": "Nota: algunas funciones pueden no estar disponibles en todos los idiomas",
+    "saved": "Preferencia de idioma guardada",
+    "save_failed": "No se pudo guardar la preferencia de idioma",
+    "names": {
+      "en": "Inglés",
+      "fr": "Francés",
+      "es": "Español",
+      "ar": "Árabe",
+      "ha": "Hausa",
+      "ig": "Igbo",
+      "yo": "Yoruba"
+    }
+  }
+}

@@ -1,48 +1,107 @@
 import mongoose from 'mongoose';
 
-const notificationSchema = new mongoose.Schema(
+const DELIVERY_TYPES = ['push', 'alert', 'banner', 'inbox'];
+const PRIORITIES = ['critical', 'high', 'normal', 'low'];
+const TARGET_ROLES = ['rider', 'driver', 'all'];
+const ACTION_TYPES = ['none', 'navigate', 'open_url', 'call_api'];
+const STATUSES = ['active', 'sent', 'cancelled'];
+
+const NotificationSchema = new mongoose.Schema(
   {
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: [true, 'User is required'],
-    },
-    type: {
-      type: String,
-      enum: [
-        'ride_requested',
-        'ride_accepted',
-        'ride_arrived',
-        'ride_started',
-        'ride_completed',
-        'ride_cancelled',
-        'payment_completed',
-        'payment_failed',
-        'driver_assigned',
-        'driver_cancelled',
-        'promo_code',
-        'account_verified',
-        'booking_scheduled',
-        'reminder',
-        'general',
-        'support_ticket',
-      ],
-      required: [true, 'Notification type is required'],
-    },
     title: {
       type: String,
-      required: [true, 'Title is required'],
+      required: true,
       trim: true,
     },
     message: {
       type: String,
-      required: [true, 'Message is required'],
+      required: true,
+      trim: true,
+    },
+    type: {
+      type: String,
+      enum: DELIVERY_TYPES,
+      required: true,
+    },
+    priority: {
+      type: String,
+      enum: PRIORITIES,
+      default: 'normal',
+    },
+    target_role: {
+      type: String,
+      enum: TARGET_ROLES,
+      required: true,
+    },
+    target_user_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    is_global: {
+      type: Boolean,
+      default: false,
+    },
+    targeting_rules: {
+      cities: {
+        type: [String],
+        default: undefined,
+      },
+      min_ride_count: Number,
+      max_ride_count: Number,
+      inactive_days: Number,
+      min_wallet_balance: Number,
+      max_wallet_balance: Number,
+      min_driver_rating: Number,
+      ride_status: String,
+    },
+    screen: {
+      type: String,
+      default: 'home',
+    },
+    image_url: {
+      type: String,
+      default: null,
+    },
+    duration_ms: {
+      type: Number,
+      default: 5000,
+    },
+    action_type: {
+      type: String,
+      enum: ACTION_TYPES,
+      default: 'none',
+    },
+    action_payload: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    start_time: {
+      type: Date,
+      default: null,
+    },
+    end_time: {
+      type: Date,
+      default: null,
+    },
+    ride_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Ride',
+      default: null,
+    },
+    status: {
+      type: String,
+      enum: STATUSES,
+      default: 'active',
+    },
+    event_key: {
+      type: String,
+      default: 'general',
       trim: true,
     },
     data: {
-      type: Map,
-      of: mongoose.Schema.Types.Mixed,
-      default: {},
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
     relatedRide: {
       type: mongoose.Schema.Types.ObjectId,
@@ -54,110 +113,84 @@ const notificationSchema = new mongoose.Schema(
       ref: 'Payment',
       default: null,
     },
-    isRead: {
-      type: Boolean,
-      default: false,
-    },
-    readAt: {
-      type: Date,
-      default: null,
-    },
-    isPushSent: {
-      type: Boolean,
-      default: false,
-    },
-    pushSentAt: {
-      type: Date,
-      default: null,
-    },
-    isEmailSent: {
-      type: Boolean,
-      default: false,
-    },
-    emailSentAt: {
-      type: Date,
-      default: null,
-    },
-    isSmsSent: {
-      type: Boolean,
-      default: false,
-    },
-    smsSentAt: {
-      type: Date,
-      default: null,
-    },
   },
   {
-    timestamps: true,
+    timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
   }
 );
 
-// Indexes
-notificationSchema.index({ user: 1, createdAt: -1 });
-notificationSchema.index({ isRead: 1 });
-notificationSchema.index({ type: 1 });
-notificationSchema.index({ relatedRide: 1 });
-notificationSchema.index({ createdAt: -1 });
+NotificationSchema.index({ target_user_id: 1, created_at: -1 });
+NotificationSchema.index({ target_role: 1, status: 1, created_at: -1 });
+NotificationSchema.index({ ride_id: 1 });
+NotificationSchema.index({ event_key: 1 });
 
-// Virtual for notification ID
-notificationSchema.virtual('notification_id').get(function () {
+NotificationSchema.virtual('notification_id').get(function () {
   return this._id.toString();
 });
 
-// Method to mark as read
-notificationSchema.methods.markAsRead = async function () {
-  this.isRead = true;
-  this.readAt = new Date();
-  await this.save();
-};
+NotificationSchema.virtual('createdAt').get(function () {
+  return this.created_at;
+});
 
-// Method to mark push as sent
-notificationSchema.methods.markPushSent = async function () {
-  this.isPushSent = true;
-  this.pushSentAt = new Date();
-  await this.save();
-};
+NotificationSchema.virtual('updatedAt').get(function () {
+  return this.updated_at;
+});
 
-// Method to mark email as sent
-notificationSchema.methods.markEmailSent = async function () {
-  this.isEmailSent = true;
-  this.emailSentAt = new Date();
-  await this.save();
-};
-
-// Method to mark SMS as sent
-notificationSchema.methods.markSmsSent = async function () {
-  this.isSmsSent = true;
-  this.smsSentAt = new Date();
-  await this.save();
-};
-
-// Static method to create notification
-notificationSchema.statics.createNotification = async function (
+NotificationSchema.statics.createNotification = async function (
   user,
-  type,
+  eventKey,
   title,
   message,
   data = {},
   relatedRide = null,
   relatedPayment = null
 ) {
-  const notification = new this({
-    user: user._id,
-    type,
+  const userId = user?._id ?? user;
+  const userRole = user?.role === 'driver' ? 'driver' : 'rider';
+  const notification = await this.create({
     title,
     message,
+    type: 'inbox',
+    priority: 'normal',
+    target_role: userRole,
+    target_user_id: userId,
+    is_global: false,
+    event_key: eventKey || 'general',
     data,
-    relatedRide,
-    relatedPayment,
+    screen: data?.screen || 'home',
+    ride_id: relatedRide || data?.rideId || null,
+    relatedRide: relatedRide || data?.rideId || null,
+    relatedPayment: relatedPayment || data?.paymentId || null,
+    action_type: data?.screen ? 'navigate' : 'none',
+    action_payload: data?.screen
+      ? {
+          screen: data.screen,
+          ...(data?.rideId ? { rideId: data.rideId } : {}),
+        }
+      : null,
   });
 
-  await notification.save();
+  const UserNotification = mongoose.models.UserNotification;
+  if (UserNotification && userId) {
+    await UserNotification.updateOne(
+      { notification_id: notification._id, user_id: userId },
+      {
+        $setOnInsert: {
+          role: userRole,
+          delivered_at: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+  }
+
   return notification;
 };
 
-const Notification = mongoose.model('Notification', notificationSchema);
+const Notification =
+  mongoose.models.Notification || mongoose.model('Notification', NotificationSchema);
 
+export { NotificationSchema };
 export default Notification;

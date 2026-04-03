@@ -1,11 +1,13 @@
 import Payment from '../models/Payment.js';
 import User from '../models/User.js';
+import UserWallet from '../models/UserWallet.js';
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import Stripe from 'stripe';
+import { initializeTransaction, verifyTransaction } from '../services/paystackService.js';
 
 // Initialize Stripe (if API key is provided)
 const stripe = process.env.STRIPE_SECRET_KEY
@@ -57,7 +59,7 @@ export const initializePayment = asyncHandler(async (req, res) => {
     try {
       const paymentIntent = await stripe.paymentIntents.create({
         amount: Math.round(amount * 100), // Convert to cents
-        currency: 'usd',
+        currency: 'ngn',
         metadata: {
           userId: userId.toString(),
           rideId: rideId.toString(),
@@ -82,7 +84,7 @@ export const initializePayment = asyncHandler(async (req, res) => {
             payment_id: payment._id.toString(),
             client_secret: paymentIntent.client_secret,
             amount,
-            currency: 'USD',
+            currency: 'NGN',
             status: payment.status,
           },
         },
@@ -112,11 +114,17 @@ export const initializePayment = asyncHandler(async (req, res) => {
     ride.paymentStatus = 'completed';
     await ride.save();
 
-    // Update driver earnings
     if (ride.driver) {
-      const driver = await Driver.findById(ride.driver);
-      if (driver) {
-        await driver.addEarnings(amount);
+      try {
+        const { applyRideEarningToWallet } = await import('../services/paymentService.js');
+        await applyRideEarningToWallet(ride);
+        const driver = await Driver.findById(ride.driver);
+        if (driver) {
+          driver.totalRides += 1;
+          await driver.save();
+        }
+      } catch (err) {
+        logger.error(`applyRideEarningToWallet failed for ride ${rideId}: ${err.message}`);
       }
     }
 
@@ -195,17 +203,20 @@ export const payForRideWithWallet = asyncHandler(async (req, res) => {
     paidAt: new Date(),
   });
 
-  // Update ride payment status
   ride.paymentStatus = 'completed';
   await ride.save();
 
-  // Update driver earnings
   if (ride.driver) {
-    const driver = await Driver.findById(ride.driver);
-    if (driver) {
-      await driver.addEarnings(amount);
-      driver.totalRides += 1;
-      await driver.save();
+    try {
+      const { applyRideEarningToWallet } = await import('../services/paymentService.js');
+      await applyRideEarningToWallet(ride);
+      const driver = await Driver.findById(ride.driver);
+      if (driver) {
+        driver.totalRides += 1;
+        await driver.save();
+      }
+    } catch (err) {
+      logger.error(`applyRideEarningToWallet failed for ride ${rideId}: ${err.message}`);
     }
   }
 
@@ -218,6 +229,180 @@ export const payForRideWithWallet = asyncHandler(async (req, res) => {
       payment: formatPaymentResponse(payment),
       remaining_balance: user.balance,
     },
+  });
+});
+
+/**
+ * Paystack redirect page - GET /api/payment/wallet-topup-redirect?reference=xxx
+ * Public (no auth). Paystack redirects here after success; we return HTML that
+ * immediately redirects to the app deep link so the app opens and can close the browser.
+ */
+export const getWalletTopupRedirect = (req, res) => {
+  const reference = (req.query.reference || '').toString().trim();
+  const appScheme = process.env.APP_SCHEME || 'myapp';
+  const deepLink = reference
+    ? `${appScheme}://wallet-topup-success?reference=${encodeURIComponent(reference)}`
+    : `${appScheme}://wallet-topup-success`;
+  const safeForMeta = deepLink.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${safeForMeta}"></head><body><p>Redirecting to app…</p><script>window.location.href=${JSON.stringify(deepLink)};</script></body></html>`;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+};
+
+/**
+ * Initialize wallet top-up (card) - POST /api/payment/initialize-wallet-topup
+ * Returns Paystack authorization_url for user to complete payment; webhook credits wallet.
+ */
+export const initializeWalletTopup = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { amount } = req.body;
+
+  const user = await User.findById(userId).select('email name');
+  if (!user) {
+    throw new NotFoundError('User');
+  }
+
+  const appScheme = process.env.APP_SCHEME || 'myapp';
+  const apiBase = (process.env.API_BASE_URL || '').trim();
+  const callbackUrl = apiBase.startsWith('https')
+    ? `${apiBase.replace(/\/$/, '')}/api/payment/wallet-topup-redirect`
+    : `${appScheme}://wallet-topup-success`;
+
+  const result = await initializeTransaction({
+    email: user.email || `user-${userId}@keke.app`,
+    amount: Number(amount),
+    metadata: {
+      type: 'wallet_topup',
+      userId: userId.toString(),
+    },
+    callback_url: callbackUrl,
+  });
+
+  if (!result || !result.authorization_url) {
+    throw new ValidationError('Payment provider is not configured or failed to create checkout. Please try Bank Transfer.');
+  }
+
+  logger.info(`Wallet top-up initialized for user ${userId}, amount: ${amount}`);
+
+  return res.json({
+    status: 'success',
+    message: 'Payment URL created. Complete payment in the browser.',
+    data: {
+      payment_url: result.authorization_url,
+      reference: result.reference,
+    },
+  });
+});
+
+/**
+ * Verify wallet top-up after user returns from Paystack - POST /api/payment/verify-wallet-topup
+ * Session-free so it works on standalone MongoDB (no replica set required).
+ * Idempotency: findOne before write; duplicate-key (11000) on Payment.create treated as already credited.
+ */
+export const verifyWalletTopup = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { reference } = req.body;
+
+  if (!reference || typeof reference !== 'string' || !reference.trim()) {
+    throw new ValidationError('Transaction reference is required');
+  }
+
+  const ref = reference.trim();
+  const verified = await verifyTransaction(ref);
+
+  const paystackData = verified?.data ?? verified;
+  const outerStatus = verified?.status;
+  const innerStatus = paystackData?.status;
+  const isSuccess =
+    innerStatus === 'success' ||
+    outerStatus === 'success' ||
+    innerStatus === true ||
+    outerStatus === true;
+
+  if (!verified || !isSuccess) {
+    throw new ValidationError('Payment could not be verified or did not succeed');
+  }
+
+  const amountKobo = Number(paystackData?.amount ?? verified?.amount ?? 0);
+  if (!Number.isFinite(amountKobo) || amountKobo < 100) {
+    throw new ValidationError('Invalid payment amount from provider');
+  }
+  const amountNaira = amountKobo / 100;
+  const metadata = paystackData?.metadata ?? verified?.metadata ?? {};
+  if (metadata.type !== 'wallet_topup' || metadata.userId !== userId.toString()) {
+    throw new ValidationError('This payment is not a wallet top-up for your account');
+  }
+
+  const user = await User.findById(userId);
+  if (!user) throw new NotFoundError('User');
+
+  const existingPayment = await Payment.findOne({
+    user: userId,
+    $or: [
+      { transactionId: ref },
+      { 'metadata.paystackReference': ref },
+    ],
+  });
+  if (existingPayment) {
+    logger.info(`Verify wallet top-up: already processed ${ref}`);
+    const currentUser = await User.findById(userId).select('balance');
+    return res.json({
+      status: 'success',
+      message: 'Payment already credited',
+      data: { balance: currentUser?.balance ?? user.balance, already_credited: true },
+    });
+  }
+
+  try {
+    await Payment.create({
+      user: userId,
+      amount: amountNaira,
+      method: 'card',
+      status: 'completed',
+      transactionId: ref,
+      paidAt: new Date(),
+      metadata: new Map(Object.entries({
+        paystackReference: ref,
+        type: 'wallet_topup',
+        userId: userId.toString(),
+      })),
+    });
+  } catch (err) {
+    if (err.code === 11000) {
+      logger.info(`Verify wallet top-up: concurrent duplicate for ${ref}`);
+      const currentUser = await User.findById(userId).select('balance');
+      return res.json({
+        status: 'success',
+        message: 'Payment already credited',
+        data: { balance: currentUser?.balance ?? user.balance, already_credited: true },
+      });
+    }
+    logger.error(`Verify wallet top-up: Payment.create failed: ${err.message}`);
+    throw err;
+  }
+
+  await User.findByIdAndUpdate(userId, { $inc: { balance: amountNaira } });
+  logger.info(`Verify wallet top-up: credited ₦${amountNaira} to user ${userId} (ref: ${ref})`);
+
+  const updatedUser = await User.findById(userId).select('balance');
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    await sendToUser(userId, user.role === 'driver' ? 'driver' : 'rider', {
+      title: 'Wallet credited ✅',
+      message: `₦${amountNaira.toLocaleString()} has been added to your wallet. New balance: ₦${Number(updatedUser?.balance ?? 0).toLocaleString()}.`,
+      type: 'alert',
+      priority: 'high',
+      screen: 'wallet',
+      event_key: 'wallet_funded',
+      data: { subType: 'wallet_funded', amount: String(amountNaira) },
+    });
+  } catch (notificationError) {
+    logger.error(`Verify wallet top-up notification failed: ${notificationError.message}`);
+  }
+  return res.json({
+    status: 'success',
+    message: 'Wallet topped up successfully',
+    data: { balance: updatedUser?.balance ?? 0, already_credited: false },
   });
 });
 
@@ -264,6 +449,13 @@ export const topUpWallet = asyncHandler(async (req, res) => {
       user.balance += amount;
       await user.save();
 
+      // Dual-write to rider UserWallet so GET /wallet and fare check see correct balance
+      const riderWallet = await UserWallet.findOne({ userId, userType: 'rider' });
+      if (riderWallet) {
+        riderWallet.availableBalance = (Number(riderWallet.availableBalance) || 0) + amount;
+        await riderWallet.save();
+      }
+
       // Create payment record
       const payment = await Payment.create({
         user: userId,
@@ -277,6 +469,21 @@ export const topUpWallet = asyncHandler(async (req, res) => {
       });
 
       logger.info(`Wallet top-up completed for user ${userId}: $${amount}`);
+
+      try {
+        const { sendToUser } = await import('../services/notificationService.js');
+        await sendToUser(userId, user.role === 'driver' ? 'driver' : 'rider', {
+          title: 'Wallet credited ✅',
+          message: `₦${Number(amount).toLocaleString()} has been added to your wallet. New balance: ₦${Number(user.balance).toLocaleString()}.`,
+          type: 'alert',
+          priority: 'high',
+          screen: 'wallet',
+          event_key: 'wallet_funded',
+          data: { subType: 'wallet_funded', amount: String(amount) },
+        });
+      } catch (notificationError) {
+        logger.error(`Wallet top-up notification failed: ${notificationError.message}`);
+      }
 
       return res.json({
         status: 'success',
@@ -338,32 +545,38 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
     throw new ValidationError('Insufficient earnings balance');
   }
 
-  // Check if bank account is verified
-  if (!driver.bankAccount || !driver.bankAccount.verified) {
-    throw new ValidationError('Bank account must be verified before withdrawal');
+  // Require bank account (verified optional until verification flow exists)
+  if (!driver.bankAccount || !driver.bankAccount.accountNumber || !driver.bankAccount.bankName) {
+    throw new ValidationError('Add your bank account in profile to withdraw earnings');
   }
 
-  // Create withdrawal request (in real app, this would be processed by admin)
+  // Deduct from driver earnings immediately (reserve); refund on reject
+  driver.earnings.total -= amount;
+  await driver.save();
+
   const payment = await Payment.create({
     user: userId,
-    amount: -amount, // Negative for withdrawal
+    amount: -amount,
     method: 'bank_transfer',
     status: 'pending',
     metadata: {
       type: 'withdrawal',
-      bankAccountId: bankAccountId || driver.bankAccount._id?.toString(),
+      driverId: driver._id.toString(),
+      bankName: driver.bankAccount.bankName || '',
+      accountNumber: driver.bankAccount.accountNumber || '',
+      accountName: driver.bankAccount.accountName || '',
     },
   });
 
-  // Deduct from driver earnings (in real app, this would be done after admin approval)
-  // For now, we'll mark it as pending
-  logger.info(`Withdrawal request created for driver ${driver._id}: $${amount}`);
+  logger.info(`Withdrawal request created for driver ${driver._id}: ₦${amount}`);
 
   res.json({
     status: 'success',
     message: 'Withdrawal request submitted. It will be processed after admin approval.',
     data: {
-      payment: formatPaymentResponse(payment),
+      withdrawal_id: payment._id.toString(),
+      amount,
+      status: payment.status,
       remaining_earnings: driver.earnings.total,
     },
   });
@@ -525,20 +738,22 @@ export const confirmStripePayment = asyncHandler(async (req, res) => {
     payment.paidAt = new Date();
     await payment.save();
 
-    // If payment is for a ride, update ride status
     if (payment.ride) {
       const ride = await Ride.findById(payment.ride);
       if (ride) {
         ride.paymentStatus = 'completed';
         await ride.save();
-
-        // Update driver earnings
         if (ride.driver) {
-          const driver = await Driver.findById(ride.driver);
-          if (driver) {
-            await driver.addEarnings(payment.amount);
-            driver.totalRides += 1;
-            await driver.save();
+          try {
+            const { applyRideEarningToWallet } = await import('../services/paymentService.js');
+            await applyRideEarningToWallet(ride);
+            const driver = await Driver.findById(ride.driver);
+            if (driver) {
+              driver.totalRides += 1;
+              await driver.save();
+            }
+          } catch (err) {
+            logger.error(`applyRideEarningToWallet failed: ${err.message}`);
           }
         }
       }
@@ -550,6 +765,20 @@ export const confirmStripePayment = asyncHandler(async (req, res) => {
       if (user) {
         user.balance += payment.amount;
         await user.save();
+        try {
+          const { sendToUser } = await import('../services/notificationService.js');
+          await sendToUser(user._id, user.role === 'driver' ? 'driver' : 'rider', {
+            title: 'Wallet credited ✅',
+            message: `₦${Number(payment.amount).toLocaleString()} has been added to your wallet. New balance: ₦${Number(user.balance).toLocaleString()}.`,
+            type: 'alert',
+            priority: 'high',
+            screen: 'wallet',
+            event_key: 'wallet_funded',
+            data: { subType: 'wallet_funded', amount: String(payment.amount) },
+          });
+        } catch (notificationError) {
+          logger.error(`Stripe wallet top-up notification failed: ${notificationError.message}`);
+        }
       }
     }
 

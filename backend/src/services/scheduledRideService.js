@@ -1,9 +1,8 @@
 import Ride from '../models/Ride.js';
-import Driver from '../models/Driver.js';
 import logger from '../utils/logger.js';
 import rideMatchingService from './rideMatchingService.js';
-import { getSocketService } from './socketService.js';
 import notificationService from './notificationService.js';
+import { offerRideToDrivers, notifyNoDriverFound } from './driverNotificationService.js';
 
 /**
  * Service to handle scheduled rides
@@ -12,6 +11,7 @@ import notificationService from './notificationService.js';
 class ScheduledRideService {
   constructor() {
     this.intervalId = null;
+    this.isRunning = false;
   }
 
   /**
@@ -41,6 +41,11 @@ class ScheduledRideService {
    * Process scheduled rides that are ready to be assigned
    */
   async processScheduledRides() {
+    if (this.isRunning) {
+      logger.warn('Scheduled ride processor still running, skipping this tick');
+      return;
+    }
+    this.isRunning = true;
     try {
       const now = new Date();
       const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
@@ -62,31 +67,28 @@ class ScheduledRideService {
 
       for (const ride of scheduledRides) {
         try {
-          // Find and match drivers
           const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, 10, 5);
 
           if (matchedDrivers.length > 0) {
-            // Notify drivers about upcoming scheduled ride
-            const socketService = getSocketService();
-            if (socketService) {
-              socketService.emitRideRequest(ride, matchedDrivers.map((d) => d.driver));
-            }
+            setImmediate(() => {
+              (async () => {
+                try {
+                  const rideDoc = await Ride.findById(ride._id)
+                    .populate('rider', 'name phone profileImage rating deviceToken')
+                    .populate('vehicleType');
+                  if (!rideDoc) return;
 
-            // Auto-assign if within 2 minutes of scheduled time
-            const minutesUntilScheduled = (ride.scheduledAt - now) / (1000 * 60);
-            if (minutesUntilScheduled <= 2) {
-              await rideMatchingService.autoAssignDriver(ride, matchedDrivers);
-
-            // Send notification to rider (need to find rider again since using lean)
-            if (ride.rider?.deviceToken) {
-              await notificationService.sendPushNotification(
-                ride.rider.deviceToken,
-                'Driver Assigned',
-                `Your scheduled ride has been assigned. Driver will arrive soon.`,
-                { rideId: ride._id.toString(), type: 'driver_assigned' }
-              );
-            }
-            }
+                  const assignedDriverId = await offerRideToDrivers(rideDoc, matchedDrivers);
+                  if (!assignedDriverId) {
+                    await notifyNoDriverFound(rideDoc);
+                  }
+                } catch (err) {
+                  logger.error(
+                    `Scheduled ride offerRideToDrivers failed for ${ride._id}: ${err.message}`
+                  );
+                }
+              })();
+            });
           }
         } catch (error) {
           logger.error(`Error processing scheduled ride ${ride._id}: ${error.message}`);
@@ -109,25 +111,41 @@ class ScheduledRideService {
           const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, 20, 10);
 
           if (matchedDrivers.length > 0) {
-            await rideMatchingService.autoAssignDriver(ride, matchedDrivers);
+            const rideDoc = await Ride.findById(ride._id)
+              .populate('rider', 'name phone deviceToken')
+              .populate('vehicleType');
+            if (rideDoc) {
+              await rideMatchingService.autoAssignDriver(rideDoc, matchedDrivers);
+            }
           } else {
-            // Mark as no driver found
-            ride.status = 'no-driver-found';
-            ride.statusHistory.push({
-              status: 'no-driver-found',
-              timestamp: new Date(),
-              note: 'No driver found for scheduled ride',
-            });
-            await ride.save();
+            // Re-fetch as document (lean() returns plain object - no .save())
+            const rideDoc = await Ride.findById(ride._id);
+            if (rideDoc) {
+              rideDoc.status = 'no-driver-found';
+              rideDoc.statusHistory.push({
+                status: 'no-driver-found',
+                timestamp: new Date(),
+                note: 'No driver found for scheduled ride',
+              });
+              await rideDoc.save();
 
-            // Send notification to rider (need to find rider again since using lean)
-            if (ride.rider?.deviceToken) {
-              await notificationService.sendPushNotification(
-                ride.rider.deviceToken,
-                'No Driver Available',
-                'We couldn\'t find a driver for your scheduled ride. Please try again.',
-                { rideId: ride._id.toString(), type: 'no_driver_found' }
-              );
+              const deviceToken = ride.rider?.deviceToken;
+              if (deviceToken) {
+                const pushData = notificationService.buildStandardPushData({
+                  type: 'ride_update',
+                  subType: 'no_driver_found',
+                  rideId: ride._id.toString(),
+                  screen: 'ride_tracking',
+                  priority: 'high',
+                });
+                await notificationService.sendPushNotification(
+                  deviceToken,
+                  'No Driver Available',
+                  'We couldn\'t find a driver for your scheduled ride. Please try again.',
+                  pushData,
+                  ride.rider?._id?.toString?.()
+                );
+              }
             }
           }
         } catch (error) {
@@ -136,6 +154,8 @@ class ScheduledRideService {
       }
     } catch (error) {
       logger.error(`Error in scheduled ride processor: ${error.message}`);
+    } finally {
+      this.isRunning = false;
     }
   }
 }

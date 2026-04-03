@@ -13,12 +13,13 @@ import {
   DRIVER_ACCEPT_BOOKING,
   DRIVER_BOOKINGS,
   DRIVER_BOOKING_ID,
-  DRIVER_REJECT_RIDE,
+  DRIVER_CANCEL_BOOKING,
 } from "@/constants";
 import React, { useContext, useEffect, useRef, useState } from "react";
 import {
   formatBookingDate,
   formatBookingTime,
+  getLocalBookingDateAndTime,
 } from "@/lib/formatBookingDateTime";
 
 import { AppContext } from "@/app/context";
@@ -203,10 +204,8 @@ const Bookings = () => {
     loading: React.Dispatch<React.SetStateAction<boolean>>
   ) => {
     loading(true);
-    // Use driver cancel ride endpoint - backend expects rideId
-    // The schedule/cancel/booking endpoint doesn't exist, so use driver/rides/cancel
     axios
-      .post(DRIVER_REJECT_RIDE, { rideId: booking_id, reason: 'Driver cancelled scheduled booking' }, apiConfig)
+      .post(DRIVER_CANCEL_BOOKING, { booking_id }, apiConfig)
       .then(({ data }) => {
         safeShowMessage({
           type: "success",
@@ -245,10 +244,7 @@ const Bookings = () => {
   const mapBookingData = (booking: any) => {
     if (!booking) return null;
     
-    // Parse scheduled_at date
-    const scheduledAt = booking.scheduled_at ? new Date(booking.scheduled_at) : null;
-    const bookingDate = scheduledAt ? scheduledAt.toISOString().split('T')[0] : '';
-    const bookingTime = scheduledAt ? scheduledAt.toTimeString().split(' ')[0].substring(0, 5) : '';
+    const { booking_date: bookingDate, booking_time: bookingTime } = getLocalBookingDateAndTime(booking.scheduled_at);
     
     // Extract pickup location - try multiple sources
     let pickupLocation = '';

@@ -13,7 +13,6 @@ import {
 } from "react-native";
 import {
   CREATE_EMERGENCY_CONTACT,
-  EDIT_EMERGENCY_CONTACT,
   UPDATE_EMERGENCY_CONTACT,
 } from "@/constants";
 import React, { useCallback, useContext, useEffect, useState } from "react";
@@ -21,6 +20,7 @@ import { router, useLocalSearchParams } from "expo-router";
 
 import { AntDesign } from "@expo/vector-icons";
 import { AppContext } from "@/app/context";
+import apiClient from "@/utils/apiClient";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
@@ -113,6 +113,8 @@ const defaultState = {
   address: "",
 };
 
+const nigerianPhoneRegex = /^(\+?234|0)[789][01]\d{8}$/;
+
 const SharedCreateEmergencyContact = ({ params }) => {
   const { type, person_id } = params;
   const { apiConfig } = useContext(AppContext);
@@ -121,12 +123,7 @@ const SharedCreateEmergencyContact = ({ params }) => {
   const [state, setState] = useState(defaultState);
 
   const handleSubmit = () => {
-    if (
-      state.email === "" ||
-      state.name === "" ||
-      state.address === "" ||
-      state.phone_number === ""
-    )
+    if (state.name === "" || state.phone_number === "")
       return showMessage({
         type: "warning",
         message: "Please fill in all required fields",
@@ -137,9 +134,15 @@ const SharedCreateEmergencyContact = ({ params }) => {
         ? UPDATE_EMERGENCY_CONTACT + person_id
         : CREATE_EMERGENCY_CONTACT;
 
+    const payload = {
+      name: state.name,
+      phone: state.phone_number,
+      relationship: "emergency",
+    };
+
     setLoading(true);
-    axios
-      .post(url, state, apiConfig)
+    const request = type === "edit" ? axios.patch(url, payload, apiConfig) : axios.post(url, payload, apiConfig);
+    request
       .then(({ data }) => {
         showMessage({
           type: "success",
@@ -163,26 +166,37 @@ const SharedCreateEmergencyContact = ({ params }) => {
   let isFocused = useIsFocused();
 
   useEffect(() => {
-    if (isFocused && type === "edit") {
+    if (isFocused && type === "edit" && person_id) {
       setLoading(true);
-      axios
-        .get(EDIT_EMERGENCY_CONTACT + person_id, apiConfig)
+      apiClient
+        .get("emergency/contact")
         .then(({ data }) => {
-          // console.log(data?.data);
-          setState(data?.data);
+          const contacts = data?.data?.emergency_contacts ?? data?.data ?? [];
+          const list = Array.isArray(contacts) ? contacts : [];
+          const contact = list.find(
+            (c: any) =>
+              (c.contact_id || c._id || "") === String(person_id)
+          );
+          if (contact) {
+            setState({
+              name: contact.name ?? "",
+              email: contact.email ?? "",
+              phone_number: contact.phone ?? contact.phone_number ?? "",
+              address: contact.address ?? "",
+            });
+          }
         })
         .catch((err) => {
-          console.log(err?.response?.data);
           if (err?.response?.data?.message) {
             showMessage({
               type: "danger",
-              message: err?.response?.data.message,
+              message: err?.response?.data?.message,
             });
           }
         })
         .finally(() => setLoading(false));
     }
-  }, [isFocused]);
+  }, [isFocused, type, person_id]);
   return (
     <ImageBackground
       style={tw.style(`bg-white`, {
@@ -231,23 +245,6 @@ const SharedCreateEmergencyContact = ({ params }) => {
             }}
           />
           <InputItem
-            value={state.address}
-            onChange={(address) => setState((prev) => ({ ...prev, address }))}
-            placeholder="Contact Address"
-            processError={(text, setErrorState) => {
-              if (text.length > 0 && text.length < 5) {
-                setErrorState({
-                  status: true,
-                  text: "Too short! minumum length is 5",
-                });
-                setHasError(true);
-              } else {
-                setErrorState({ status: false, text: "" });
-                setHasError(false);
-              }
-            }}
-          />
-          <InputItem
             value={state.phone_number}
             onChange={(phone_number) =>
               setState((prev) => ({ ...prev, phone_number }))
@@ -255,30 +252,10 @@ const SharedCreateEmergencyContact = ({ params }) => {
             type="number-pad"
             placeholder="Contact Phone"
             processError={(text, setErrorState) => {
-              let ph = /^\+?[1-9]\d{1,14}$/;
-              if (text.length > 0 && ph.test(text)) {
+              if (text.length > 0 && !nigerianPhoneRegex.test(text.trim())) {
                 setErrorState({
                   status: true,
                   text: "Enter a valid number",
-                });
-                setHasError(true);
-              } else {
-                setErrorState({ status: false, text: "" });
-                setHasError(false);
-              }
-            }}
-          />
-          <InputItem
-            value={state.email}
-            onChange={(email) => setState((prev) => ({ ...prev, email }))}
-            type="email-address"
-            placeholder="Email"
-            processError={(text, setErrorState) => {
-              const emailRegex = /^[\w\.-]+@[a-zA-Z\d\.-]+\.[a-zA-Z]{2,}$/;
-              if (text.length > 0 && !emailRegex.test(text)) {
-                setErrorState({
-                  status: true,
-                  text: "Please, enter valid email address",
                 });
                 setHasError(true);
               } else {

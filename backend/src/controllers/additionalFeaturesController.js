@@ -3,6 +3,7 @@ import Ride from '../models/Ride.js';
 import Promocode from '../models/Promocode.js';
 import Review from '../models/Review.js';
 import Driver from '../models/Driver.js';
+import AdminSettings from '../models/AdminSettings.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
@@ -212,7 +213,7 @@ export const sendEmergencyMessage = asyncHandler(async (req, res) => {
   }
 
   // Send SMS to emergency contacts
-  const { sendSMS, sendPushNotification } = await import('../services/notificationService.js');
+  const { sendSMS, sendPushNotification, buildStandardPushData } = await import('../services/notificationService.js');
   let smsSent = 0;
   let pushSent = 0;
 
@@ -257,16 +258,21 @@ export const sendEmergencyMessage = asyncHandler(async (req, res) => {
   // For now, we'll send push to the user's own device
   if (user.deviceToken) {
     try {
+      const pushData = buildStandardPushData({
+        type: 'system',
+        subType: 'emergency',
+        rideId: rideId || '',
+        screen: rideId ? 'ride_tracking' : 'home',
+        priority: 'high',
+      });
       const pushResult = await sendPushNotification(
         user.deviceToken,
         'Emergency Alert Sent',
         `Emergency message sent to ${smsSent} contact(s)`,
-        {
-          type: 'emergency',
-          rideId: rideId || null,
-        }
+        pushData,
+        user._id?.toString?.()
       );
-      if (pushResult) {
+      if (pushResult?.success) {
         pushSent++;
       }
     } catch (error) {
@@ -291,28 +297,42 @@ export const sendEmergencyMessage = asyncHandler(async (req, res) => {
  */
 export const getRecentPlaces = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { limit = 10 } = req.query;
+  const { limit = 6 } = req.query;
 
   const user = await User.findById(userId).select('addresses');
   if (!user) {
     throw new NotFoundError('User');
   }
 
-  // Get recent places from user's addresses (sorted by creation date)
-  const recentPlaces = (user.addresses || [])
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .slice(0, parseInt(limit))
-    .map((address) => ({
-      place_id: address._id?.toString(),
-      name: address.name || address.address,
-      address: address.address,
+  // Recent places: distinct per normalisedLabel, sorted by lastUsed desc, limit to 6
+  const max = Math.min(6, Math.max(1, parseInt(limit)));
+  const seen = new Set();
+  const sorted = (user.addresses || []).slice().sort((a, b) => {
+    const aTs = new Date(a.lastUsed || a.createdAt || 0).getTime();
+    const bTs = new Date(b.lastUsed || b.createdAt || 0).getTime();
+    return bTs - aTs;
+  });
+  const recentPlaces = [];
+  for (const addr of sorted) {
+    const key = (addr.normalisedLabel || '').toString();
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    recentPlaces.push({
+      place_id: addr._id?.toString(),
+      name: addr.name || addr.address,
+      address: addr.address,
+      normalisedLabel: addr.normalisedLabel || null,
       location: {
-        latitude: address.location.coordinates[1],
-        longitude: address.location.coordinates[0],
+        latitude: addr.location.coordinates[1],
+        longitude: addr.location.coordinates[0],
       },
-      is_default: address.isDefault || false,
-      created_at: address.createdAt,
-    }));
+      is_default: addr.isDefault || false,
+      last_used: addr.lastUsed || addr.createdAt,
+      use_count: addr.useCount || 1,
+      created_at: addr.createdAt,
+    });
+    if (recentPlaces.length >= max) break;
+  }
 
   res.json({
     status: 'success',
@@ -333,6 +353,8 @@ export const saveRecentPlace = asyncHandler(async (req, res) => {
     throw new ValidationError('Name, address, latitude, and longitude are required');
   }
 
+  const normalisedLabel = String(name).toLowerCase().trim().replace(/\s+/g, ' ');
+
   const user = await User.findById(userId);
   if (!user) {
     throw new NotFoundError('User');
@@ -342,22 +364,19 @@ export const saveRecentPlace = asyncHandler(async (req, res) => {
     user.addresses = [];
   }
 
-  // Check if place already exists (by coordinates)
-  const existingIndex = user.addresses.findIndex((addr) => {
-    if (!addr.location || !addr.location.coordinates) return false;
-    const [lng, lat] = addr.location.coordinates;
-    const distance = Math.sqrt(
-      Math.pow(lng - longitude, 2) + Math.pow(lat - latitude, 2)
-    );
-    return distance < 0.0001; // Very close (approximately 11 meters)
-  });
+  // Upsert by normalisedLabel (prevents duplicates by case/spacing)
+  const existingIndex = user.addresses.findIndex(
+    (addr) => (addr.normalisedLabel || '').toString() === normalisedLabel
+  );
 
   if (existingIndex !== -1) {
     // Update existing place
     user.addresses[existingIndex].name = name;
+    user.addresses[existingIndex].normalisedLabel = normalisedLabel;
     user.addresses[existingIndex].address = address;
     user.addresses[existingIndex].location.coordinates = [longitude, latitude];
-    user.addresses[existingIndex].createdAt = new Date();
+    user.addresses[existingIndex].lastUsed = new Date();
+    user.addresses[existingIndex].useCount = (user.addresses[existingIndex].useCount || 0) + 1;
     if (isDefault !== undefined) {
       user.addresses[existingIndex].isDefault = isDefault;
     }
@@ -372,12 +391,15 @@ export const saveRecentPlace = asyncHandler(async (req, res) => {
 
     user.addresses.push({
       name,
+      normalisedLabel,
       address,
       location: {
         type: 'Point',
         coordinates: [longitude, latitude],
       },
       isDefault: isDefault || false,
+      lastUsed: new Date(),
+      useCount: 1,
       createdAt: new Date(),
     });
   }
@@ -392,6 +414,7 @@ export const saveRecentPlace = asyncHandler(async (req, res) => {
     data: {
       recent_place: {
         name,
+        normalisedLabel,
         address,
         location: {
           latitude,
@@ -529,6 +552,234 @@ export const validatePromocode = asyncHandler(async (req, res) => {
       discount_amount: discountAmount,
       max_discount: promocode.maxDiscount,
       final_amount: (rideAmount || 0) - discountAmount,
+    },
+  });
+});
+
+// Milestone: 10 rides → ₦1000 free ride (wallet credit)
+const MILESTONE_TARGET_RIDES = 10;
+const MILESTONE_REWARD_AMOUNT = 1000;
+
+/**
+ * Get milestone offer status - GET /api/special/offers/milestone
+ */
+export const getMilestoneOffer = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const user = await User.findById(userId).select('tenRideFreeClaimed role');
+  if (!user) throw new NotFoundError('User');
+  if (user.role !== 'passenger') {
+    return res.json({
+      status: 'success',
+      data: {
+        available: false,
+        completed_rides: 0,
+        target_rides: MILESTONE_TARGET_RIDES,
+        reward_amount: MILESTONE_REWARD_AMOUNT,
+        claimed: false,
+        rides_remaining: MILESTONE_TARGET_RIDES,
+        message: 'Milestone offer is for passengers only.',
+      },
+    });
+  }
+
+  const completedRides = await Ride.countDocuments({ rider: userId, status: 'completed' });
+  const claimed = !!user.tenRideFreeClaimed;
+  const ridesRemaining = Math.max(0, MILESTONE_TARGET_RIDES - completedRides);
+  const canClaim = completedRides >= MILESTONE_TARGET_RIDES && !claimed;
+
+  let message = '';
+  if (claimed) {
+    message = "You've already claimed your free ₦1000 ride!";
+  } else if (canClaim) {
+    message = 'Claim your ₦1,000 free ride credit now!';
+  } else if (ridesRemaining === 1) {
+    message = '1 more successful ride to unlock ₦1,000 free ride!';
+  } else if (ridesRemaining > 0) {
+    message = `${ridesRemaining} more successful rides to unlock ₦1,000 free ride!`;
+  } else {
+    message = `Complete ${MILESTONE_TARGET_RIDES} successful rides to unlock ₦1,000 free ride!`;
+  }
+
+  res.json({
+    status: 'success',
+    data: {
+      available: true,
+      completed_rides: completedRides,
+      target_rides: MILESTONE_TARGET_RIDES,
+      reward_amount: MILESTONE_REWARD_AMOUNT,
+      claimed,
+      rides_remaining: ridesRemaining,
+      can_claim: canClaim,
+      message,
+    },
+  });
+});
+
+/**
+ * Claim milestone reward - POST /api/special/offers/milestone/claim
+ */
+export const claimMilestoneOffer = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const user = await User.findById(userId);
+  if (!user) throw new NotFoundError('User');
+  if (user.role !== 'passenger') {
+    throw new ValidationError('Milestone offer is for passengers only');
+  }
+
+  const completedRides = await Ride.countDocuments({ rider: userId, status: 'completed' });
+  if (completedRides < MILESTONE_TARGET_RIDES) {
+    throw new ValidationError(`Complete ${MILESTONE_TARGET_RIDES} successful rides first. You have ${completedRides}.`);
+  }
+  if (user.tenRideFreeClaimed) {
+    throw new ValidationError('You have already claimed this reward.');
+  }
+
+  user.tenRideFreeClaimed = true;
+  user.balance = (Number(user.balance) || 0) + MILESTONE_REWARD_AMOUNT;
+  await user.save();
+
+  logger.info(`Milestone reward claimed: user ${userId}, +₦${MILESTONE_REWARD_AMOUNT} wallet`);
+
+  res.json({
+    status: 'success',
+    data: {
+      claimed: true,
+      reward_amount: MILESTONE_REWARD_AMOUNT,
+      new_balance: user.balance,
+      message: `₦${MILESTONE_REWARD_AMOUNT.toLocaleString()} has been added to your wallet. Use it on your next ride!`,
+    },
+  });
+});
+
+/**
+ * Count successful referrals: referred users who completed registration and at least 1 ride
+ */
+async function countSuccessfulReferrals(referrerId) {
+  const referredUserIds = await User.find({ referredBy: referrerId, isRegCompleted: true }).distinct('_id');
+  if (referredUserIds.length === 0) return 0;
+  const userIdsWithCompletedRide = await Ride.distinct('rider', {
+    rider: { $in: referredUserIds },
+    status: 'completed',
+  });
+  return userIdsWithCompletedRide.length;
+}
+
+/**
+ * Get referral program status - GET /api/special/offers/referral
+ */
+export const getReferralProgram = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const user = await User.findById(userId).select('role referralCode referralRewardsClaimedCount');
+  if (!user) throw new NotFoundError('User');
+
+  const settings = await AdminSettings.findOne({ key: 'default' });
+  const refConfig = settings?.referral || {};
+  const enabled = refConfig.enabled !== false;
+  const rewardType = refConfig.rewardType || 'free_ride';
+  const required = refConfig.successfulInvitesRequired ?? 3;
+  const cashAmount = refConfig.cashAmount ?? 500;
+  const freeRideAmount = refConfig.freeRideAmount ?? 1000;
+  const rewardAmount = rewardType === 'cash' ? cashAmount : freeRideAmount;
+
+  if (!enabled || user.role !== 'passenger') {
+    return res.json({
+      status: 'success',
+      data: {
+        available: false,
+        enabled,
+        reward_type: rewardType,
+        reward_amount: rewardAmount,
+        successful_invites_required: required,
+        successful_invites: 0,
+        claimed_count: 0,
+        can_claim: false,
+        claimed: false,
+        message: !enabled ? 'Referral program is not active.' : 'Referral program is for passengers only.',
+      },
+    });
+  }
+
+  const successfulInvites = await countSuccessfulReferrals(userId);
+  const claimedCount = user.referralRewardsClaimedCount || 0;
+  const availableToClaim = Math.floor(successfulInvites / required) - claimedCount;
+  const canClaim = availableToClaim >= 1;
+
+  let message = '';
+  if (canClaim) {
+    message = `Claim your ${rewardType === 'cash' ? `₦${rewardAmount}` : `₦${rewardAmount} free ride credit`} now!`;
+  } else {
+    const needed = required - (successfulInvites % required);
+    if (needed === required && successfulInvites === 0) {
+      message = `Invite ${required} friends who complete signup and their first ride to earn ${rewardType === 'cash' ? `₦${rewardAmount} cash` : `₦${rewardAmount} free ride credit`}!`;
+    } else {
+      message = `${needed} more successful invite${needed > 1 ? 's' : ''} to unlock your reward!`;
+    }
+  }
+
+  res.json({
+    status: 'success',
+    data: {
+      available: true,
+      enabled: true,
+      referral_code: user.referralCode,
+      reward_type: rewardType,
+      reward_amount: rewardAmount,
+      successful_invites_required: required,
+      successful_invites: successfulInvites,
+      claimed_count: claimedCount,
+      can_claim: canClaim,
+      claimed: claimedCount > 0,
+      message,
+      description: refConfig.description || 'Invite friends! When they complete signup and their first ride, you get a reward.',
+    },
+  });
+});
+
+/**
+ * Claim referral reward - POST /api/special/offers/referral/claim
+ */
+export const claimReferralReward = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const user = await User.findById(userId);
+  if (!user) throw new NotFoundError('User');
+  if (user.role !== 'passenger') {
+    throw new ValidationError('Referral program is for passengers only');
+  }
+
+  const settings = await AdminSettings.findOne({ key: 'default' });
+  const refConfig = settings?.referral || {};
+  const enabled = refConfig.enabled !== false;
+  if (!enabled) throw new ValidationError('Referral program is not active');
+
+  const rewardType = refConfig.rewardType || 'free_ride';
+  const required = refConfig.successfulInvitesRequired ?? 3;
+  const cashAmount = refConfig.cashAmount ?? 500;
+  const freeRideAmount = refConfig.freeRideAmount ?? 1000;
+  const rewardAmount = rewardType === 'cash' ? cashAmount : freeRideAmount;
+
+  const successfulInvites = await countSuccessfulReferrals(userId);
+  const claimedCount = user.referralRewardsClaimedCount || 0;
+  const availableToClaim = Math.floor(successfulInvites / required) - claimedCount;
+
+  if (availableToClaim < 1) {
+    throw new ValidationError(`You need ${required} successful invites (registration + first ride completed) to claim. You have ${successfulInvites} successful invites.`);
+  }
+
+  user.referralRewardsClaimedCount = (user.referralRewardsClaimedCount || 0) + 1;
+  user.balance = (Number(user.balance) || 0) + rewardAmount;
+  await user.save();
+
+  const rewardLabel = rewardType === 'cash' ? `₦${rewardAmount} cash` : `₦${rewardAmount} free ride credit`;
+  logger.info(`Referral reward claimed: user ${userId}, +₦${rewardAmount} (${rewardType})`);
+
+  res.json({
+    status: 'success',
+    data: {
+      claimed: true,
+      reward_amount: rewardAmount,
+      reward_type: rewardType,
+      new_balance: user.balance,
+      message: `₦${rewardAmount.toLocaleString()} has been added to your wallet. ${rewardType === 'free_ride' ? 'Use it on your next ride!' : ''}`,
     },
   });
 });

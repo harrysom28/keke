@@ -8,6 +8,7 @@ interface IState {
   user: { profile: Partial<TUser> };
   registration: {
     type: "1" | "2";
+    email_phone_number?: string;
   };
 }
 

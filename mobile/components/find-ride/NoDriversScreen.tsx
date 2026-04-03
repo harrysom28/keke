@@ -1,26 +1,42 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { AntDesign, MaterialIcons } from '@expo/vector-icons';
+import { View, Text, TouchableOpacity, Image } from 'react-native';
+import { AntDesign } from '@expo/vector-icons';
 import tw from '@/lib/tailwind';
+import { getVehicleImage } from '@/utils/vehicleImages';
 
 interface NoDriversScreenProps {
   onRetry?: () => void;
+  /** @deprecated use onChangeLocation — kept as fallback */
   onBack?: () => void;
+  /** Go to location selection (e.g. find-ride step 1). Falls back to onBack. */
+  onChangeLocation?: () => void;
 }
 
-export const NoDriversScreen: React.FC<NoDriversScreenProps> = ({ onRetry, onBack }) => {
+export const NoDriversScreen: React.FC<NoDriversScreenProps> = ({
+  onRetry,
+  onBack,
+  onChangeLocation,
+}) => {
+  const handleChangeLocation = onChangeLocation ?? onBack;
+
   return (
-    <View style={tw`flex-1 justify-center items-center px-6 py-12 bg-white`}>
-      {/* Icon */}
-      <View style={tw`mb-6`}>
-        <View style={tw`bg-[#F5F5F5] rounded-full p-6 items-center justify-center`}>
-          <MaterialIcons name="directions-car" size={64} color={tw.color("base-green")} style={tw`opacity-40`} />
+    <View style={tw`flex-1 justify-center items-center px-6 py-8 bg-white`}>
+      {/* Icon — colored keke asset (vehicle-1), not washed-out PNG */}
+      <View style={tw`mb-4`}>
+        <View
+          style={tw`bg-[#E8F5E9] rounded-full p-4 items-center justify-center`}
+        >
+          <Image
+            source={getVehicleImage(1, 'keke')}
+            resizeMode="contain"
+            style={{ width: 88, height: 56 }}
+          />
         </View>
       </View>
 
       {/* Title */}
       <Text
-        style={tw.style(`text-2xl text-[#242E42] text-center mb-3`, {
+        style={tw.style(`text-xl text-[#242E42] text-center mb-2`, {
           fontFamily: "RobotoBold",
         })}
       >
@@ -29,7 +45,7 @@ export const NoDriversScreen: React.FC<NoDriversScreenProps> = ({ onRetry, onBac
 
       {/* Description */}
       <Text
-        style={tw.style(`text-base text-[#8E8E93] text-center mb-8 leading-6 px-4`, {
+        style={tw.style(`text-sm text-[#8E8E93] text-center mb-5 leading-5 px-3`, {
           fontFamily: "RobotoRegular",
         })}
       >
@@ -41,12 +57,12 @@ export const NoDriversScreen: React.FC<NoDriversScreenProps> = ({ onRetry, onBac
         {onRetry && (
           <TouchableOpacity
             onPress={onRetry}
-            style={tw`bg-base-green py-4 px-6 rounded-[12px] flex-row items-center justify-center gap-x-2`}
+            style={tw`bg-base-green py-3 px-5 rounded-[10px] flex-row items-center justify-center gap-x-2`}
             activeOpacity={0.8}
           >
-            <AntDesign name="reload" size={20} color="white" />
+            <AntDesign name="reload" size={18} color="white" />
             <Text
-              style={tw.style(`text-lg text-white`, {
+              style={tw.style(`text-base text-white`, {
                 fontFamily: "RobotoBold",
               })}
             >
@@ -55,15 +71,15 @@ export const NoDriversScreen: React.FC<NoDriversScreenProps> = ({ onRetry, onBac
           </TouchableOpacity>
         )}
 
-        {onBack && (
+        {handleChangeLocation && (
           <TouchableOpacity
-            onPress={onBack}
-            style={tw`bg-white border-2 border-[#E5E5E5] py-4 px-6 rounded-[12px] flex-row items-center justify-center gap-x-2`}
+            onPress={handleChangeLocation}
+            style={tw`bg-white border-2 border-[#E5E5E5] py-3 px-5 rounded-[10px] flex-row items-center justify-center gap-x-2`}
             activeOpacity={0.8}
           >
-            <AntDesign name="left" size={20} color={tw.color("base-green")} />
+            <AntDesign name="left" size={18} color={tw.color("base-green")} />
             <Text
-              style={tw.style(`text-lg text-base-green`, {
+              style={tw.style(`text-base text-base-green`, {
                 fontFamily: "RobotoBold",
               })}
             >
@@ -71,37 +87,6 @@ export const NoDriversScreen: React.FC<NoDriversScreenProps> = ({ onRetry, onBac
             </Text>
           </TouchableOpacity>
         )}
-      </View>
-
-      {/* Helpful Tips */}
-      <View style={tw`mt-8 w-full`}>
-        <Text
-          style={tw.style(`text-sm text-[#8E8E93] text-center mb-3`, {
-            fontFamily: "RobotoMedium",
-          })}
-        >
-          Tips to find drivers:
-        </Text>
-        <View style={tw`gap-y-2`}>
-          <View style={tw`flex-row items-center gap-x-2`}>
-            <View style={tw`w-1.5 h-1.5 bg-base-green rounded-full`} />
-            <Text style={tw.style(`text-sm text-[#8E8E93]`, { fontFamily: "RobotoRegular" })}>
-              Try during peak hours (morning & evening)
-            </Text>
-          </View>
-          <View style={tw`flex-row items-center gap-x-2`}>
-            <View style={tw`w-1.5 h-1.5 bg-base-green rounded-full`} />
-            <Text style={tw.style(`text-sm text-[#8E8E93]`, { fontFamily: "RobotoRegular" })}>
-              Adjust your pickup location slightly
-            </Text>
-          </View>
-          <View style={tw`flex-row items-center gap-x-2`}>
-            <View style={tw`w-1.5 h-1.5 bg-base-green rounded-full`} />
-            <Text style={tw.style(`text-sm text-[#8E8E93]`, { fontFamily: "RobotoRegular" })}>
-              Try a different vehicle type
-            </Text>
-          </View>
-        </View>
       </View>
     </View>
   );

@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Keke — Google Maps System Design</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300;12..96,400;12..96,500;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:        #0A0C0F;
+  --surface:   #111418;
+  --surface2:  #181D22;
+  --border:    #222830;
+  --border2:   #2D3640;
+  --text:      #E8EDF2;
+  --text2:     #7A8A9A;
+  --text3:     #3D4D5D;
+  --green:     #00D97E;
+  --green-dim: rgba(0,217,126,0.08);
+  --blue:      #3B82F6;
+  --blue-dim:  rgba(59,130,246,0.08);
+  --orange:    #F97316;
+  --orange-dim:rgba(249,115,22,0.08);
+  --yellow:    #EAB308;
+  --yellow-dim:rgba(234,179,8,0.08);
+  --red:       #EF4444;
+  --red-dim:   rgba(239,68,68,0.08);
+  --purple:    #A855F7;
+  --purple-dim:rgba(168,85,247,0.08);
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  line-height: 1.65;
+}
+
+/* scanline texture */
+body::before {
+  content:'';
+  position:fixed;
+  inset:0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.008) 2px, rgba(255,255,255,0.008) 4px);
+  pointer-events:none;
+  z-index:0;
+}
+
+.wrap { max-width:1100px; margin:0 auto; padding:0 28px; position:relative; z-index:1; }
+
+/* ── HEADER ─────────────────────────────────────────────────────── */
+header { padding:80px 0 60px; border-bottom:1px solid var(--border); }
+
+.eyebrow {
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px; letter-spacing:3px; text-transform:uppercase;
+  color:var(--green); margin-bottom:20px;
+  display:flex; align-items:center; gap:10px;
+}
+.eyebrow::before { content:''; width:20px; height:1px; background:var(--green); }
+
+h1 {
+  font-family:'Bricolage Grotesque',sans-serif;
+  font-size:clamp(36px,5.5vw,68px);
+  font-weight:800; line-height:1.0; letter-spacing:-2px;
+  margin-bottom:20px;
+}
+h1 em { font-style:normal; color:var(--green); }
+
+.header-desc {
+  color:var(--text2); font-size:16px; font-weight:300;
+  max-width:560px; line-height:1.7; margin-bottom:36px;
+}
+
+.kpi-row { display:flex; gap:40px; flex-wrap:wrap; }
+.kpi { }
+.kpi-val {
+  font-family:'Bricolage Grotesque',sans-serif;
+  font-size:26px; font-weight:700; color:var(--green);
+}
+.kpi-label {
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px; color:var(--text3); letter-spacing:1px; text-transform:uppercase;
+}
+
+/* ── SECTION LABEL ──────────────────────────────────────────────── */
+.sec-label {
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px; color:var(--green); letter-spacing:3px; text-transform:uppercase;
+  margin-bottom:10px; display:flex; align-items:center; gap:8px;
+}
+.sec-label::before { content:''; width:14px; height:1px; background:var(--green); }
+
+h2 {
+  font-family:'Bricolage Grotesque',sans-serif;
+  font-size:30px; font-weight:700; letter-spacing:-0.5px;
+  margin-bottom:8px;
+}
+
+.sec-desc { color:var(--text2); font-size:14px; font-weight:300; max-width:600px; margin-bottom:36px; }
+
+section { padding:72px 0; border-bottom:1px solid var(--border); }
+
+/* ── FILE TREE ──────────────────────────────────────────────────── */
+.file-tree {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:24px 28px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:12px;
+  line-height:2;
+  color:var(--text2);
+}
+.ft-dir  { color:var(--blue); }
+.ft-file { color:var(--text2); }
+.ft-file.green { color:var(--green); }
+.ft-file.orange { color:var(--orange); }
+.ft-file.yellow { color:var(--yellow); }
+.ft-comment { color:var(--text3); font-style:italic; }
+
+/* ── FLOW DIAGRAM ──────────────────────────────────────────────── */
+.flow-diagram {
+  display:flex;
+  align-items:stretch;
+  gap:0;
+  overflow-x:auto;
+  padding:4px 0 12px;
+  margin:24px 0;
+}
+
+.flow-node {
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  min-width:120px; padding:16px 12px;
+  border-radius:10px;
+  border:1px solid;
+  text-align:center; flex-shrink:0;
+  transition:transform 0.15s;
+}
+.flow-node:hover { transform:translateY(-2px); }
+
+.flow-node .fn-label {
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; font-weight:500;
+}
+.flow-node .fn-time {
+  font-family:'Bricolage Grotesque',sans-serif;
+  font-size:18px; font-weight:700; margin-top:4px;
+}
+.flow-node .fn-cost {
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px; color:var(--text3); margin-top:2px;
+}
+
+.flow-node.green { background:var(--green-dim); border-color:rgba(0,217,126,0.3); }
+.flow-node.blue  { background:var(--blue-dim);  border-color:rgba(59,130,246,0.3); }
+.flow-node.orange{ background:var(--orange-dim);border-color:rgba(249,115,22,0.3); }
+.flow-node.yellow{ background:var(--yellow-dim);border-color:rgba(234,179,8,0.3);  }
+.flow-node.red   { background:var(--red-dim);   border-color:rgba(239,68,68,0.3);  }
+.flow-node.purple{ background:var(--purple-dim);border-color:rgba(168,85,247,0.3); }
+.flow-node.dim   { background:var(--surface2);  border-color:var(--border); }
+
+.flow-node.green .fn-time  { color:var(--green);  }
+.flow-node.blue  .fn-time  { color:var(--blue);   }
+.flow-node.orange.fn-time  { color:var(--orange); }
+.flow-node.yellow .fn-time { color:var(--yellow); }
+.flow-node.red   .fn-time  { color:var(--red);    }
+.flow-node.purple .fn-time { color:var(--purple); }
+
+.flow-arrow {
+  display:flex; align-items:center; padding:0 6px;
+  color:var(--text3); font-size:16px; flex-shrink:0;
+}
+.flow-arrow.highlight { color:var(--green); }
+
+/* ── CODE BLOCKS ──────────────────────────────────────────────── */
+.code-file {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:10px;
+  overflow:hidden;
+  margin:16px 0;
+}
+
+.cf-header {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:10px 16px;
+  background:rgba(255,255,255,0.03);
+  border-bottom:1px solid var(--border);
+}
+
+.cf-name {
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; color:var(--text2);
+  display:flex; align-items:center; gap:6px;
+}
+.cf-name::before { content:''; width:8px; height:8px; border-radius:2px; background:var(--green); }
+
+.cf-lang {
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px; color:var(--text3); letter-spacing:1px; text-transform:uppercase;
+}
+
+.cf-body {
+  padding:18px 20px;
+  overflow-x:auto;
+}
+
+.cf-body pre {
+  font-family:'JetBrains Mono',monospace;
+  font-size:12px; line-height:1.8;
+  color:#9ABDD8; white-space:pre;
+}
+
+.cf-body .kw  { color:#F97316; }
+.cf-body .fn  { color:#A78BFA; }
+.cf-body .str { color:#86EFAC; }
+.cf-body .cm  { color:#334155; font-style:italic; }
+.cf-body .num { color:#FCD34D; }
+.cf-body .var { color:#7DD3FC; }
+.cf-body .acc { color:var(--green); font-weight:500; }
+.cf-body .key { color:#FDA4AF; }
+
+/* ── RULE CARDS ──────────────────────────────────────────────── */
+.rules-grid {
+  display:grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px,1fr));
+  gap:16px;
+  margin-top:28px;
+}
+
+.rule-card {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:24px;
+  position:relative;
+  overflow:hidden;
+  transition:border-color 0.2s;
+}
+.rule-card:hover { border-color:var(--border2); }
+
+.rule-card::before {
+  content:'';
+  position:absolute; top:0; left:0; right:0; height:2px;
+  background:linear-gradient(90deg, currentColor, transparent);
+}
+.rule-card.green { color:var(--green); }
+.rule-card.blue  { color:var(--blue);  }
+.rule-card.orange{ color:var(--orange);}
+.rule-card.yellow{ color:var(--yellow);}
+.rule-card.purple{ color:var(--purple);}
+.rule-card.red   { color:var(--red);   }
+
+.rule-num {
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px; letter-spacing:2px; text-transform:uppercase;
+  margin-bottom:10px; opacity:0.6;
+}
+
+.rule-title {
+  font-family:'Bricolage Grotesque',sans-serif;
+  font-size:16px; font-weight:700; color:var(--text);
+  margin-bottom:8px;
+}
+
+.rule-desc {
+  font-size:13px; color:var(--text2); font-weight:300; line-height:1.6;
+  margin-bottom:12px;
+}
+
+.rule-saving {
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px; padding:4px 10px; border-radius:4px;
+  border:1px solid currentColor;
+  display:inline-block;
+  opacity:0.8;
+}
+
+/* ── COST TABLE ──────────────────────────────────────────────── */
+.cost-table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:13px;
+  margin-top:28px;
+}
+.cost-table thead tr {
+  border-bottom:2px solid var(--green);
+}
+.cost-table th {
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px; letter-spacing:1.5px; text-transform:uppercase;
+  color:var(--text3); padding:10px 14px; text-align:left;
+}
+.cost-table td {
+  padding:13px 14px;
+  border-bottom:1px solid var(--border);
+  color:var(--text2);
+}
+.cost-table tr:hover td { background:var(--surface2); }
+.cost-table .val { font-family:'JetBrains Mono',monospace; font-size:12px; }
+.cost-table .val.green { color:var(--green); }
+.cost-table .val.red { color:var(--red); }
+.cost-table .val.yellow { color:var(--yellow); }
+.cost-table .total td {
+  border-top:2px solid var(--border2);
+  background:var(--surface2);
+  font-weight:500;
+  color:var(--text);
+}
+.cost-table .total .val.green { font-size:18px; }
+
+/* ── SESSION TOKEN DIAGRAM ───────────────────────────────────── */
+.token-diagram {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:28px;
+  margin:24px 0;
+}
+.token-steps {
+  display:flex; flex-direction:column; gap:0;
+  position:relative;
+}
+.token-steps::before {
+  content:'';
+  position:absolute; left:19px; top:20px; bottom:20px; width:1px;
+  background:linear-gradient(180deg, var(--green), var(--blue), var(--orange), var(--green));
+}
+.token-step {
+  display:flex; gap:20px; align-items:flex-start;
+  padding:14px 0;
+  position:relative;
+}
+.token-step + .token-step { border-top:1px solid var(--border); }
+.ts-dot {
+  width:10px; height:10px; border-radius:50%; flex-shrink:0;
+  margin-top:4px; position:relative; z-index:1;
+  background:var(--bg); border:2px solid;
+  box-shadow:0 0 8px currentColor;
+}
+.ts-dot.green  { border-color:var(--green);  color:var(--green);  }
+.ts-dot.blue   { border-color:var(--blue);   color:var(--blue);   }
+.ts-dot.orange { border-color:var(--orange); color:var(--orange); }
+.ts-dot.yellow { border-color:var(--yellow); color:var(--yellow); }
+.ts-dot.purple { border-color:var(--purple); color:var(--purple); }
+.ts-content { flex:1; }
+.ts-action {
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; color:var(--text2); margin-bottom:4px;
+}
+.ts-desc { font-size:13px; color:var(--text2); font-weight:300; }
+.ts-cost {
+  font-family:'JetBrains Mono',monospace; font-size:10px;
+  padding:2px 8px; border-radius:4px;
+  background:var(--green-dim); color:var(--green);
+  border:1px solid rgba(0,217,126,0.2);
+  float:right; margin-top:-16px;
+}
+.ts-cost.none { background:var(--surface2); color:var(--text3); border-color:var(--border); }
+
+/* ── CALLOUT ─────────────────────────────────────────────────── */
+.callout {
+  border-left:3px solid; padding:14px 18px;
+  border-radius:0 8px 8px 0;
+  font-size:13px; color:var(--text2); line-height:1.7;
+  margin:16px 0; background:var(--surface2);
+}
+.callout.green { border-color:var(--green); }
+.callout.orange { border-color:var(--orange); }
+.callout.red { border-color:var(--red); }
+.callout strong { color:var(--text); font-weight:500; }
+
+/* ── ARCH DIAGRAM ────────────────────────────────────────────── */
+.arch-stack {
+  display:flex; flex-direction:column; gap:2px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:12px; overflow:hidden;
+  margin:28px 0;
+}
+.arch-layer {
+  display:flex; min-height:52px; border-bottom:1px solid var(--border);
+}
+.arch-layer:last-child { border-bottom:none; }
+.al-name {
+  width:140px; flex-shrink:0;
+  padding:12px 16px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px; letter-spacing:1px; text-transform:uppercase;
+  color:var(--text3);
+  background:rgba(255,255,255,0.02);
+  border-right:1px solid var(--border);
+  display:flex; align-items:center;
+}
+.al-nodes {
+  flex:1; display:flex; flex-wrap:wrap;
+  gap:8px; padding:10px 16px; align-items:center;
+}
+.anode {
+  display:flex; align-items:center; gap:6px;
+  padding:5px 12px; border-radius:6px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; border:1px solid;
+  white-space:nowrap;
+}
+.anode.green  { background:var(--green-dim);  border-color:rgba(0,217,126,0.3);  color:var(--green);  }
+.anode.blue   { background:var(--blue-dim);   border-color:rgba(59,130,246,0.3); color:var(--blue);   }
+.anode.orange { background:var(--orange-dim); border-color:rgba(249,115,22,0.3); color:var(--orange); }
+.anode.yellow { background:var(--yellow-dim); border-color:rgba(234,179,8,0.3);  color:var(--yellow); }
+.anode.dim    { background:var(--surface2);   border-color:var(--border2);       color:var(--text2);  }
+.anode .dot   { width:5px; height:5px; border-radius:50%; background:currentColor; }
+
+/* ── SCREEN MOCKUP ───────────────────────────────────────────── */
+.phone-mockup {
+  width:280px;
+  background:var(--surface2);
+  border:1px solid var(--border2);
+  border-radius:40px;
+  overflow:hidden;
+  flex-shrink:0;
+  box-shadow:0 40px 80px rgba(0,0,0,0.5), 0 0 0 1px var(--border);
+}
+.phone-screen {
+  height:520px;
+  position:relative;
+  overflow:hidden;
+  background:#1a2028;
+}
+.phone-map {
+  width:100%; height:100%;
+  background:linear-gradient(160deg, #1A2530 0%, #1E2A35 50%, #1A2030 100%);
+  position:relative;
+}
+/* simplified road lines */
+.phone-map::before {
+  content:'';
+  position:absolute; inset:0;
+  background:
+    linear-gradient(45deg, transparent 48%, rgba(255,255,255,0.04) 49%, rgba(255,255,255,0.04) 51%, transparent 52%),
+    linear-gradient(-45deg, transparent 48%, rgba(255,255,255,0.04) 49%, rgba(255,255,255,0.04) 51%, transparent 52%),
+    linear-gradient(90deg, transparent 30%, rgba(255,255,255,0.06) 30.5%, rgba(255,255,255,0.06) 31%, transparent 31.5%),
+    linear-gradient(0deg, transparent 55%, rgba(255,255,255,0.06) 55.5%, rgba(255,255,255,0.06) 56%, transparent 56.5%);
+}
+.phone-bottom-sheet {
+  position:absolute; bottom:0; left:0; right:0;
+  background:rgba(10,12,15,0.95);
+  backdrop-filter:blur(16px);
+  border-radius:20px 20px 0 0;
+  padding:20px;
+  border-top:1px solid var(--border);
+}
+.pbs-handle {
+  width:36px; height:4px; border-radius:2px;
+  background:var(--border2); margin:0 auto 16px;
+}
+.pbs-whereto {
+  background:var(--surface2);
+  border:1px solid var(--border2);
+  border-radius:12px;
+  padding:14px 16px;
+  display:flex; align-items:center; gap:10px;
+  margin-bottom:12px;
+}
+.pbs-dot { width:10px; height:10px; border-radius:50%; background:var(--green); }
+.pbs-text { font-size:13px; color:var(--text3); font-family:'JetBrains Mono',monospace; }
+.pbs-confirm-btn {
+  background:var(--green);
+  border-radius:12px; padding:14px;
+  text-align:center;
+}
+.pbs-confirm-text { font-family:'Bricolage Grotesque',sans-serif; font-size:14px; font-weight:700; color:#0A0C0F; }
+.driver-eta-label {
+  font-family:'Bricolage Grotesque',sans-serif;
+  font-size:36px; font-weight:800; color:var(--green);
+  line-height:1;
+}
+.driver-eta-sub { font-size:12px; color:var(--text3); margin-bottom:12px; }
+.driver-card-mini {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:12px;
+  display:flex; gap:10px; align-items:center;
+}
+.driver-avatar-mini {
+  width:36px; height:36px; border-radius:18px;
+  background:var(--border2);
+  display:flex; align-items:center; justify-content:center;
+  font-size:16px;
+}
+.driver-info-mini { flex:1; }
+.driver-name-mini { font-size:12px; font-weight:600; color:var(--text); }
+.driver-plate-mini {
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px; color:var(--text3); margin-top:2px;
+}
+.driver-keke-marker {
+  position:absolute; top:160px; left:130px;
+  width:36px; height:36px; border-radius:18px;
+  background:var(--bg); border:2px solid var(--green);
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px;
+  box-shadow:0 0 20px rgba(0,217,126,0.4);
+}
+.origin-marker {
+  position:absolute; top:200px; left:148px;
+  width:16px; height:16px; border-radius:8px;
+  background:var(--text); border:3px solid var(--bg);
+}
+.route-line {
+  position:absolute; top:175px; left:149px;
+  width:2px; height:28px;
+  background:linear-gradient(180deg, var(--green), var(--text));
+  border-radius:1px;
+}
+
+/* ── FOOTER ──────────────────────────────────────────────────── */
+footer {
+  padding:48px 0;
+  border-top:1px solid var(--border);
+  display:flex; justify-content:space-between; align-items:center;
+  flex-wrap:wrap; gap:16px;
+}
+.footer-brand {
+  font-family:'Bricolage Grotesque',sans-serif;
+  font-size:20px; font-weight:800; color:var(--green);
+}
+.footer-note {
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px; color:var(--text3); letter-spacing:1px;
+}
+
+@media(max-width:768px) {
+  .rules-grid { grid-template-columns:1fr; }
+  .flow-diagram { gap:4px; }
+  .flow-node { min-width:90px; padding:12px 8px; }
+  .al-name { width:90px; font-size:8px; }
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Keke · Google Maps System · Production Design</div>
+    <h1>The <em>Zero-Waste</em><br>Maps Architecture</h1>
+    <p class="header-desc">
+      Every Google Maps API call is justified, session-tokened, cached, and only made when
+      no cheaper alternative exists. The result: Uber-quality UX at a fraction of typical cost.
+    </p>
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-val">$0.027</div><div class="kpi-label">Max Google cost per ride</div></div>
+      <div class="kpi"><div class="kpi-val">~70%</div><div class="kpi-label">Searches never hit Google</div></div>
+      <div class="kpi"><div class="kpi-val">&lt;5ms</div><div class="kpi-label">Driver match decision</div></div>
+      <div class="kpi"><div class="kpi-val">$200</div><div class="kpi-label">Free tier survives ~40k trips/mo</div></div>
+    </div>
+  </div>
+</header>
+
+
+<!-- SECTION 1: FILE STRUCTURE -->
+<section>
+  <div class="wrap">
+    <div class="sec-label">01 — Codebase Structure</div>
+    <h2>File Architecture</h2>
+    <p class="sec-desc">Every file is provided in the download. Drop the backend folder into your Node.js project and the mobile folder into your Expo app.</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; flex-wrap:wrap;">
+      <div>
+        <div class="file-tree">
+<span class="ft-comment"># Backend (Node.js)</span>
+<span class="ft-dir">backend/</span>
+├── <span class="ft-dir">lib/</span>
+│   ├── <span class="ft-file green">googleMapsClient.ts</span>   <span class="ft-comment">← HTTP + retry + cost tracking</span>
+│   ├── <span class="ft-file green">mapsCache.ts</span>          <span class="ft-comment">← Redis cache + TTL strategy</span>
+│   ├── <span class="ft-file">redis.ts</span>              <span class="ft-comment">← Upstash client</span>
+│   └── <span class="ft-file">db.ts</span>                 <span class="ft-comment">← Supabase/Postgres client</span>
+├── <span class="ft-dir">services/</span>
+│   ├── <span class="ft-file green">placeSearch.ts</span>        <span class="ft-comment">← Local-first search pipeline</span>
+│   ├── <span class="ft-file green">localPlaces.ts</span>        <span class="ft-comment">← PostGIS fuzzy search + seeding</span>
+│   ├── <span class="ft-file green">directions.ts</span>         <span class="ft-comment">← Directions + fare estimate</span>
+│   └── <span class="ft-file green">dispatch.ts</span>           <span class="ft-comment">← Zone index + matrix matching</span>
+├── <span class="ft-dir">routes/</span>
+│   └── <span class="ft-file orange">maps.ts</span>               <span class="ft-comment">← Express HTTP endpoints</span>
+└── <span class="ft-dir">cron/</span>
+    └── <span class="ft-file yellow">matrix.ts</span>             <span class="ft-comment">← 2AM matrix rebuild job</span>
+        </div>
+      </div>
+      <div>
+        <div class="file-tree">
+<span class="ft-comment"># Mobile (React Native / Expo)</span>
+<span class="ft-dir">mobile/</span>
+├── <span class="ft-dir">hooks/</span>
+│   ├── <span class="ft-file green">usePlaceSearch.ts</span>     <span class="ft-comment">← Session tokens + debounce</span>
+│   └── <span class="ft-file green">useRideBooking.ts</span>     <span class="ft-comment">← Full ride state machine</span>
+├── <span class="ft-dir">screens/</span>
+│   └── <span class="ft-file green">BookingScreen.tsx</span>     <span class="ft-comment">← Main rider UI (Bolt-style)</span>
+├── <span class="ft-dir">lib/</span>
+│   ├── <span class="ft-file">api.ts</span>                <span class="ft-comment">← Axios instance → your backend</span>
+│   ├── <span class="ft-file">socket.ts</span>             <span class="ft-comment">← Socket.io client</span>
+│   └── <span class="ft-file">polyline.ts</span>           <span class="ft-comment">← Google polyline decoder</span>
+└── <span class="ft-dir">components/</span>
+    └── <span class="ft-file">DriverCard.tsx</span>        <span class="ft-comment">← Driver info + ETA display</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- SECTION 2: SYSTEM FLOW -->
+<section>
+  <div class="wrap">
+    <div class="sec-label">02 — Request Flow</div>
+    <h2>Full Ride Lifecycle</h2>
+    <p class="sec-desc">From "Where to?" to driver arrival. Google is contacted exactly twice per ride — and both calls are cached.</p>
+
+    <div class="arch-stack">
+      <div class="arch-layer">
+        <div class="al-name">Rider opens app</div>
+        <div class="al-nodes">
+          <div class="anode green"><span class="dot"></span>Map loads (Google Maps SDK — free)</div>
+          <div class="anode blue"><span class="dot"></span>User location fetched (expo-location — free)</div>
+          <div class="anode dim"><span class="dot"></span>Local places preloaded into memory</div>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="al-name">User types destination</div>
+        <div class="al-nodes">
+          <div class="anode green"><span class="dot"></span>usePlaceSearch generates session token</div>
+          <div class="anode green"><span class="dot"></span>350ms debounce fires</div>
+          <div class="anode yellow"><span class="dot"></span>Backend: PostGIS fuzzy search first (~5ms)</div>
+          <div class="anode orange"><span class="dot"></span>If &lt;3 results: Google Autocomplete (session-tokened)</div>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="al-name">User selects result</div>
+        <div class="al-nodes">
+          <div class="anode orange"><span class="dot"></span>Google Place Details (closes session — 1 charge: $0.017)</div>
+          <div class="anode green"><span class="dot"></span>Free: Haversine fare + ETA estimate shown immediately</div>
+          <div class="anode dim"><span class="dot"></span>No Directions call yet — user hasn't confirmed</div>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="al-name">User confirms ride</div>
+        <div class="al-nodes">
+          <div class="anode green"><span class="dot"></span>Redis zone lookup: find nearby drivers (&lt;2ms)</div>
+          <div class="anode green"><span class="dot"></span>Travel time matrix: rank by ETA (&lt;3ms)</div>
+          <div class="anode green"><span class="dot"></span>Best driver offered via Socket.io</div>
+          <div class="anode dim"><span class="dot"></span>Still zero Google API calls</div>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="al-name">Driver accepts</div>
+        <div class="al-nodes">
+          <div class="anode orange"><span class="dot"></span>Google Directions: driver→pickup ($0.005, cached 24h)</div>
+          <div class="anode orange"><span class="dot"></span>Google Directions: pickup→destination ($0.005, cached 24h)</div>
+          <div class="anode blue"><span class="dot"></span>Polylines sent to both apps via Socket.io</div>
+          <div class="anode green"><span class="dot"></span>Driver location streams via Socket.io (free — your server)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout green">
+      <strong>Total Google cost per completed ride: $0.017 (search session) + $0.010 (2× directions) = $0.027.</strong>
+      At 10,000 daily rides that's $270/month — still within the $200 free credit if 75% of routes are cache hits from repeat corridors. With aggressive caching, real cost is closer to $80–120/month.
+    </div>
+  </div>
+</section>
+
+
+<!-- SECTION 3: SESSION TOKEN LIFECYCLE -->
+<section>
+  <div class="wrap">
+    <div class="sec-label">03 — The Most Important Cost Rule</div>
+    <h2>Session Token Lifecycle</h2>
+    <p class="sec-desc">Without session tokens, every autocomplete keystroke is billed separately. One token bundles the entire search into a single $0.017 charge. This is non-negotiable.</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:28px; align-items:start; flex-wrap:wrap;">
+      <div class="token-diagram">
+        <div class="token-steps">
+          <div class="token-step">
+            <div class="ts-dot green"></div>
+            <div class="ts-content">
+              <div class="ts-action">onFocus() → uuidv4()</div>
+              <div class="ts-desc">User taps the search box. A new UUID session token is generated. No API call yet.</div>
+            </div>
+            <div class="ts-cost none">$0.00</div>
+          </div>
+          <div class="token-step">
+            <div class="ts-dot blue"></div>
+            <div class="ts-content">
+              <div class="ts-action">type "E" → debounce skip</div>
+              <div class="ts-desc">Too short (min 2 chars) or still in debounce window. Nothing sent.</div>
+            </div>
+            <div class="ts-cost none">$0.00</div>
+          </div>
+          <div class="token-step">
+            <div class="ts-dot blue"></div>
+            <div class="ts-content">
+              <div class="ts-action">type "EBSU P" → autocomplete call</div>
+              <div class="ts-desc">350ms has passed. Autocomplete fires with the session token. Same token = same billing session.</div>
+            </div>
+            <div class="ts-cost none">$0.00 (billed on close)</div>
+          </div>
+          <div class="token-step">
+            <div class="ts-dot blue"></div>
+            <div class="ts-content">
+              <div class="ts-action">type "EBSU Parm" → autocomplete call</div>
+              <div class="ts-desc">Another debounced call. Same session token. Still not billed.</div>
+            </div>
+            <div class="ts-cost none">$0.00 (billed on close)</div>
+          </div>
+          <div class="token-step">
+            <div class="ts-dot orange"></div>
+            <div class="ts-content">
+              <div class="ts-action">user taps "EBSU Parm Site"</div>
+              <div class="ts-desc">onSelect() fires. Place Details call is made WITH the same session token.</div>
+            </div>
+            <div class="ts-cost none">$0.00</div>
+          </div>
+          <div class="token-step">
+            <div class="ts-dot green"></div>
+            <div class="ts-content">
+              <div class="ts-action">session token = null</div>
+              <div class="ts-desc">Google bills: all autocomplete calls + Place Details = 1 session. Token reset for next search.</div>
+            </div>
+            <div class="ts-cost">$0.017 total</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="code-file">
+          <div class="cf-header">
+            <span class="cf-name">hooks/usePlaceSearch.ts — key lines</span>
+            <span class="cf-lang">TS</span>
+          </div>
+          <div class="cf-body"><pre><span class="cm">// Token generated on focus — one per search</span>
+<span class="kw">const</span> <span class="var">onFocus</span> = <span class="fn">useCallback</span>(() => {
+  <span class="kw">if</span> (!sessionToken.current) {
+    sessionToken.current = <span class="fn">uuidv4</span>();
+  }
+}, []);
+
+<span class="cm">// Debounced search — 350ms wait</span>
+debounceTimer.current = <span class="fn">setTimeout</span>(<span class="kw">async</span> () => {
+  <span class="kw">await</span> api.<span class="fn">get</span>(<span class="str">'/places/search'</span>, {
+    params: {
+      q:            text.<span class="fn">trim</span>(),
+      sessionToken: sessionToken.current, <span class="cm">// ← same token</span>
+    }
+  });
+}, <span class="num acc">350</span>);
+
+<span class="cm">// Selection CLOSES the session</span>
+<span class="kw">const</span> <span class="var">onSelect</span> = <span class="kw">async</span> (place) => {
+  <span class="kw">await</span> api.<span class="fn">get</span>(<span class="str">'/places/details'</span>, {
+    params: {
+      placeId:      place.placeId,
+      sessionToken: sessionToken.current, <span class="cm">// ← closes session</span>
+    }
+  });
+
+  <span class="cm">// Reset — CRITICAL. Reusing a token breaks the session.</span>
+  sessionToken.current = <span class="acc">null</span>;
+};</pre></div>
+        </div>
+
+        <div class="callout orange" style="margin-top:16px;">
+          <strong>What breaks this:</strong> Reusing the same session token across two different search sessions. Google will then bill each individual autocomplete call at $2.83/1k instead of $17/1k sessions — a 6× cost increase. The <code>sessionToken.current = null</code> line after selection is mandatory.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- SECTION 4: THE 6 RULES -->
+<section>
+  <div class="wrap">
+    <div class="sec-label">04 — Cost Engineering Rules</div>
+    <h2>The 6 Rules That Keep You Free</h2>
+    <p class="sec-desc">Every rule implemented in the provided code. Breaking any one of them can 5–10× your bill overnight.</p>
+
+    <div class="rules-grid">
+      <div class="rule-card green">
+        <div class="rule-num">Rule 01</div>
+        <div class="rule-title">Session Tokens — Always</div>
+        <div class="rule-desc">Every autocomplete call carries a session token. The entire search (all keystrokes + Place Details) bills as one $0.017 session. Without this, each keystroke costs $2.83/1k.</div>
+        <span class="rule-saving">6× cost reduction</span>
+      </div>
+
+      <div class="rule-card blue">
+        <div class="rule-num">Rule 02</div>
+        <div class="rule-title">Local Places First</div>
+        <div class="rule-desc">PostGIS searches your seeded places database before calling Google. ~70% of searches in your city resolve locally (EBSU, Kpirikpiri Market, etc). These never touch Google.</div>
+        <span class="rule-saving">~70% fewer Google calls</span>
+      </div>
+
+      <div class="rule-card orange">
+        <div class="rule-num">Rule 03</div>
+        <div class="rule-title">350ms Debounce + Min 2 Chars</div>
+        <div class="rule-desc">User types "EBSU Parm Site" = 14 characters. Without debounce: 14 API calls. With 350ms debounce and 2-char minimum: 3–4 API calls per session. Still $0.017 total.</div>
+        <span class="rule-saving">70% fewer calls per session</span>
+      </div>
+
+      <div class="rule-card yellow">
+        <div class="rule-num">Rule 04</div>
+        <div class="rule-title">Directions Only on Confirmation</div>
+        <div class="rule-desc">Pre-booking fare estimate uses free Haversine math (×1.4 road factor). Google Directions API is called only after the rider confirms. A cancellation costs $0 in routing.</div>
+        <span class="rule-saving">Eliminates speculative calls</span>
+      </div>
+
+      <div class="rule-card purple">
+        <div class="rule-num">Rule 05</div>
+        <div class="rule-title">Aggressive Redis Caching</div>
+        <div class="rule-desc">Place Details cached 30 days. Routes cached 24h by snapped coordinates. Geocodes cached 7 days. A popular EBSU→Market route is fetched once, then free for 24h regardless of how many riders take it.</div>
+        <span class="rule-saving">60–80% cache hit rate</span>
+      </div>
+
+      <div class="rule-card red">
+        <div class="rule-num">Rule 06</div>
+        <div class="rule-title">Field Masks on Place Details</div>
+        <div class="rule-desc">Only request <code>place_id, name, geometry/location, formatted_address</code>. Requesting <code>reviews, photos, opening_hours</code> triggers Google's expensive tier. Only pay for what your UI shows.</div>
+        <span class="rule-saving">Stays in cheapest billing tier</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- SECTION 5: THE DISPATCH ENGINE -->
+<section>
+  <div class="wrap">
+    <div class="sec-label">05 — Dispatch Engine</div>
+    <h2>Driver Matching in 5ms</h2>
+    <p class="sec-desc">The entire driver matching pipeline uses zero Google API calls. Zone index + travel time matrix. Google is consulted only after a driver confirms acceptance.</p>
+
+    <div class="flow-diagram">
+      <div class="flow-node green">
+        <div class="fn-label">Rider taps<br>Confirm</div>
+        <div class="fn-time">0ms</div>
+        <div class="fn-cost">$0.00</div>
+      </div>
+      <div class="flow-arrow highlight">→</div>
+      <div class="flow-node blue">
+        <div class="fn-label">Zone ID<br>computed</div>
+        <div class="fn-time">~0.1ms</div>
+        <div class="fn-cost">math only</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node blue">
+        <div class="fn-label">Redis GEORADIUS<br>9 zones</div>
+        <div class="fn-time">~2ms</div>
+        <div class="fn-cost">Redis only</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node blue">
+        <div class="fn-label">Matrix ETA<br>8 drivers</div>
+        <div class="fn-time">~3ms</div>
+        <div class="fn-cost">Redis lookup</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node yellow">
+        <div class="fn-label">Offer pushed<br>via Socket.io</div>
+        <div class="fn-time">~15ms</div>
+        <div class="fn-cost">$0.00</div>
+      </div>
+      <div class="flow-arrow highlight">→</div>
+      <div class="flow-node orange">
+        <div class="fn-label">Driver accepts<br>→ Directions</div>
+        <div class="fn-time">~30ms</div>
+        <div class="fn-cost">$0.010</div>
+      </div>
+    </div>
+
+    <div class="code-file">
+      <div class="cf-header">
+        <span class="cf-name">services/dispatch.ts — driver matching core</span>
+        <span class="cf-lang">TS</span>
+      </div>
+      <div class="cf-body"><pre><span class="cm">// Entire match decision: ~5ms, zero Google calls</span>
+<span class="kw">export async function</span> <span class="fn">dispatchRide</span>(rideId, rider, destination) {
+  <span class="cm">// 1. Zone lookup — which 500m cell is the rider in?</span>
+  <span class="kw">const</span> <span class="var">riderZone</span> = <span class="fn">locToZoneIndex</span>(rider.location);         <span class="cm">// ~0.1ms</span>
+  <span class="kw">const</span> <span class="var">surroundingZones</span> = <span class="fn">getSurroundingZones</span>(riderZone);   <span class="cm">// pure math</span>
+
+  <span class="cm">// 2. Redis GEO — all drivers within 2km across 9 zones</span>
+  <span class="kw">const</span> <span class="var">nearbyDrivers</span> = <span class="kw">await</span> <span class="fn">queryZones</span>(surroundingZones, rider.location); <span class="cm">// ~2ms</span>
+
+  <span class="cm">// 3. Rank by pre-computed travel time matrix (built at 2AM)</span>
+  <span class="kw">const</span> <span class="var">ranked</span> = <span class="kw">await</span> <span class="fn">rankByETA</span>(nearbyDrivers, rider.location); <span class="cm">// ~3ms Redis lookup</span>
+
+  <span class="cm">// 4. Offer to best driver — total time so far: ~5ms, cost: $0.00</span>
+  <span class="kw">const</span> <span class="var">bestDriver</span> = ranked[<span class="num">0</span>];
+  socket.<span class="fn">to</span>(bestDriver.driverId).<span class="fn">emit</span>(<span class="str">'ride:offer'</span>, { rideId, rider, destination });
+
+  <span class="kw">return</span> { driverId: bestDriver.driverId, etaSeconds: bestDriver.etaSeconds };
+}
+
+<span class="cm">// Google Directions called HERE — once, after driver acceptance</span>
+<span class="kw">export async function</span> <span class="fn">onDriverAccepts</span>(rideId, driverLocation) {
+  <span class="kw">const</span> [<span class="var">pickupRoute</span>, <span class="var">tripRoute</span>] = <span class="kw">await</span> Promise.<span class="fn">all</span>([
+    <span class="fn">getDirections</span>(driverLocation, pending.origin),      <span class="cm">// $0.005 (cached 24h)</span>
+    <span class="fn">getDirections</span>(pending.origin, pending.destination),  <span class="cm">// $0.005 (cached 24h)</span>
+  ]);
+  <span class="kw">return</span> { pickupRoute, tripRoute };
+}</pre></div>
+    </div>
+  </div>
+</section>
+
+
+<!-- SECTION 6: COST PROJECTION -->
+<section>
+  <div class="wrap">
+    <div class="sec-label">06 — Cost Projection</div>
+    <h2>Monthly Google API Cost</h2>
+    <p class="sec-desc">Across three growth stages. The free $200 credit covers you through approximately 7,400 daily rides without the cache. With caching, you survive well past 30,000 daily rides for free.</p>
+
+    <table class="cost-table">
+      <thead>
+        <tr>
+          <th>API Call Type</th>
+          <th>Without Strategy</th>
+          <th>With All 6 Rules</th>
+          <th>1k rides/day</th>
+          <th>10k rides/day</th>
+          <th>40k rides/day</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Place Search Sessions</td>
+          <td class="val red">~$50/10k searches</td>
+          <td class="val green">~$5/10k searches</td>
+          <td class="val green">~$1.50</td>
+          <td class="val green">~$15</td>
+          <td class="val yellow">~$60</td>
+        </tr>
+        <tr>
+          <td>Place Details</td>
+          <td class="val red">Same as sessions</td>
+          <td class="val green">Bundled in session</td>
+          <td class="val green">$0 (in session)</td>
+          <td class="val green">$0 (in session)</td>
+          <td class="val green">$0 (in session)</td>
+        </tr>
+        <tr>
+          <td>Directions (confirmed rides)</td>
+          <td class="val red">~$15/10k rides</td>
+          <td class="val green">~$3/10k (70% cached)</td>
+          <td class="val green">~$0.30</td>
+          <td class="val green">~$3</td>
+          <td class="val yellow">~$12</td>
+        </tr>
+        <tr>
+          <td>Geocoding</td>
+          <td class="val red">~$15/10k</td>
+          <td class="val green">~$0.50/10k (cached 7d)</td>
+          <td class="val green">~$0.05</td>
+          <td class="val green">~$0.50</td>
+          <td class="val green">~$2</td>
+        </tr>
+        <tr>
+          <td>Map Tiles (SDK)</td>
+          <td colspan="5" style="color:var(--green); font-family:'JetBrains Mono',monospace; font-size:11px;">Free — Google Maps SDK tile loads are not charged</td>
+        </tr>
+        <tr class="total">
+          <td><strong>Monthly Total</strong></td>
+          <td class="val red">~$200–800</td>
+          <td class="val green">~$4–80</td>
+          <td class="val green">~$5</td>
+          <td class="val green">~$25</td>
+          <td class="val yellow">~$90</td>
+        </tr>
+        <tr class="total">
+          <td><strong>vs $200 Free Credit</strong></td>
+          <td></td>
+          <td></td>
+          <td class="val green">✓ Well within</td>
+          <td class="val green">✓ Within</td>
+          <td class="val yellow">⚠ Near limit</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout green" style="margin-top:24px;">
+      <strong>The inflection point</strong> where you exceed the $200 free tier is approximately 35,000–45,000 daily rides, depending on your route repetition rate. By then you'll have the revenue and data to migrate the routing layer to OSRM — which reduces costs by 90% again. The architecture supports that migration without touching the mobile app.
+    </div>
+  </div>
+</section>
+
+
+<!-- SECTION 7: PHONE MOCKUP + UX NOTES -->
+<section>
+  <div class="wrap">
+    <div class="sec-label">07 — User Experience</div>
+    <h2>Bolt-Grade UX, Zero Compromise</h2>
+    <p class="sec-desc">The cost optimisations are completely invisible to the user. The experience is identical to Bolt.</p>
+
+    <div style="display:flex; gap:48px; align-items:flex-start; flex-wrap:wrap;">
+
+      <!-- Phone mockup -->
+      <div class="phone-mockup">
+        <div class="phone-screen">
+          <div class="phone-map">
+            <div class="driver-keke-marker">🛺</div>
+            <div class="route-line"></div>
+            <div class="origin-marker"></div>
+          </div>
+          <div class="phone-bottom-sheet">
+            <div class="pbs-handle"></div>
+            <div class="driver-eta-label">4 min</div>
+            <div class="driver-eta-sub">Chibuike is on his way</div>
+            <div class="driver-card-mini">
+              <div class="driver-avatar-mini">🧑🏿</div>
+              <div class="driver-info-mini">
+                <div class="driver-name-mini">Chibuike Okafor</div>
+                <div class="driver-plate-mini">EB 234 KK · ★ 4.8</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- UX states -->
+      <div style="flex:1; min-width:280px;">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+
+          <div class="code-file">
+            <div class="cf-header">
+              <span class="cf-name">State: searching — local place wins</span>
+              <span class="cf-lang" style="color:var(--green)">FREE</span>
+            </div>
+            <div class="cf-body" style="padding:14px 18px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text2); line-height:2;">
+                User types: "ebsu pam"<br>
+                PostGIS: similarity("ebsu parm site", "ebsu pam") → 0.72 ✓<br>
+                Result: "EBSU Parm Site" in <span style="color:var(--green)">4ms</span><br>
+                Google API calls: <span style="color:var(--green)">0</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="code-file">
+            <div class="cf-header">
+              <span class="cf-name">State: confirming — free fare estimate</span>
+              <span class="cf-lang" style="color:var(--green)">FREE</span>
+            </div>
+            <div class="cf-body" style="padding:14px 18px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text2); line-height:2;">
+                Haversine(origin, dest) × 1.4 → 3.2km road estimate<br>
+                Fare: ₦200 + 3.2 × ₦150 = <span style="color:var(--yellow)">₦680</span><br>
+                ETA: 3.2km ÷ 25km/h = <span style="color:var(--yellow)">~8 min ride</span><br>
+                Google API calls: <span style="color:var(--green)">0</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="code-file">
+            <div class="cf-header">
+              <span class="cf-name">State: driver en route — real polyline</span>
+              <span class="cf-lang" style="color:var(--orange)">$0.010</span>
+            </div>
+            <div class="cf-body" style="padding:14px 18px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text2); line-height:2;">
+                Driver accepted → 2 Directions calls fired in parallel<br>
+                Both results cached in Redis (24h TTL)<br>
+                Polylines decoded + drawn on both driver/rider maps<br>
+                Driver location streams free via Socket.io (3s interval)
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- SECTION 8: ENV + INSTALL -->
+<section>
+  <div class="wrap">
+    <div class="sec-label">08 — Setup</div>
+    <h2>Environment & Installation</h2>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+      <div>
+        <div class="code-file">
+          <div class="cf-header">
+            <span class="cf-name">backend .env</span>
+            <span class="cf-lang">ENV</span>
+          </div>
+          <div class="cf-body"><pre><span class="cm"># Google Maps — SERVER key (not the same as mobile)</span>
+<span class="key">GOOGLE_MAPS_SERVER_KEY</span>=<span class="str">AIzaSy...your-server-key</span>
+
+<span class="cm"># Redis (Upstash)</span>
+<span class="key">UPSTASH_REDIS_REST_URL</span>=<span class="str">https://...upstash.io</span>
+<span class="key">UPSTASH_REDIS_REST_TOKEN</span>=<span class="str">AXxx...token</span>
+
+<span class="cm"># Database (Supabase)</span>
+<span class="key">DATABASE_URL</span>=<span class="str">postgresql://postgres:...@db.supabase.co/postgres</span>
+
+<span class="cm"># App</span>
+<span class="key">PORT</span>=<span class="num">3000</span>
+<span class="key">JWT_SECRET</span>=<span class="str">your-64-char-random-string</span></pre></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="code-file">
+          <div class="cf-header">
+            <span class="cf-name">mobile app.config.ts</span>
+            <span class="cf-lang">TS</span>
+          </div>
+          <div class="cf-body"><pre><span class="cm">// IMPORTANT: Mobile key must have:
+// Maps SDK for Android ✓
+// Maps SDK for iOS ✓
+// Places API ✓ (for autocomplete)
+// Directions API ✓ (for routing)
+// DO NOT enable Distance Matrix
+// or Geocoding on the mobile key</span>
+
+<span class="kw">export default</span> {
+  expo: {
+    extra: {
+      <span class="str">GOOGLE_MAPS_KEY</span>: process.env.<span class="var">GOOGLE_MAPS_MOBILE_KEY</span>,
+      <span class="str">API_URL</span>: process.env.<span class="var">API_URL</span>,
+    },
+    android: { config: {
+      googleMaps: { apiKey: process.env.<span class="var">GOOGLE_MAPS_MOBILE_KEY</span> }
+    }}
+  }
+};</pre></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="code-file" style="margin-top:16px;">
+      <div class="cf-header">
+        <span class="cf-name">Google Cloud Console — API Key Restrictions (critical)</span>
+        <span class="cf-lang">SETUP</span>
+      </div>
+      <div class="cf-body"><pre><span class="cm">// Create TWO separate API keys in Google Cloud Console:</span>
+
+<span class="cm">// KEY 1 — Mobile app key (restrict to your app's bundle ID)</span>
+<span class="cm">// Enable: Maps SDK Android, Maps SDK iOS, Places API, Directions API</span>
+<span class="cm">// Restrict to: Android app (com.ridekeke.app) + iOS app bundle ID</span>
+<span class="cm">// This key is safe to embed in the app (restricted by bundle ID)</span>
+GOOGLE_MAPS_MOBILE_KEY=<span class="str">AIzaSy...mobile-key</span>
+
+<span class="cm">// KEY 2 — Server key (restrict to your VPS IP addresses)</span>
+<span class="cm">// Enable: Places API (autocomplete + details), Directions API, Geocoding</span>
+<span class="cm">// Restrict to: IP address of keke-api VPS only (157.90.120.44)</span>
+<span class="cm">// NEVER put this key in the mobile app</span>
+GOOGLE_MAPS_SERVER_KEY=<span class="str">AIzaSy...server-key</span>
+
+<span class="cm">// Set up billing budget alert at $150 in Google Cloud Console
+// Billing → Budgets & Alerts → Create Budget → $150 threshold
+// This fires an email BEFORE you hit the $200 free credit limit</span></pre></div>
+    </div>
+
+    <div class="code-file" style="margin-top:16px;">
+      <div class="cf-header">
+        <span class="cf-name">install — all dependencies</span>
+        <span class="cf-lang">BASH</span>
+      </div>
+      <div class="cf-body"><pre><span class="cm"># Backend</span>
+npm install axios @upstash/redis pg uuid zod express socket.io
+
+<span class="cm"># Mobile</span>
+npx expo install react-native-maps expo-location @types/uuid
+npm install uuid socket.io-client axios @tanstack/react-query</pre></div>
+    </div>
+  </div>
+</section>
+
+
+<footer>
+  <div class="wrap">
+    <div class="footer-brand">Keke</div>
+    <div class="footer-note">Google Maps System · Zero-Waste Architecture · $0.027 per ride max</div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,14 +1,18 @@
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Image,
   ImageBackground,
   Pressable,
   StatusBar,
+  Switch,
   Text,
   TouchableOpacity,
+  Vibration,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AntDesign, MaterialCommunityIcons } from "@expo/vector-icons";
 import { AppDetailsState, setSubscriptionUtils } from "@/store/AppSlice";
 import {
@@ -24,6 +28,7 @@ import { TBooking, TDriverActiveRide, TDriverStats } from "@/types";
 import {
   formatBookingDate,
   formatBookingTime,
+  getLocalBookingDateAndTime,
 } from "@/lib/formatBookingDateTime";
 import { useDispatch, useSelector } from "react-redux";
 
@@ -34,6 +39,7 @@ import { DriverBookingSheet } from "@/components/driver/bookingSheet";
 import EmergencyModal from "@/app/(app)/(tabs)/(home)/_modals/emergencyModal";
 import { Portal } from "@gorhom/portal";
 import axios from "axios";
+import apiClient from "@/utils/apiClient";
 import { getGreeting } from "@/lib/getGreeting";
 import { router } from "expo-router";
 import { getErrorMessage } from "@/utils/errorHandler";
@@ -43,18 +49,23 @@ import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 
 const Home = () => {
-  const { apiConfig } = useContext(AppContext);
+  const insets = useSafeAreaInsets();
+  const { apiConfig, notificationEvent } = useContext(AppContext);
   const isFocused = useIsFocused();
-  const { subscription } = useSelector(AppDetailsState);
+  const { subscription, unread_count } = useSelector(AppDetailsState);
   const [activeRide, setActiveRide] = useState<Partial<TDriverActiveRide>>({});
   const [booking, setBooking] = useState<Partial<TBooking>>({});
   const [viewbooking, setViewbooking] = useState<Partial<TBooking>>({});
   const [rloading, setRLoading] = useState(false);
   const [vloading, setVLoading] = useState(false);
   const [changed, setChange] = useState(false);
-  const [activity, setActivity] = useState<Partial<TDriverStats>>({});
+  const [activity, setActivity] = useState<Partial<TDriverStats & { is_online?: boolean; is_available?: boolean; verification_status?: string; documents_verified?: boolean }>>({});
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const { user } = useSelector(AuthState);
   const dispatch = useDispatch();
+
+  const isOnline = activity?.is_online ?? false;
+  const isVerified = activity?.verification_status === "approved" && activity?.documents_verified;
 
   const emergencySheetRef = useRef<BottomSheetMethods>(null);
   const bookingSheetRef = useRef<BottomSheetMethods>(null);
@@ -70,6 +81,42 @@ const Home = () => {
       }),
       { iterations: -1 } // Infinite iterations
     ).start();
+  };
+
+  const toggleAvailability = () => {
+    if (availabilityLoading) return;
+    if (!isVerified) {
+      safeShowMessage({
+        type: "info",
+        message: "Your account is under review. You can go online once approved by admin.",
+      });
+      return;
+    }
+    setAvailabilityLoading(true);
+    apiClient
+      .patch("driver/availability", { isAvailable: !isOnline })
+      .then(({ data }) => {
+        const driver = data?.data?.driver;
+        setActivity((prev) => ({
+          ...prev,
+          is_online: driver?.is_online ?? prev?.is_online,
+          is_available: driver?.is_available ?? prev?.is_available,
+        }));
+        safeShowMessage({
+          type: "success",
+          message: driver?.is_available ? "You're now online" : "You're now offline",
+        });
+      })
+      .catch((err) => {
+        const status = err?.response?.status;
+        const message = err?.response?.data?.message;
+        const errorMessage =
+          status === 404 && (message?.toLowerCase().includes("driver") || !message)
+            ? "Driver profile not found. Complete your driver registration first."
+            : getErrorMessage(err);
+        safeShowMessage({ type: "danger", message: errorMessage });
+      })
+      .finally(() => setAvailabilityLoading(false));
   };
 
   useEffect(() => {
@@ -109,8 +156,10 @@ const Home = () => {
     axios
       .get(CLOSEST_BOOKING, apiConfig)
       .then(({ data }) => {
-        if (data?.data?.length > 0) {
-          setBooking(data?.data[0]);
+        const payload = data?.data;
+        const bookingItem = payload?.booking ?? (Array.isArray(payload) ? payload[0] : null);
+        if (bookingItem && typeof bookingItem === 'object') {
+          setBooking(bookingItem);
         } else {
           setBooking({});
         }
@@ -278,10 +327,9 @@ const Home = () => {
         const passengerImage = bookingData.passenger?.profileImage || bookingData.passenger?.image || bookingData.rider?.profileImage || bookingData.rider?.image || null;
         const passengerPhone = bookingData.passenger?.phone || bookingData.rider?.phone || bookingData.phone || null;
         
-        // Parse scheduled_at date
-        const scheduledAt = bookingData.scheduled_at ? new Date(bookingData.scheduled_at) : null;
-        const bookingDate = scheduledAt ? scheduledAt.toISOString().split('T')[0] : (bookingData.booking_date || '');
-        const bookingTime = scheduledAt ? scheduledAt.toTimeString().split(' ')[0].substring(0, 5) : (bookingData.booking_time || '');
+        const { booking_date: bookingDate, booking_time: bookingTime } = getLocalBookingDateAndTime(bookingData.scheduled_at) || {};
+        const finalBookingDate = bookingDate || bookingData.booking_date || '';
+        const finalBookingTime = bookingTime || bookingData.booking_time || '';
         
         setViewbooking({
           ...bookingData,
@@ -290,8 +338,8 @@ const Home = () => {
           dropoff_location: dropoffLocation,
           origin: pickupLocation,
           destination: dropoffLocation,
-          booking_date: bookingDate,
-          booking_time: bookingTime,
+          booking_date: finalBookingDate,
+          booking_time: finalBookingTime,
           username: passengerName,
           name: passengerName,
           image: passengerImage,
@@ -346,6 +394,17 @@ const Home = () => {
     },
   });
 
+  // TASK 4: Driver foreground alerts - show toast + vibration for critical notifications
+  const DRIVER_ALERT_SUBTYPES = ["ride_requested", "ride_cancelled", "passenger_cancelled", "driver_cancelled"];
+  useEffect(() => {
+    if (!notificationEvent?.body) return;
+    const subType = notificationEvent?.data?.subType ?? notificationEvent?.data?.sub_type ?? "";
+    if (DRIVER_ALERT_SUBTYPES.includes(subType)) {
+      safeShowMessage({ message: notificationEvent.body, type: "info" });
+      Vibration.vibrate(300);
+    }
+  }, [notificationEvent]);
+
   return (
     <>
       <DriverBookingSheet
@@ -360,7 +419,7 @@ const Home = () => {
       <ImageBackground
         style={tw.style(`bg-white`, {
           flex: 1,
-          paddingTop: StatusBar.currentHeight,
+          paddingTop: insets.top,
         })}
         source={require("@images/pattern-bg.png")}
       >
@@ -391,12 +450,40 @@ const Home = () => {
                 />
               </Svg>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push("/notifications")}>
-              <MaterialCommunityIcons
-                name="bell-badge-outline"
-                size={24}
-                color="white"
-              />
+            <TouchableOpacity onPress={() => router.push("/(driver)/notifications")}>
+              <View style={{ position: "relative" }}>
+                <MaterialCommunityIcons
+                  name="bell-badge-outline"
+                  size={24}
+                  color="white"
+                />
+                {unread_count > 0 ? (
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: -4,
+                      right: -6,
+                      minWidth: 18,
+                      height: 18,
+                      borderRadius: 9,
+                      backgroundColor: "#FF3B30",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 4,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: "#FFFFFF",
+                        fontSize: 11,
+                        fontWeight: "700",
+                      }}
+                    >
+                      {unread_count > 9 ? "9+" : unread_count}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             </TouchableOpacity>
           </View>
         </View>
@@ -428,16 +515,30 @@ const Home = () => {
               </Text>
             </View>
           </View>
-          <View>
+          <View style={tw`items-end`}>
+            <View style={tw`flex-row items-center gap-x-2`}>
+              <Text
+                style={tw.style(
+                  `text-[14px]`,
+                  isOnline ? `text-base-green` : `text-[#484C52]`,
+                  { fontFamily: "RobotoBold" }
+                )}
+              >
+                {isOnline ? "Online" : "Offline"}
+              </Text>
+              <Switch
+                value={isOnline}
+                onValueChange={toggleAvailability}
+                disabled={availabilityLoading || !isVerified}
+                trackColor={{
+                  false: tw.color("bg-gray-300") ?? "#d1d5db",
+                  true: tw.color("bg-base-green") ?? "#3C8F7C",
+                }}
+                thumbColor="#fff"
+              />
+            </View>
             <Text
-              style={tw.style(`text-[14px] text-[#484C52]`, {
-                fontFamily: "RobotoBold",
-              })}
-            >
-              Online
-            </Text>
-            <Text
-              style={tw.style(`text-[16px] text-base-green`, {
+              style={tw.style(`text-[16px] text-[#484C52]`, {
                 fontFamily: "RobotoMedium",
               })}
             >
@@ -445,6 +546,17 @@ const Home = () => {
             </Text>
           </View>
         </View>
+
+        {!isVerified && (
+          <View style={tw`px-4 pt-2 pb-1`}>
+            <Text
+              style={tw.style("text-sm text-amber-600", { fontFamily: "RobotoRegular" })}
+              numberOfLines={2}
+            >
+              Account under review. You can go online once approved.
+            </Text>
+          </View>
+        )}
 
         <View style={tw`mt-6 px-4`}>
           <Text
@@ -455,7 +567,10 @@ const Home = () => {
             Make Extra Money
           </Text>
           <View style={tw`flex-row justify-between items-center my-2`}>
-            <Pressable style={tw`w-[48%]`}>
+            <Pressable
+              style={tw`w-[48%]`}
+              onPress={() => router.push("/(driver)/dailyActivities")}
+            >
               <ImageBackground
                 source={require(`@images/dchallenge.png`)}
                 imageStyle={tw`rounded-[10px]`}
@@ -470,7 +585,10 @@ const Home = () => {
                 </Text>
               </ImageBackground>
             </Pressable>
-            <Pressable style={tw`w-[48%]`}>
+            <Pressable
+              style={tw`w-[48%]`}
+              onPress={() => router.push("/(driver)/(tabs)/bookings")}
+            >
               <ImageBackground
                 source={require(`@images/schallenge.png`)}
                 imageStyle={tw` rounded-[10px]`}
@@ -569,7 +687,8 @@ const Home = () => {
             </View>
           </View>
 
-          {Object.keys(booking).length === 0 ? (
+          {Object.keys(booking).length === 0 ||
+          String(booking?.status ?? "").toLowerCase() === "cancelled" ? (
             <View
               style={tw.style(
                 `flex-row items-center  p-4 rounded-[10px] my-2 bg-white`,
@@ -616,24 +735,38 @@ const Home = () => {
                 >
                   {formatBookingDate(booking?.booking_date as string)}
                 </Text>
-                <TouchableOpacity
-                  style={tw`px-4 py-1 mt-2.5 self-start border border-[#FF3810] rounded-[8px]`}
-                  onPress={() =>
-                    CancelBooking(booking?.booking_id as string, setRLoading)
-                  }
-                >
-                  {rloading ? (
-                    <ActivityIndicator color="#FF3810" />
-                  ) : (
-                    <Text
-                      style={tw.style(`text-sm text-[#FF3810]`, {
-                        fontFamily: "RobotoBold",
-                      })}
-                    >
-                      Tap to cancel
-                    </Text>
-                  )}
-                </TouchableOpacity>
+                {String(booking?.status ?? "").toLowerCase() !== "cancelled" && (
+                  <TouchableOpacity
+                    style={tw`px-4 py-1 mt-2.5 self-start border border-[#FF3810] rounded-[8px]`}
+                    onPress={() => {
+                      Alert.alert(
+                        "Cancel Ride",
+                        "Are you sure you want to cancel this booking? This action cannot be undone.",
+                        [
+                          { text: "No", style: "cancel" },
+                          {
+                            text: "Yes, Cancel",
+                            style: "destructive",
+                            onPress: () =>
+                              CancelBooking(booking?.booking_id as string, setRLoading),
+                          },
+                        ]
+                      );
+                    }}
+                  >
+                    {rloading ? (
+                      <ActivityIndicator color="#FF3810" />
+                    ) : (
+                      <Text
+                        style={tw.style(`text-sm text-[#FF3810]`, {
+                          fontFamily: "RobotoBold",
+                        })}
+                      >
+                        Tap to cancel
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                )}
               </View>
               <View style={tw`basis-[40%]`}>
                 <Text
@@ -700,6 +833,13 @@ const Home = () => {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
+                onPress={() => {
+                  if (booking?.booking_id) {
+                    ViewBooking(booking.booking_id as string);
+                  } else {
+                    router.push("/(driver)/(tabs)/bookings");
+                  }
+                }}
                 style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-black rounded-[8px]`}
               >
                 <Text

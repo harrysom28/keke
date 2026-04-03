@@ -1,23 +1,22 @@
 import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import Svg, { ClipPath, Defs, G, Path, Rect } from "react-native-svg";
 
 import { AntDesign, MaterialIcons } from "@expo/vector-icons";
 import AuthForm from "@/components/AuthForm";
 import FormInput from "@/components/formInput";
+import { validators } from "@/utils/formValidators";
 import GoogleAuthButton from "@/components/googleAuth";
 import { OTP_TARGET } from "./otpcode";
 import PhoneInput from "@perttu/react-native-phone-number-input";
-import { REGISTER } from "@/constants";
+import { REGISTER, VALIDATE_REFERRAL_CODE } from "@/constants";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useRouter } from "expo-router";
 import { verticalScale } from "@/constants/Metrics";
-import { useSelector } from "react-redux";
-import { AuthState } from "@/store/AuthSlice";
-
-const Tab = ["Phone No", "Email"];
+import { useDispatch, useSelector } from "react-redux";
+import { AuthState, updateRegistration } from "@/store/AuthSlice";
 
 const renderDropdownImage = () => {
   return (
@@ -31,62 +30,62 @@ const renderDropdownImage = () => {
 };
 
 const SignUp = () => {
-  // const isFocused = useIsFocused();
   const phoneInput = useRef<PhoneInput>(null);
   const router = useRouter();
+  const dispatch = useDispatch();
   const { registration } = useSelector(AuthState);
-  const [current, setCurrent] = useState(Tab[0]);
   const [loading, setLoading] = useState(false);
   const [state, setState] = useState({
-    email_phone_number: "",
     referral_code: "",
   });
 
-  useEffect(() => {
-    setState({
-      email_phone_number: "",
-      referral_code: "",
-    });
-  }, [current]);
-
-  const handleSubmit = () => {
-    let num = phoneInput?.current?.getNumberAfterPossiblyEliminatingZero()
+  const handleSubmit = async () => {
+    const num = phoneInput?.current?.getNumberAfterPossiblyEliminatingZero()
       ?.formattedNumber as string;
+    const isValidNumber = phoneInput?.current?.isValidNumber(num);
 
-    let isValidNumber = phoneInput?.current?.isValidNumber(num);
-    let regexEmail = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-    let isValidEmail = regexEmail.test(state.email_phone_number);
-
-    if (current === Tab[0] && !isValidNumber)
+    if (!isValidNumber)
       return showMessage({
         type: "warning",
         message: "Please enter a valid phone number",
       });
 
-    if (current === Tab[1] && !isValidEmail)
-      return showMessage({
-        type: "warning",
-        message: "Please enter a valid mail",
-      });
+    // Validate referral code exists if provided
+    const trimmedReferral = state.referral_code?.trim() ?? "";
+    if (trimmedReferral) {
+      try {
+        const { data } = await axios.get(VALIDATE_REFERRAL_CODE, {
+          params: { code: trimmedReferral },
+        });
+        if (!data?.valid) {
+          return showMessage({
+            type: "warning",
+            message: "Referral code not found. Please check and try again.",
+          });
+        }
+      } catch {
+        return showMessage({
+          type: "warning",
+          message: "Could not verify referral code. Please try again.",
+        });
+      }
+    }
 
     // Determine role based on registration type: "1" = passenger, "2" = driver
     const role = registration?.type === "2" ? "driver" : "passenger";
-    
-    let dta = {
-      email_phone_number:
-        current === Tab[0] ? num.replace(/\+/g, "") : state.email_phone_number,
+
+    const dta = {
+      email_phone_number: num.replace(/\+/g, ""),
       referral_code: state.referral_code,
-      role: role, // Include role in registration request
+      role,
     };
 
-    let item = {
-      title: current + " Verification",
-      text: `Enter your OTP code, sent to your ${
-        current === Tab[0] ? "device" : "mailbox"
-      }`,
-      type: current,
+    const item = {
+      title: "Phone Verification",
+      text: "Enter your OTP code, sent to your device",
+      type: "Phone",
       target: OTP_TARGET[0],
-      email_phone_number: dta?.email_phone_number,
+      email_phone_number: dta.email_phone_number,
     };
 
     setLoading(true);
@@ -110,6 +109,7 @@ const SignUp = () => {
           }
         }
 
+        dispatch(updateRegistration({ ...registration, email_phone_number: dta?.email_phone_number }));
         router.push({ pathname: `/otpcode`, params: item });
       })
       .catch((err) => {
@@ -123,6 +123,7 @@ const SignUp = () => {
               message: err.response.data.message,
             });
           }
+          dispatch(updateRegistration({ ...registration, email_phone_number: dta?.email_phone_number }));
           router.push({ pathname: `/otpcode`, params: item });
         } else if (err?.response?.data?.message) {
           showMessage({
@@ -151,9 +152,8 @@ const SignUp = () => {
 
   return (
     <AuthForm
-      current={current}
-      setCurrent={setCurrent}
-      Tab={Tab}
+      current=""
+      setCurrent={() => {}}
       footer={
         <Text
           style={tw.style(`text-[#5A5A5A] text-lg self-center mt-4`, {
@@ -173,8 +173,7 @@ const SignUp = () => {
         </Text>
       }
     >
-      {current === Tab[0] ? (
-        <PhoneInput
+      <PhoneInput
           ref={phoneInput}
           defaultCode="NG"
           layout="first"
@@ -195,17 +194,8 @@ const SignUp = () => {
           textContainerStyle={tw`bg-white`}
           renderDropdownImage={renderDropdownImage()}
           flagButtonStyle={tw`flex-row items-center pl-5`}
+          filterProps={{ placeholder: "Search country" }}
         />
-      ) : (
-        <FormInput
-          value={state.email_phone_number}
-          onChangeText={(text) =>
-            setState((prev) => ({ ...prev, email_phone_number: text }))
-          }
-          placeholder="Input mail"
-          type="email-address"
-        />
-      )}
 
       <View>
         <Text
@@ -222,6 +212,7 @@ const SignUp = () => {
             setState((prev) => ({ ...prev, referral_code }))
           }
           placeholder="Input code"
+          validate={validators.referralCode("Referral code must be 4–64 letters or numbers")}
         />
       </View>
 
@@ -235,24 +226,23 @@ const SignUp = () => {
             }
           )}
         >
-          By signing up. you agree to the
+          By signing up, you agree to the{" "}
           <Text
-            onPress={() => console.log("work")}
+            onPress={() => router.push("/(auth)/terms")}
             style={tw.style(`text-xs text-base-green`, {
               fontFamily: "RobotoMedium",
             })}
           >
-            {" "}
-            Terms of service{" "}
+            Terms of service
           </Text>
-          and
+          {" "}and{" "}
           <Text
+            onPress={() => router.push("/(auth)/terms")}
             style={tw.style(`text-xs text-base-green`, {
               fontFamily: "RobotoMedium",
             })}
           >
-            {" "}
-            Privacy policy.
+            Privacy policy
           </Text>
         </Text>
       </View>

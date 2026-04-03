@@ -1,74 +1,89 @@
 import Notification from '../models/Notification.js';
-import User from '../models/User.js';
+import UserNotification from '../models/UserNotification.js';
 import { NotFoundError, ValidationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
+import {
+  getUnreadCount,
+  getUserInbox,
+  markAllRead,
+  markRead,
+  previewTargeting,
+  registerFcmTokenForUser,
+  sendGlobal,
+  sendToRole,
+} from '../services/notificationService.js';
 
 /**
- * Get user notifications - GET /api/user/notifications
+ * Format notification response
+ */
+const formatNotificationResponse = (userNotification) => {
+  const notification = userNotification?.notification_id || {};
+  return {
+    id: userNotification?._id?.toString?.() || null,
+    notification_id: notification?._id?.toString?.() || userNotification?._id?.toString?.() || null,
+    type: notification?.event_key || notification?.type || 'general',
+    delivery_type: notification?.type || 'inbox',
+    priority: notification?.priority || 'normal',
+    title: notification?.title || '',
+    message: notification?.message || '',
+    screen: notification?.screen || 'home',
+    action_type: notification?.action_type || 'none',
+    action_payload: notification?.action_payload || null,
+    image_url: notification?.image_url || null,
+    duration_ms: notification?.duration_ms ?? 5000,
+    data: notification?.data || {},
+    related_ride_id:
+      notification?.ride_id?.toString?.() ||
+      notification?.relatedRide?._id?.toString?.() ||
+      notification?.relatedRide?.toString?.() ||
+      null,
+    related_payment_id:
+      notification?.relatedPayment?._id?.toString?.() ||
+      notification?.relatedPayment?.toString?.() ||
+      null,
+    is_read: Boolean(userNotification?.is_read),
+    is_dismissed: Boolean(userNotification?.is_dismissed),
+    read_at: userNotification?.opened_at || null,
+    delivered_at: userNotification?.delivered_at || null,
+    created_at: notification?.created_at || notification?.createdAt || userNotification?.createdAt || null,
+  };
+};
+
+/**
+ * Get user notifications - GET /api/notifications
  */
 export const getUserNotifications = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { page = 1, limit = 20, type, isRead } = req.query;
-  const skip = (page - 1) * limit;
-
-  const user = await User.findById(userId);
-  if (!user) {
-    throw new NotFoundError('User');
-  }
-
-  const filter = { user: userId };
-
-  if (type) {
-    filter.type = type;
-  }
-
-  if (isRead !== undefined) {
-    filter.isRead = isRead === 'true' || isRead === true;
-  }
-
-  const notifications = await Notification.find(filter)
-    .populate('relatedRide', 'status fare pickupLocation dropoffLocation')
-    .populate('relatedPayment', 'amount method status')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(parseInt(limit));
-
-  const total = await Notification.countDocuments(filter);
-  const unreadCount = await Notification.countDocuments({ user: userId, isRead: false });
+  const { page = 1, limit = 20 } = req.query;
+  const inbox = await getUserInbox(userId, page, limit);
 
   res.json({
     status: 'success',
     data: {
-      notifications: notifications.map((notification) => formatNotificationResponse(notification)),
-      unread_count: unreadCount,
+      notifications: inbox.notifications.map(formatNotificationResponse),
+      unread_count: inbox.unread_count,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit),
+        page: inbox.page,
+        limit: Number(limit) || 20,
+        total: inbox.total,
+        pages: inbox.pages,
       },
     },
   });
 });
 
 /**
- * Mark notification as read - PATCH /api/user/notifications/:id/read
+ * Mark notification as read - PATCH /api/notifications/:id/read
  */
 export const markNotificationAsRead = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const { id } = req.params;
 
-  const notification = await Notification.findById(id);
+  const notification = await markRead(id, userId);
   if (!notification) {
     throw new NotFoundError('Notification');
   }
-
-  if (notification.user.toString() !== userId.toString()) {
-    throw new ValidationError('You do not have permission to modify this notification');
-  }
-
-  await notification.markAsRead();
 
   logger.info(`Notification ${id} marked as read by user ${userId}`);
 
@@ -76,21 +91,17 @@ export const markNotificationAsRead = asyncHandler(async (req, res) => {
     status: 'success',
     message: 'Notification marked as read',
     data: {
-      notification: formatNotificationResponse(notification),
+      success: true,
     },
   });
 });
 
 /**
- * Mark all notifications as read - PATCH /api/user/notifications/read-all
+ * Mark all notifications as read - PATCH /api/notifications/read-all
  */
 export const markAllNotificationsAsRead = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-
-  const result = await Notification.updateMany(
-    { user: userId, isRead: false },
-    { isRead: true, readAt: new Date() }
-  );
+  const result = await markAllRead(userId);
 
   logger.info(`All notifications marked as read for user ${userId}`);
 
@@ -110,16 +121,16 @@ export const deleteNotification = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const { id } = req.params;
 
-  const notification = await Notification.findById(id);
+  const notification = await UserNotification.findOne({
+    _id: id,
+    user_id: userId,
+  });
   if (!notification) {
     throw new NotFoundError('Notification');
   }
 
-  if (notification.user.toString() !== userId.toString()) {
-    throw new ValidationError('You do not have permission to delete this notification');
-  }
-
-  await notification.deleteOne();
+  notification.is_dismissed = true;
+  await notification.save();
 
   logger.info(`Notification ${id} deleted by user ${userId}`);
 
@@ -130,22 +141,100 @@ export const deleteNotification = asyncHandler(async (req, res) => {
 });
 
 /**
- * Format notification response
+ * GET /api/notifications/unread-count
  */
-const formatNotificationResponse = (notification) => {
-  return {
-    notification_id: notification._id.toString(),
-    type: notification.type,
-    title: notification.title,
-    message: notification.message,
-    data: notification.data ? Object.fromEntries(notification.data) : {},
-    related_ride_id: notification.relatedRide?._id?.toString() || null,
-    related_payment_id: notification.relatedPayment?._id?.toString() || null,
-    is_read: notification.isRead,
-    read_at: notification.readAt,
-    created_at: notification.createdAt,
-    push_sent: notification.isPushSent,
-    email_sent: notification.isEmailSent,
-    sms_sent: notification.isSmsSent,
+export const getUnreadNotificationCount = asyncHandler(async (req, res) => {
+  const count = await getUnreadCount(req.user._id);
+  res.json({
+    status: 'success',
+    data: {
+      count,
+    },
+  });
+});
+
+/**
+ * POST /api/notifications/fcm-token
+ */
+export const saveFcmToken = asyncHandler(async (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  if (!token) {
+    throw new ValidationError('Token is required');
+  }
+
+  await registerFcmTokenForUser(req.user._id, token);
+  res.json({
+    status: 'success',
+    data: {
+      success: true,
+    },
+  });
+});
+
+/**
+ * POST /api/admin/notifications/broadcast
+ */
+export const broadcastNotification = asyncHandler(async (req, res) => {
+  const {
+    title,
+    message,
+    type = 'inbox',
+    priority = 'normal',
+    target_role = 'all',
+    targeting_rules = {},
+    screen = 'home',
+    action_type = 'none',
+    action_payload = null,
+  } = req.body || {};
+
+  if (!title || !message) {
+    throw new ValidationError('Title and message are required');
+  }
+
+  const payload = {
+    title,
+    message,
+    type,
+    priority,
+    target_role,
+    targeting_rules,
+    screen,
+    action_type,
+    action_payload,
+    is_global: target_role === 'all',
+    event_key: 'broadcast',
   };
-};
+
+  const result = target_role === 'all'
+    ? await sendGlobal(payload)
+    : await sendToRole(target_role, payload);
+
+  res.json({
+    status: 'success',
+    data: result,
+  });
+});
+
+/**
+ * POST /api/admin/notifications/targeting-preview
+ */
+export const targetingPreview = asyncHandler(async (req, res) => {
+  const { target_role = 'all', targeting_rules = {} } = req.body || {};
+
+  if (target_role === 'all') {
+    const riderResult = await previewTargeting('rider', targeting_rules);
+    const driverResult = await previewTargeting('driver', targeting_rules);
+    return res.json({
+      status: 'success',
+      data: {
+        matching_users: (riderResult.matching_users || 0) + (driverResult.matching_users || 0),
+      },
+    });
+  }
+
+  const result = await previewTargeting(target_role, targeting_rules);
+  return res.json({
+    status: 'success',
+    data: result,
+  });
+});

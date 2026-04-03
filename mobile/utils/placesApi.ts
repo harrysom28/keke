@@ -14,6 +14,15 @@ export interface PlacePrediction {
     main_text: string;
     secondary_text: string;
   };
+  /** From Uber-level search: distance in km */
+  distanceKm?: number;
+  /** e.g. "2.4 km away" for UX */
+  distanceAwayLabel?: string;
+  /** When present, skip getPlaceDetails and use these */
+  lat?: number;
+  long?: number;
+  name?: string;
+  formatted_address?: string;
 }
 
 export interface PlaceDetails {
@@ -91,6 +100,47 @@ class RequestQueue {
 }
 
 const requestQueue = new RequestQueue();
+
+/**
+ * Uber-level place search: backend re-ranks by distance. Use when user location is available.
+ * Optional sessionToken for cost-efficient billing (one session per search → one details on select).
+ */
+export const searchPlacesWithLocation = async (
+  input: string,
+  lat: number,
+  lng: number,
+  sessionToken?: string
+): Promise<PlacePrediction[]> => {
+  try {
+    const cacheKey = `places_search_${input}_${lat.toFixed(2)}_${lng.toFixed(2)}`;
+    const cached = placesCache.get<PlacePrediction[]>(cacheKey);
+    if (cached) {
+      if (__DEV__) console.log('💾 Using cached place search for:', input);
+      return cached;
+    }
+
+    const params: Record<string, string | number> = { q: input, lat, lng };
+    if (sessionToken) params.sessionToken = sessionToken;
+
+    const response = await requestQueue.add(() =>
+      apiClient.get('maps/places/search', { params })
+    );
+    const parsed = parseJsonMaybe(response.data);
+    const data = parsed && typeof parsed.data === 'string' ? { ...parsed, data: parseJsonMaybe(parsed.data) } : parsed;
+    const isSuccess = data?.status === true || data?.status === 'success' || data?.status === 'OK';
+
+    if (isSuccess && data?.data?.predictions) {
+      const predictions = data.data.predictions as PlacePrediction[];
+      placesCache.set(cacheKey, predictions, 90000); // 90s
+      return predictions;
+    }
+    return [];
+  } catch (error: any) {
+    if (error?.response?.status === 429) throw error;
+    console.error('❌ Place search error:', error?.response?.data || error?.message);
+    throw error;
+  }
+};
 
 export const searchPlaces = async (
   input: string,
@@ -194,8 +244,12 @@ export const searchPlaces = async (
 /**
  * Get place details by place_id using backend proxy
  * @param placeId - Google Places place_id
+ * @param sessionToken - Optional; same token as autocomplete session for billing
  */
-export const getPlaceDetails = async (placeId: string): Promise<PlaceDetails | null> => {
+export const getPlaceDetails = async (
+  placeId: string,
+  sessionToken?: string
+): Promise<PlaceDetails | null> => {
   try {
     // Check cache
     const cacheKey = `place_details_${placeId}`;
@@ -211,11 +265,11 @@ export const getPlaceDetails = async (placeId: string): Promise<PlaceDetails | n
       console.log('🔍 Fetching place details for:', placeId);
     }
 
-    // Use queue to prevent rate limiting
+    const params: Record<string, string> = { place_id: placeId };
+    if (sessionToken) params.sessionToken = sessionToken;
+
     const response = await requestQueue.add(() =>
-      apiClient.get('maps/places/details', {
-        params: { place_id: placeId },
-      })
+      apiClient.get('maps/places/details', { params })
     );
 
     const rawData = response.data;

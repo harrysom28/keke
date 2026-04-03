@@ -1,7 +1,6 @@
 import {
   ActivityIndicator,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -10,22 +9,14 @@ import Svg, { Path } from "react-native-svg";
 
 import { AntDesign } from "@expo/vector-icons";
 import AuthForm from "@/components/AuthForm";
-import FormInput from "@/components/formInput";
 import GoogleAuthButton from "@/components/googleAuth";
-import { LOGIN } from "@constants/index";
 import PhoneInput from "@perttu/react-native-phone-number-input";
-import axios from "axios";
-import { getUniqueId } from "react-native-device-info";
-import { requestUserNotificationPermission } from "@/utils/notifications";
+import apiClient from "@/utils/apiClient";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
-import { updateRefreshToken, updateToken } from "@/store/AuthSlice";
-import { useDispatch } from "react-redux";
 import { useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { verticalScale } from "@/constants/Metrics";
-
-const Tab = ["Phone No", "Email"];
 
 const renderDropdownImage = () => {
   return (
@@ -40,110 +31,49 @@ const renderDropdownImage = () => {
 
 const Login = () => {
   const router = useRouter();
-  const dispatch = useDispatch();
   const phoneInput = useRef<PhoneInput>(null);
   const isFocused = useIsFocused();
-  const [isForgotPassword, setIsForgotPassword] = useState(false);
-  const [current, setCurrent] = useState(Tab[0]);
   const [loading, setLoading] = useState(false);
-  const [state, setState] = useState({
-    email_phone_number: "",
-    password: "",
-  });
 
   useEffect(() => {
-    setState({
-      email_phone_number: "",
-      password: "",
-    });
-  }, [current]);
-
-  useEffect(() => {
-    if (isFocused) {
-      return () => {
-        setState({
-          email_phone_number: "",
-          password: "",
-        });
-        setIsForgotPassword(false);
-      };
-    }
+    if (isFocused) return () => {};
   }, [isFocused]);
 
   const handleSubmit = async () => {
-    // console.log(state);
-    if (isForgotPassword && state.email_phone_number.length) {
-      return router.push({
-        pathname: "/forgotpassword",
-        params: {
-          value: state.email_phone_number,
-          type: current === Tab[0] ? "Phone" : "Email",
-          text: `Enter your OTP code, sent to your ${
-            current === Tab[0] ? "device" : "mailbox"
-          }`,
-        },
-      });
-    }
-
-    if (state.password.length === 0) return;
-
-    let num = phoneInput?.current?.getNumberAfterPossiblyEliminatingZero()
+    const num = phoneInput?.current?.getNumberAfterPossiblyEliminatingZero()
       ?.formattedNumber as string;
+    const isValidNumber = phoneInput?.current?.isValidNumber(num);
 
-    let isValidNumber = phoneInput?.current?.isValidNumber(num);
-    let regexEmail = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-    let isValidEmail = regexEmail.test(state.email_phone_number);
-
-    if (current === Tab[0] && !isValidNumber)
+    if (!isValidNumber)
       return showMessage({
         type: "warning",
         message: "Please enter a valid phone number",
       });
 
-    if (current === Tab[1] && !isValidEmail)
-      return showMessage({
-        type: "warning",
-        message: "Please enter a valid mail",
-      });
-    const device_id = await getUniqueId();
-    const device_token = await requestUserNotificationPermission();
-    let dta = {
-      email_phone_number:
-        current === Tab[0] ? num.replace(/\+/g, "") : state.email_phone_number,
-      password: state.password,
-      device_id,
-      device_token,
-    };
-    console.log(dta);
-    
+    const emailPhone = num.replace(/\+/g, "");
+
     setLoading(true);
-    axios
-      .post(LOGIN, dta)
+    apiClient
+      .post("auth/user/request-login-otp", { email_phone_number: emailPhone })
       .then(({ data }) => {
-        // console.log(data);
-        dispatch(updateToken(data?.authorisation?.token));
-        dispatch(updateRefreshToken(data?.authorisation?.refresh_token || null));
-        // dispatch(updateUser({ type: "1" }));
-        router.navigate("/");
+        showMessage({ type: "success", message: data.message });
+        router.push({
+          pathname: "/otpcode",
+          params: {
+            email_phone_number: emailPhone,
+            target: "LOGIN",
+            title: "Enter code",
+            text: "We sent a login code to your device",
+          },
+        });
       })
       .catch((err) => {
-        console.log("Login error:", err?.response?.data || err.message, err?.response?.status || "Network Error");
-
         if (err?.response?.data?.message) {
-          showMessage({
-            type: "danger",
-            message: err.response.data.message,
-          });
+          showMessage({ type: "danger", message: err.response.data.message });
         } else if (err?.response?.status) {
-          showMessage({
-            type: "danger",
-            message: `Server error: ${err.response.status}`,
-          });
+          showMessage({ type: "danger", message: `Server error: ${err.response.status}` });
         } else {
-          showMessage({
-            type: "danger",
-            message: "Network error: Unable to reach server. Please check your connection.",
-          });
+          showMessage({ type: "danger", message: "Network error: Unable to reach server." });
         }
       })
       .finally(() => setLoading(false));
@@ -151,9 +81,8 @@ const Login = () => {
 
   return (
     <AuthForm
-      current={current}
-      setCurrent={setCurrent}
-      Tab={Tab}
+      current=""
+      setCurrent={() => {}}
       footer={
         <Text
           style={tw.style(`text-[#5A5A5A] text-lg self-center mt-4`, {
@@ -172,16 +101,7 @@ const Login = () => {
         </Text>
       }
     >
-      {current === Tab[0] ? (
-        // <FormInput
-        //   value={state.email_phone_number}
-        //   onChangeText={(text) =>
-        //     setState((prev) => ({ ...prev, email_phone_number: text }))
-        //   }
-        //   placeholder={"234XXXXXXXXXXX"}
-        //   type={"numeric"}
-        // />
-        <PhoneInput
+      <PhoneInput
           ref={phoneInput}
           defaultCode="NG"
           layout="first"
@@ -202,56 +122,26 @@ const Login = () => {
           textContainerStyle={tw`bg-white`}
           renderDropdownImage={renderDropdownImage()}
           flagButtonStyle={tw`flex-row items-center pl-5`}
+          filterProps={{ placeholder: "Search country" }}
         />
-      ) : (
-        <TextInput
-          style={tw.style(
-            `w-full text-sm border border-[#b8b8b8] py-1.5 px-3.5 rounded-[8px]`,
-            {
-              height: verticalScale(40),
-              fontFamily: "RobotoMedium",
-            }
-          )}
-          value={state.email_phone_number}
-          onChangeText={(text) =>
-            setState((prev) => ({ ...prev, email_phone_number: text }))
-          }
-          placeholder="Input mail"
-          placeholderTextColor="#D0D0D0"
-          keyboardType="email-address"
-        />
-      )}
 
-      {!isForgotPassword && (
-        <FormInput
-          value={state.password}
-          onChangeText={(text) =>
-            setState((prev) => ({ ...prev, password: text }))
-          }
-          placeholder="Enter Your Password"
-          secureTextEntry
-        />
-      )}
-
-      <TouchableOpacity onPress={() => setIsForgotPassword((prev) => !prev)}>
+      <TouchableOpacity
+        onPress={() => router.push("/(auth)/account-recovery")}
+        style={tw`mb-1`}
+      >
         <Text
-          style={tw.style(
-            `text-sm`,
-            isForgotPassword ? `text-gray-400` : ` text-[#F44336]`,
-            {
-              fontFamily: "RobotoMedium",
-            }
-          )}
+          style={tw.style(`text-sm text-base-green`, {
+            fontFamily: "RobotoMedium",
+          })}
         >
-          {isForgotPassword ? "Back to Login" : "Forget password?"}
+          Can't access your phone? Recover with email
         </Text>
       </TouchableOpacity>
 
       <TouchableOpacity
         onPress={handleSubmit}
         style={tw.style(
-          `flex-row justify-center items-center bg-base-green rounded-[8px]`,
-          isForgotPassword ? `mt-20 mb-6` : ` mt-5 `,
+          `flex-row justify-center items-center bg-base-green rounded-[8px] mt-5`,
           { height: verticalScale(45) }
         )}
       >
@@ -263,12 +153,12 @@ const Login = () => {
               fontFamily: "RobotoBold",
             })}
           >
-            {isForgotPassword ? "Proceed" : "Sign In"}
+            Sign In
           </Text>
         )}
       </TouchableOpacity>
 
-      <View style={{ display: isForgotPassword ? "none" : "flex" }}>
+      <View>
         <View
           style={tw.style(
             "flex-row items-center justify-between gap-x-1.5 mb-3"
@@ -288,7 +178,6 @@ const Login = () => {
         <View style={tw`flex-row justify-center items-center gap-x-4`}>
           <GoogleAuthButton />
           <TouchableOpacity
-            disabled={isForgotPassword}
             style={tw`h-[48px] w-[48px] flex-row justify-center items-center border border-[#D0D0D0] rounded-[8px]`}
           >
             <Svg width="25" height="24" viewBox="0 0 25 24" fill="none">

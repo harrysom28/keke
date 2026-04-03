@@ -133,7 +133,7 @@ export function useLocationUpdate(options: UseLocationUpdateOptions = {}) {
         await requestManager.execute(
           'location-update',
           () =>
-            apiClient.patch('/update/locations/drivers-passengers', {
+            apiClient.patch('update/locations/drivers-passengers', {
               latitude: location.lat,
               longitude: location.lng,
               address: location.address || `Location (${location.lat.toFixed(5)}, ${location.lng.toFixed(5)})`,

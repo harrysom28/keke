@@ -15,11 +15,11 @@ const paymentSchema = new mongoose.Schema(
     amount: {
       type: Number,
       required: [true, 'Amount is required'],
-      min: 0,
+      // No min: withdrawals use negative amount
     },
     currency: {
       type: String,
-      default: 'USD',
+      default: 'NGN',
       uppercase: true,
     },
     method: {
@@ -29,8 +29,25 @@ const paymentSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'processing', 'completed', 'failed', 'refunded', 'cancelled'],
+      enum: ['initialized', 'pending', 'processing', 'completed', 'failed', 'refunded', 'cancelled'],
       default: 'pending',
+    },
+    /** wallet_topup | ride_payment - for Paystack flow and filtering */
+    paymentType: {
+      type: String,
+      enum: ['wallet_topup', 'ride_payment'],
+      default: 'ride_payment',
+    },
+    /** Paystack reference (set when initializing checkout; used for idempotency) */
+    reference: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+    /** Paystack access_code (returned from initialize, used by frontend) */
+    access_code: {
+      type: String,
+      default: null,
     },
     // Stripe payment details
     stripePaymentIntentId: {
@@ -98,6 +115,9 @@ paymentSchema.index({ status: 1 });
 paymentSchema.index({ transactionId: 1 });
 paymentSchema.index({ stripePaymentIntentId: 1 });
 paymentSchema.index({ createdAt: -1 });
+paymentSchema.index({ user: 1, 'metadata.type': 1, createdAt: -1 });
+paymentSchema.index({ reference: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ paymentType: 1, status: 1 });
 
 // Virtual for payment ID
 paymentSchema.virtual('payment_id').get(function () {
@@ -122,12 +142,14 @@ paymentSchema.methods.markFailed = async function (reason = null, code = null) {
   await this.save();
 };
 
-// Method to process refund
+// Method to process refund (amount is incremental; refundAmount is cumulative)
 paymentSchema.methods.processRefund = async function (amount, reason = null, refundId = null) {
-  this.status = 'refunded';
-  this.refundAmount = amount;
+  this.refundAmount = (this.refundAmount || 0) + amount;
   this.refundReason = reason;
   this.refundedAt = new Date();
+  if (this.refundAmount >= this.amount) {
+    this.status = 'refunded';
+  }
   if (refundId) {
     this.refundId = refundId;
   }

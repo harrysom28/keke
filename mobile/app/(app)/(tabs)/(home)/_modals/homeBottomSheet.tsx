@@ -1,18 +1,21 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { memo, useCallback, useContext, useEffect, useState } from 'react';
 import {
+  FlatList,
+  InteractionManager,
   View,
   Text,
-  TouchableOpacity,
   ScrollView,
   Image,
 } from 'react-native';
+import { TouchableOpacity } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
-import { useDispatch } from 'react-redux';
-import axios from 'axios';
+import { useDispatch, useSelector } from 'react-redux';
 import tw from '@/lib/tailwind';
 import { AppContext } from '@/app/context';
 import { setRideData, setAppData } from '@/store/AppSlice';
-import { GET_RECENT_PLACES } from '@/constants';
+import { useIsFocused } from '@react-navigation/native';
+import { AuthState } from '@/store/AuthSlice';
+import { fetchRecentPlacesCached, subscribeRecentPlaces } from '@/utils/recentPlacesCache';
 
 interface HomeBottomSheetProps {
   onSearchPress?: () => void;
@@ -20,37 +23,41 @@ interface HomeBottomSheetProps {
   onBookRidePress?: () => void;
 }
 
-export default function HomeBottomSheet({ 
+function HomeBottomSheet({ 
   onSearchPress,
   onFindRidePress,
   onBookRidePress,
 }: HomeBottomSheetProps) {
   const { apiConfig } = useContext(AppContext);
+  const isFocused = useIsFocused();
   const dispatch = useDispatch();
+  const { user } = useSelector(AuthState);
   const [recentPlaces, setRecentPlaces] = useState<any[]>([]);
   const [showPromo, setShowPromo] = useState(true);
 
   useEffect(() => {
-    if (apiConfig) {
-      fetchRecentPlaces();
-    }
-  }, [apiConfig]);
+    if (!isFocused) return;
 
-  const fetchRecentPlaces = () => {
-    if (!apiConfig) return;
-    axios
-      .get(GET_RECENT_PLACES, apiConfig)
-      .then(({ data }) => {
-        if (data?.data?.recent_places) {
-          setRecentPlaces(data.data.recent_places.slice(0, 3)); // Show only 3 most recent
-        }
-      })
-      .catch((err) => {
-        console.log('Error fetching recent places:', err?.response?.data);
-      });
-  };
+    const userId = String(user?.profile?.user_id ?? user?.profile?._id ?? '');
+    if (!userId) return;
 
-  const handleLocationSelect = (place: any) => {
+    const unsub = subscribeRecentPlaces((fresh) => {
+      setRecentPlaces(fresh.slice(0, 3));
+    });
+
+    const interactionTask = InteractionManager.runAfterInteractions(() => {
+      fetchRecentPlacesCached(userId)
+        .then((list) => setRecentPlaces(list.slice(0, 3)))
+        .catch(() => {});
+    });
+
+    return () => {
+      interactionTask.cancel();
+      unsub();
+    };
+  }, [isFocused, user?.profile?.user_id, user?.profile?._id]);
+
+  const handleLocationSelect = useCallback((place: any) => {
     const locationData = {
       place_id: place.place_id || null,
       name: place.name || '',
@@ -69,13 +76,13 @@ export default function HomeBottomSheet({
       dispatch(setAppData({ isBooking: true }));
       // Stay on current screen; search happens inline on Home
     }
-  };
+  }, [dispatch, onFindRidePress]);
 
-  const handleSearchPress = () => {
+  const handleSearchPress = useCallback(() => {
     if (onSearchPress) {
       onSearchPress();
     }
-  };
+  }, [onSearchPress]);
 
 
   return (
@@ -178,15 +185,22 @@ export default function HomeBottomSheet({
           {/* Suggested/Recent Locations */}
           {recentPlaces.length > 0 && (
             <View style={tw`px-4`}>
-              {recentPlaces.map((place, index) => (
-                <TouchableOpacity
-                  key={place.place_id || `place-${index}`}
-                  onPress={() => handleLocationSelect(place)}
-                  style={tw.style(
-                    `flex-row items-center py-3`,
-                    index < recentPlaces.length - 1 && 'border-b border-gray-100'
-                  )}
-                >
+              <FlatList
+                data={recentPlaces}
+                scrollEnabled={false}
+                keyExtractor={(place: any, index: number) => place.place_id || `place-${index}`}
+                removeClippedSubviews={true}
+                maxToRenderPerBatch={4}
+                windowSize={3}
+                initialNumToRender={3}
+                renderItem={({ item: place, index }) => (
+                  <TouchableOpacity
+                    onPress={() => handleLocationSelect(place)}
+                    style={tw.style(
+                      `flex-row items-center py-3`,
+                      index < recentPlaces.length - 1 && 'border-b border-gray-100'
+                    )}
+                  >
                   <View style={tw`mr-3`}>
                     {place.name?.toLowerCase().includes('campus') ||
                     place.name?.toLowerCase().includes('university') ? (
@@ -227,8 +241,9 @@ export default function HomeBottomSheet({
                       {place.address || place.formatted_address || 'No address'}
                     </Text>
                   </View>
-                </TouchableOpacity>
-              ))}
+                  </TouchableOpacity>
+                )}
+              />
             </View>
           )}
 
@@ -291,3 +306,5 @@ export default function HomeBottomSheet({
     </>
   );
 }
+
+export default memo(HomeBottomSheet);

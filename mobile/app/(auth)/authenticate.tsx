@@ -1,150 +1,108 @@
 import { ActivityIndicator, Text, TouchableOpacity } from "react-native";
-import { AuthState, updateRefreshToken, updateToken } from "@/store/AuthSlice";
-import { Country, State } from "country-state-city";
+import { AuthState, updateRefreshToken, updateToken, updateUser } from "@/store/AuthSlice";
 import React, { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
 import AuthForm from "@/components/AuthForm";
-import { COMPLETE_SIGNUP } from "@/constants";
-import { Dropdown } from "react-native-element-dropdown";
+import { COMPLETE_SIGNUP, ONBOARDING_RIDER_COMPLETE } from "@/constants";
+import { getApiUrlWithOverride, IS_PHYSICAL_DEVICE } from "@/utils/apiUrlOverride";
 import FormInput from "@/components/formInput";
+import { validators } from "@/utils/formValidators";
 import axios from "axios";
+import apiClient from "@/utils/apiClient";
 import { getUniqueId } from "react-native-device-info";
 import { requestUserNotificationPermission } from "@/utils/notifications";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { verticalScale } from "@/constants/Metrics";
 
-const Tab = ["Authenticate"];
-
-interface SProps {
-  placeholder: string;
-  data: Array<{ label: string; value: string }>;
-  onChange: (val: string) => void;
-  value: string;
-}
-
-const SelectItem = ({
-  placeholder,
-  data = [],
-  onChange,
-  value = "",
-}: SProps) => {
-  return (
-    <Dropdown
-      style={tw.style(
-        `text-[16px] text-black px-5 h-[45px] border border-[#B8B8B8] rounded-[8px]`,
-        {
-          fontFamily: "RobotoMedium",
-        }
-      )}
-      mode="modal"
-      data={data}
-      value={value}
-      placeholder={placeholder}
-      search={false}
-      maxHeight={300}
-      labelField={"label"}
-      valueField={"value"}
-      itemTextStyle={tw.style(`text-black text-sm`, {
-        fontFamily: "RobotoMedium",
-      })}
-      selectedTextStyle={tw.style(`text-black text-sm`, {
-        fontFamily: "RobotoMedium",
-      })}
-      placeholderStyle={tw.style(`text-[#D0D0D0] text-[16px]`, {
-        fontFamily: "RobotoMedium",
-      })}
-      containerStyle={tw.style(`text-black text-xs shadow-none border mt-1`)}
-      onChange={(item) => {
-        console.log(item?.value);
-        onChange(item?.value);
-      }}
-    />
-  );
-};
+const Tab = ["Complete Profile"];
 
 const Authenticate = () => {
   const dispatch = useDispatch();
   const { registration } = useSelector(AuthState);
   const router = useRouter();
-  const { otp, email_phone_number } = useLocalSearchParams();
+  const params = useLocalSearchParams<{ otp?: string; email_phone_number?: string; fromLogin?: string }>();
+  const otp = params?.otp;
+  const fromLogin = params?.fromLogin === "1";
+  const email_phone_number = params?.email_phone_number ?? registration?.email_phone_number ?? undefined;
 
   const [current, setCurrent] = useState(Tab[0]);
   const [loading, setLoading] = useState(false);
   const [state, setState] = useState({
     name: "",
-    country: "Nigeria",
-    state: "",
-    password: "",
-    password_confirmation: "",
+    email: "",
   });
 
-  const CountryIndex = Country.getAllCountries().find(
-    (i) => i.name === state.country
-  );
-  const States =
-    CountryIndex === undefined
-      ? [{ name: "Please Select a Country" }]
-      : State.getStatesOfCountry(CountryIndex?.isoCode);
-
   const handleSubmit = async () => {
-    let fullnameRegex = /^([A-Za-z'-]+)\s+([A-Za-z'-]+)$/;
-    let fullname = state?.name?.trim();
+    const fullnameRegex = /^([A-Za-z'-]+)\s+([A-Za-z'-]+)$/;
+    const fullname = state?.name?.trim();
     if (!fullnameRegex.test(fullname)) {
       return showMessage({
         type: "warning",
-        message:
-          "Invalid!\nInput Firstname and Lastname seperated with a space",
+        message: "Invalid!\nInput Firstname and Lastname separated with a space",
       });
     }
 
-    if (state.password !== state.password_confirmation)
-      return showMessage({
-        type: "warning",
-        message: "Passwords do not match",
-      });
-    if (state.country === "")
-      return showMessage({
-        type: "warning",
-        message: "Select a country",
-      });
+    if (state.email?.trim() && !/^\S+@\S+\.\S+$/.test(state.email.trim())) {
+      return showMessage({ type: "warning", message: "Invalid email format" });
+    }
 
-    if (state.state === "")
-      return showMessage({
-        type: "warning",
-        message: "Select a state",
-      });
+    if (!fromLogin) {
+      if (!email_phone_number?.trim()) {
+        return showMessage({ type: "warning", message: "Session missing email/phone." });
+      }
+      if (!otp?.trim()) {
+        return showMessage({ type: "warning", message: "Session missing OTP." });
+      }
+    }
 
     setLoading(true);
 
+    if (fromLogin) {
+      apiClient
+        .post(ONBOARDING_RIDER_COMPLETE, {
+          full_name: state.name,
+          ...(state.email?.trim() && { email: state.email.trim() }),
+        })
+        .then(({ data }) => {
+          showMessage({ type: "success", message: data.message });
+          if (data?.data?.user) {
+            dispatch(updateUser({ profile: data.data.user }));
+          }
+          router.replace("/");
+        })
+        .catch((err) => {
+          const msg = err?.response?.data?.message || "Failed to complete profile";
+          showMessage({ type: "danger", message: msg });
+        })
+        .finally(() => setLoading(false));
+      return;
+    }
+
     const device_id = await getUniqueId();
     const device_token = await requestUserNotificationPermission();
+    const payload: Record<string, unknown> = {
+      otp: String(otp).trim(),
+      email_phone_number: String(email_phone_number).trim(),
+      name: state.name,
+      device_id,
+      device_token,
+    };
+    if (state.email?.trim()) {
+      payload.email = state.email.trim();
+    }
+
     axios
-      .post(COMPLETE_SIGNUP, {
-        otp,
-        // Prefer route param (passed from otpcode), fallback to redux if later expanded.
-        email_phone_number,
-        ...state,
-        device_id,
-        device_token,
-      })
+      .post(COMPLETE_SIGNUP, payload)
       .then(({ data }) => {
-        console.log(data);
-        showMessage({
-          type: "success",
-          message: data.message,
-        });
+        showMessage({ type: "success", message: data.message });
         dispatch(updateToken(data?.authorisation?.token));
         dispatch(updateRefreshToken(data?.authorisation?.refresh_token || null));
-        
-        // Update user in Redux with the response data
         if (data?.data?.user) {
           dispatch(updateUser({ profile: data.data.user }));
         }
-        
-        // Pass name via route params for driver registration
         if (registration?.type === "2") {
           router.navigate({
             pathname: "/driverinfo",
@@ -155,12 +113,11 @@ const Authenticate = () => {
         }
       })
       .catch((err) => {
-        console.log("Complete signup error:", err?.response?.data || err.message, err?.response?.status || "Network Error");
-        
-        // Handle Laravel validation errors (422)
+        if (__DEV__) {
+          console.warn("Complete signup error:", err?.response?.data || err.message);
+        }
         if (err?.response?.status === 422 && err?.response?.data?.errors) {
           const errors = err.response.data.errors;
-          // Get first error message from validation errors
           const firstError = Object.values(errors)[0];
           const errorMessage = Array.isArray(firstError) ? firstError[0] : firstError;
           showMessage({
@@ -168,34 +125,30 @@ const Authenticate = () => {
             message: errorMessage || "Validation error. Please check your input.",
           });
         } else if (err?.response?.data?.message) {
-          // Ensure message is a string
-          const errorMessage = typeof err.response.data.message === 'string' 
-            ? err.response.data.message 
-            : String(err.response.data.message || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
+          const msg =
+            typeof err.response.data.message === "string"
+              ? err.response.data.message
+              : String(err.response.data.message || "An error occurred");
+          showMessage({ type: "danger", message: msg });
         } else if (err?.response?.data?.error) {
-          // Handle error object - extract message string
           const errorData = err.response.data.error;
-          const errorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
+          const msg =
+            typeof errorData === "string"
+              ? errorData
+              : errorData?.message || errorData?.name || "An error occurred";
+          showMessage({ type: "danger", message: msg });
         } else if (err?.response?.status) {
           showMessage({
             type: "danger",
             message: `Server error: ${err.response.status}`,
           });
         } else {
-          showMessage({
-            type: "danger",
-            message: "Network error: Unable to reach server. Please check your connection.",
-          });
+          const apiBase = getApiUrlWithOverride();
+          const networkMessage = IS_PHYSICAL_DEVICE
+            ? "Cannot reach server. Set your computer's IP in mobile/utils/apiUrlOverride.ts, then reload."
+            : "Network error: Check that the backend is running (npm run dev in backend/).";
+          showMessage({ type: "danger", message: networkMessage });
+          if (__DEV__) console.warn("API base:", apiBase);
         }
       })
       .finally(() => setLoading(false));
@@ -206,50 +159,19 @@ const Authenticate = () => {
       <FormInput
         value={state.name}
         onChangeText={(name) => setState((prev) => ({ ...prev, name }))}
-        placeholder="Fullname"
+        placeholder="Full name"
+        validate={validators.fullnameRequired()}
       />
       <FormInput
-        value={state.password}
-        onChangeText={(password) => setState((prev) => ({ ...prev, password }))}
-        placeholder="Enter Your Password"
-        secureTextEntry
+        value={state.email}
+        onChangeText={(email) => setState((prev) => ({ ...prev, email }))}
+        placeholder="Email (optional)"
+        type="email-address"
+        validate={(v) => (v && !/^\S+@\S+\.\S+$/.test(v) ? "Invalid email" : undefined)}
       />
-      <FormInput
-        value={state.password_confirmation}
-        onChangeText={(password_confirmation) =>
-          setState((prev) => ({ ...prev, password_confirmation }))
-        }
-        placeholder="Confirm Your Password"
-        secureTextEntry
-      />
-
-      <SelectItem
-        placeholder="Country"
-        value={state.country}
-        onChange={(country) => setState((prev) => ({ ...prev, country }))}
-        data={Country.getAllCountries().map(({ name }) => ({
-          label: name,
-          value: name,
-        }))}
-      />
-
-      <SelectItem
-        placeholder="State"
-        value={state.state}
-        onChange={(state) => setState((prev) => ({ ...prev, state }))}
-        data={States.map(({ name }) => ({
-          label: name,
-          value: name,
-        }))}
-      />
-
       <TouchableOpacity
         onPress={handleSubmit}
-        disabled={
-          state.name === "" ||
-          state.password === "" ||
-          state.password_confirmation === ""
-        }
+        disabled={!state.name.trim()}
         style={tw.style(
           `flex-row justify-center items-center bg-base-green rounded-[8px] mt-12`,
           { height: verticalScale(40) }
@@ -263,7 +185,7 @@ const Authenticate = () => {
               fontFamily: "RobotoBold",
             })}
           >
-            Update
+            {fromLogin ? "Update" : "Complete"}
           </Text>
         )}
       </TouchableOpacity>

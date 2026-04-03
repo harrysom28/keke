@@ -1,9 +1,11 @@
 import {
   ActivityIndicator,
+  Dimensions,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
   Pressable,
+  ScrollView,
   StatusBar,
   Text,
   TextInput,
@@ -39,6 +41,9 @@ const TextModal = ({
   editable = false,
   onChange,
 }: LProps) => {
+  const screenHeight = Dimensions.get("window").height;
+  const modalMaxHeight = Math.min(screenHeight * 0.7, screenHeight - 140);
+
   return (
     <Modal
       style={tw`flex-1`}
@@ -49,7 +54,11 @@ const TextModal = ({
       <StatusBar backgroundColor="#1919194D" />
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <View style={tw`flex-1 flex-col justify-end bg-[#1919194D]`}>
-          <View style={tw`bg-white px-6 py-11 h-[55%] rounded-t-[40px]`}>
+          <View
+            style={tw.style(`bg-white px-6 py-11 rounded-t-[40px]`, {
+              maxHeight: modalMaxHeight,
+            })}
+          >
             <View
               style={tw.style(
                 `flex-row items-center bg-[#F6F6F6] w-[99%] py-3 px-4 mb-6 rounded-t-[16px]`,
@@ -174,92 +183,103 @@ const ReviewSheet = ({ temp, action }: Props) => {
         onChange={(text) => setTip(text)}
       />
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View>
-          <AirbnbRating
-            count={5}
-            showRating={false}
-            defaultRating={rating}
-            size={24}
-            selectedColor="#3C8F7C"
-            starContainerStyle={tw`flex-row items-center gap-x-4 mt-3 mb-5`}
-            onFinishRating={setRating}
-          />
-          <Text
-            style={tw.style(`text-center text-xl text-[#2A2A2A]`, {
-              fontFamily: "RobotoBold",
-            })}
+        <View style={tw`flex-1`}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={tw`pb-6`}
           >
-            {Ratings[rating - 1]}
-          </Text>
-          <Text
-            style={tw.style(`text-center text-xl text-[#B8B8B8]`, {
-              fontFamily: "RobotoMedium",
-            })}
-          >
-            You rated {temp?.driver?.driver_name} {rating} star(s)
-          </Text>
-          <KeyboardAvoidingView behavior="height">
-            <TextInput
-              value={review}
-              onChangeText={(text) => setReview(text)}
-              style={tw.style(
-                `h-[118px] text-base my-5 p-3 text-black border border-[#B8B8B8] rounded-[8px]`,
-                {
-                  fontFamily: "RobotoRegular",
-                  verticalAlign: "top",
-                }
-              )}
-              placeholder="Write your text"
-              placeholderTextColor="#D0D0D0"
-              multiline
+            <AirbnbRating
+              count={5}
+              showRating={false}
+              defaultRating={rating}
+              size={24}
+              selectedColor="#3C8F7C"
+              starContainerStyle={tw`flex-row items-center gap-x-4 mt-3 mb-5`}
+              onFinishRating={setRating}
             />
-          </KeyboardAvoidingView>
-          <Text
-            style={tw.style(`text-center text-xl text-[#5A5A5A]`, {
-              fontFamily: "RobotoMedium",
-            })}
-          >
-            Give some tips to Sergio Ramasis
-          </Text>
-          <View style={tw`flex-row justify-between items-center my-5`}>
-            {Tips.map((item) => (
-              <Pressable
-                key={item}
-                onPress={() => setTip(item)}
-                style={tw.style(
-                  `flex-col items-center justify-center h-[50px] w-[50px] border rounded-[4px]`,
-                  item === tip ? `border-base-green` : `border-[#DDDDDD]`
-                )}
-              >
-                <Text>₦{item}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <Pressable onPress={() => setShow(true)}>
             <Text
-              style={tw.style(`text-center text-sm text-base-green`, {
+              style={tw.style(`text-center text-xl text-[#2A2A2A]`, {
+                fontFamily: "RobotoBold",
+              })}
+            >
+              {Ratings[rating - 1]}
+            </Text>
+            <Text
+              style={tw.style(`text-center text-xl text-[#B8B8B8]`, {
                 fontFamily: "RobotoMedium",
               })}
             >
-              Enter other amount
+              You rated {temp?.driver?.driver_name} {rating} star(s)
             </Text>
-          </Pressable>
-          <Pressable
-            onPress={CreateReview}
-            style={tw`mt-8 bg-base-green py-4 rounded`}
-          >
-            {loading ? (
-              <ActivityIndicator color="white" />
-            ) : (
+
+            <KeyboardAvoidingView behavior="height">
+              <TextInput
+                value={review}
+                onChangeText={(text) => setReview(text)}
+                style={tw.style(
+                  `h-[118px] text-base my-5 p-3 text-black border border-[#B8B8B8] rounded-[8px]`,
+                  {
+                    fontFamily: "RobotoRegular",
+                    verticalAlign: "top",
+                  }
+                )}
+                placeholder="Write your text"
+                placeholderTextColor="#D0D0D0"
+                multiline
+              />
+            </KeyboardAvoidingView>
+
+            <Text
+              style={tw.style(`text-center text-xl text-[#5A5A5A]`, {
+                fontFamily: "RobotoMedium",
+              })}
+            >
+              Give some tips to Sergio Ramasis
+            </Text>
+
+            <View style={tw`flex-row justify-between items-center my-5`}>
+              {Tips.map((item) => (
+                <Pressable
+                  key={item}
+                  onPress={() => setTip(item)}
+                  style={tw.style(
+                    `flex-col items-center justify-center h-[50px] w-[50px] border rounded-[4px]`,
+                    item === tip ? `border-base-green` : `border-[#DDDDDD]`
+                  )}
+                >
+                  <Text>₦{item}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Pressable onPress={() => setShow(true)}>
               <Text
-                style={tw.style(`text-base text-center text-white`, {
+                style={tw.style(`text-center text-sm text-base-green`, {
                   fontFamily: "RobotoMedium",
                 })}
               >
-                Submit
+                Enter other amount
               </Text>
-            )}
-          </Pressable>
+            </Pressable>
+
+            <Pressable
+              onPress={CreateReview}
+              style={tw`mt-8 bg-base-green py-4 rounded`}
+            >
+              {loading ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text
+                  style={tw.style(`text-base text-center text-white`, {
+                    fontFamily: "RobotoMedium",
+                  })}
+                >
+                  Submit
+                </Text>
+              )}
+            </Pressable>
+          </ScrollView>
         </View>
       </TouchableWithoutFeedback>
     </>

@@ -1,0 +1,77 @@
+diff --git a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGMSMarker.h b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGMSMarker.h
+index 4011850..cff582d 100644
+--- a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGMSMarker.h
++++ b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGMSMarker.h
+@@ -8,7 +8,7 @@
+ #ifdef HAVE_GOOGLE_MAPS
+ 
+ #import <GoogleMaps/GoogleMaps.h>
+-#import <React/UIView+React.h>
++#import "AIRMapMarker.h"\n#import <React/UIView+React.h>
+ 
+ @class AIRGoogleMapMarker;
+ 
+diff --git a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCallout.h b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCallout.h
+index b3fef11..51dbb36 100644
+--- a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCallout.h
++++ b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCallout.h
+@@ -9,7 +9,7 @@
+ #ifdef HAVE_GOOGLE_MAPS
+ 
+ #import <UIKit/UIKit.h>
+-#import <React/RCTView.h>
++#import "AIRMapCallout.h"\n#import <React/RCTView.h>
+ 
+ @interface AIRGoogleMapCallout : UIView
+ @property (nonatomic, assign) BOOL tooltip;
+diff --git a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCalloutManager.h b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCalloutManager.h
+index 4d70ea3..6352829 100644
+--- a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCalloutManager.h
++++ b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCalloutManager.h
+@@ -8,7 +8,7 @@
+ 
+ #ifdef HAVE_GOOGLE_MAPS
+ 
+-#import <React/RCTViewManager.h>
++#import "AIRMapCalloutManager.h"
+ 
+ @interface AIRGoogleMapCalloutManager : RCTViewManager
+ 
+diff --git a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCalloutManager.m b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCalloutManager.m
+index b238316..eefef1c 100644
+--- a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCalloutManager.m
++++ b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapCalloutManager.m
+@@ -8,7 +8,7 @@
+ 
+ #ifdef HAVE_GOOGLE_MAPS
+ 
+-#import "AIRGoogleMapCalloutManager.h"
++#import "AIRGoogleMapCalloutManager.h"\n#import <React/RCTBridgeModule.h>
+ #import "AIRGoogleMapCallout.h"
+ #import <React/RCTView.h>
+ 
+diff --git a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapMarker.m b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapMarker.m
+index b3f8da6..0bd1e11 100644
+--- a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapMarker.m
++++ b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapMarker.m
+@@ -11,6 +11,7 @@
+ #import <GoogleMaps/GoogleMaps.h>
+ #import <React/RCTImageLoaderProtocol.h>
+ #import <React/RCTUtils.h>
++#import <React/UIView+React.h>
+ #import "AIRGMSMarker.h"
+ #import "AIRGoogleMapCallout.h"
+ #import "AIRDummyView.h"
+diff --git a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapMarkerManager.h b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapMarkerManager.h
+index ea52ccd..1355818 100644
+--- a/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapMarkerManager.h
++++ b/node_modules/react-native-maps/ios/AirGoogleMaps/AIRGoogleMapMarkerManager.h
+@@ -7,7 +7,7 @@
+ 
+ #ifdef HAVE_GOOGLE_MAPS
+ 
+-#import <React/RCTViewManager.h>
++#import "AIRGoogleMapCalloutManager.h"
+ 
+ @interface AIRGoogleMapMarkerManager : RCTViewManager
+ 

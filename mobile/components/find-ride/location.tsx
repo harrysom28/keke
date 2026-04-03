@@ -1,10 +1,10 @@
 import { AntDesign, Entypo, FontAwesome, Fontisto } from "@expo/vector-icons";
-import { AppDetailsState, setRideData } from "@/store/AppSlice";
+import { AppDetailsState, setRideData, type IUtils, type IRide } from "@/store/AppSlice";
 import React, { useContext, useEffect, useMemo, useState } from "react";
-import { Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Keyboard, Text, TextInput, View } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 
-import { ScrollView } from "react-native-gesture-handler";
+import { ScrollView, TouchableOpacity } from "react-native-gesture-handler";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
@@ -12,17 +12,34 @@ import { useIsFocused } from "@react-navigation/native";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { AppContext } from "@/app/context";
 import { GET_RECENT_PLACES, SAVE_RECENT_PLACE } from "@/constants";
+import {
+  fetchRecentPlacesCached,
+  invalidateRecentPlacesCache,
+  subscribeRecentPlaces,
+} from "@/utils/recentPlacesCache";
+import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
+import { geocodeAddress, resolvePickupLabel } from "@/utils/mapsApi";
 import apiClient from "@/utils/apiClient";
+import { router } from "expo-router";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { AuthState } from "@/store/AuthSlice";
 
 interface Props {
   action: () => void;
   back?: () => void;
+  initialDropoff?: {
+    name: string;
+    lat: number | null;
+    lng: number | null;
+  } | null;
 }
 
-export const LocationView = ({ action, back }: Props) => {
+export const LocationView = ({ action, back, initialDropoff }: Props) => {
+  const insets = useCombinedSafeInsets();
   const isFocused = useIsFocused();
   const dispatch = useDispatch();
   const { ride } = useSelector(AppDetailsState);
+  const { user } = useSelector(AuthState);
   const { location: currentLocation, address: currentAddress } = useCurrentLocation({ isFocused });
   const { apiConfig } = useContext(AppContext);
   const [selected, setSelected] = useState<{
@@ -33,77 +50,167 @@ export const LocationView = ({ action, back }: Props) => {
     dropoff: "",
   });
   const [recentPlaces, setRecentPlaces] = useState<any[]>([]);
+  const [editingPickup, setEditingPickup] = useState(false);
+  const [editingDropoff, setEditingDropoff] = useState(false);
+  const [farePreview, setFarePreview] = useState<any | null>(null);
+  const [fareLoading, setFareLoading] = useState(false);
+  const [fareError, setFareError] = useState<string | null>(null);
+  const [walletAvailableBalance, setWalletAvailableBalance] = useState<number | null>(null);
 
   useEffect(() => {
-    if (isFocused) {
-      // Always use current location if available - this is the default
-      if (currentLocation.latitude !== 0 && currentLocation.longitude !== 0) {
-        // Use formatted address if available, otherwise try reverse geocoding
-        let locationAddress = currentAddress?.formattedAddress;
-        
-        // If no formatted address, try to get it via reverse geocoding
-        if (!locationAddress || locationAddress.includes('Current Location')) {
-          // The useCurrentLocation hook already does reverse geocoding, but if it failed,
-          // we'll use coordinates as fallback
-          locationAddress = currentAddress?.formattedAddress || 
-                           (currentAddress?.street && currentAddress?.city 
-                             ? `${currentAddress.street}, ${currentAddress.city}` 
-                             : `Current Location (${currentLocation.latitude.toFixed(4)}, ${currentLocation.longitude.toFixed(4)})`);
-        }
-        
-          const preciseLocation = {
-            place_id: null,
-          name: locationAddress,
-          formatted_address: locationAddress,
-            long: currentLocation.longitude,
-            lat: currentLocation.latitude,
-          };
-        
-        // Always set current location as default pickup
-        // Check if Redux already has this location to avoid unnecessary updates
-        const reduxOrigin = ride?.data?.origin;
-        const isSameLocation = reduxOrigin?.lat === preciseLocation.lat && 
-                               reduxOrigin?.long === preciseLocation.long;
-        
-        if (!isSameLocation) {
-          setSelected((prev) => ({
-            ...prev,
-            pickup: locationAddress,
-          }));
-          dispatch(setRideData({ origin: preciseLocation }));
-          console.log("📍 Auto-set pickup to current location:", {
-            lat: preciseLocation.lat,
-            lng: preciseLocation.long,
-            address: locationAddress,
-          });
-        } else if (!selected.pickup || selected.pickup === "" || selected.pickup === "Enter pick up location") {
-          // If Redux has the location but state doesn't, sync state
-          setSelected((prev) => ({
-            ...prev,
-            pickup: locationAddress,
-          }));
-        }
-          return;
-      }
-      
-      // Fallback to stored user location
-      if (ride?.utils?.user_location && ride?.utils?.user_location?.lat) {
-        const storedLocation = ride.utils.user_location;
-        const storedName = storedLocation.name || storedLocation.formatted_address || "Selected location";
-        
-        // Only set if pickup is empty or doesn't match stored location
-        if (!selected.pickup || selected.pickup === "" || selected.pickup === "Enter pick up location") {
-        setSelected((prev) => ({
-          ...prev,
-            pickup: storedName,
-        }));
-          dispatch(setRideData({ origin: storedLocation }));
-        }
-      }
-    }
-  }, [isFocused, currentLocation.latitude, currentLocation.longitude, currentAddress?.formattedAddress, ride?.data?.origin]);
+    const initialDropoffName = initialDropoff?.name?.trim();
+    if (!isFocused || !initialDropoffName) return;
 
-  const handleUseCurrentLocation = () => {
+    const hasValidCoords =
+      initialDropoff?.lat != null &&
+      initialDropoff?.lng != null &&
+      Number.isFinite(initialDropoff.lat) &&
+      Number.isFinite(initialDropoff.lng) &&
+      initialDropoff.lat !== 0 &&
+      initialDropoff.lng !== 0;
+
+    setEditingDropoff(false);
+    setSelected((prev) => ({ ...prev, dropoff: initialDropoffName }));
+
+    if (hasValidCoords) {
+      dispatch(
+        setRideData({
+          destination: {
+            name: initialDropoffName,
+            long: String(initialDropoff.lng),
+            lat: String(initialDropoff.lat),
+          },
+        })
+      );
+      return;
+    }
+
+    dispatch(
+      setRideData({
+        destination: {
+          name: initialDropoffName,
+          long: "",
+          lat: "",
+        },
+      })
+    );
+
+    let cancelled = false;
+
+    geocodeAddress(initialDropoffName)
+      .then((result) => {
+        const firstResult = result?.results?.[0];
+        const resolvedLat = firstResult?.geometry?.location?.lat;
+        const resolvedLng = firstResult?.geometry?.location?.lng;
+
+        if (
+          cancelled ||
+          !Number.isFinite(resolvedLat) ||
+          !Number.isFinite(resolvedLng) ||
+          resolvedLat === 0 ||
+          resolvedLng === 0
+        ) {
+          return;
+        }
+
+        dispatch(
+          setRideData({
+            destination: {
+              name: initialDropoffName,
+              long: String(resolvedLng),
+              lat: String(resolvedLat),
+            },
+          })
+        );
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isFocused, initialDropoff?.name, initialDropoff?.lat, initialDropoff?.lng, dispatch]);
+
+  useEffect(() => {
+    if (!isFocused) return;
+    // When user tapped "Change", don't refill from current location (avoids infinite loop)
+    if (editingPickup) return;
+
+    if (currentLocation.latitude === 0 || currentLocation.longitude === 0) {
+      const userLocation = (ride?.utils as IUtils | undefined)?.user_location;
+      if (userLocation && "lat" in userLocation && userLocation.lat) {
+        const stored = userLocation as { lat: string; long: string; name?: string; formatted_address?: string };
+        const name = stored.name || stored.formatted_address || "Selected location";
+        if (!selected.pickup || selected.pickup === "" || selected.pickup === "Enter pick up location") {
+          setSelected((prev) => ({ ...prev, pickup: name }));
+          dispatch(setRideData({ origin: { name, lat: stored.lat, long: stored.long } }));
+        }
+      }
+      return;
+    }
+
+    const fromHook = currentAddress?.formattedAddress ||
+      (currentAddress?.street && currentAddress?.city
+        ? `${currentAddress.street}, ${currentAddress.city}`
+        : "");
+    // Skip Expo address if it's just region/country (e.g. "Ebonyi, Nigeria") - we'll use backend for precise address
+    const isBroadExpoAddress =
+      typeof fromHook === "string" &&
+      /^[^,]+,?\s*Nigeria\s*$/i.test(fromHook.trim());
+    const hasReadableName =
+      typeof fromHook === "string" &&
+      fromHook.length > 0 &&
+      !fromHook.includes("Current Location") &&
+      !isBroadExpoAddress;
+
+    const preciseLocation = {
+      place_id: null,
+      name: hasReadableName ? fromHook : "Current location",
+      formatted_address: hasReadableName ? fromHook : "Current location",
+      long: String(currentLocation.longitude),
+      lat: String(currentLocation.latitude),
+    };
+
+    const rideData = ride?.data as IRide | undefined;
+    const reduxOrigin = rideData?.origin as { lat?: number; long?: number } | undefined;
+    const isSameLocation =
+      Number(reduxOrigin?.lat) === Number(preciseLocation.lat) &&
+      Number(reduxOrigin?.long) === Number(preciseLocation.long);
+    // Don't overwrite when user has selected a different place (has coords that differ from current)
+    const hasOtherOrigin =
+      reduxOrigin?.lat != null &&
+      reduxOrigin?.long != null &&
+      !isSameLocation;
+    if (hasOtherOrigin) return;
+
+    if (!isSameLocation) {
+      setSelected((prev) => ({ ...prev, pickup: preciseLocation.name }));
+      dispatch(setRideData({ origin: preciseLocation }));
+    } else if (!selected.pickup || selected.pickup === "" || selected.pickup === "Enter pick up location") {
+      setSelected((prev) => ({ ...prev, pickup: preciseLocation.name }));
+    }
+
+    if (hasReadableName) return;
+
+    resolvePickupLabel(currentLocation.latitude, currentLocation.longitude)
+      .then((address) => {
+        if (address) {
+          setSelected((prev) => ({ ...prev, pickup: address }));
+          dispatch(
+            setRideData({
+              origin: {
+                name: address,
+                long: String(currentLocation.longitude),
+                lat: String(currentLocation.latitude),
+              },
+            })
+          );
+        }
+      })
+      .catch(() => {});
+  // Intentionally omit ride?.data to avoid loop: this effect dispatches setRideData, which would retrigger the effect.
+  }, [isFocused, editingPickup, currentLocation.latitude, currentLocation.longitude, currentAddress?.formattedAddress, currentAddress?.street, currentAddress?.city]);
+
+  const handleUseCurrentLocation = async () => {
     if (currentLocation.latitude === 0 || currentLocation.longitude === 0) {
       showMessage({
         type: "warning",
@@ -120,32 +227,45 @@ export const LocationView = ({ action, back }: Props) => {
       });
     }
 
-    // Use precise GPS coordinates
-    const preciseLocation = {
-      place_id: null, // No place_id for current location
-      name: currentAddress?.formattedAddress || `Current Location (${accuracy.toFixed(0)}m accuracy)`,
-      formatted_address: currentAddress?.formattedAddress || `Lat: ${currentLocation.latitude.toFixed(6)}, Lng: ${currentLocation.longitude.toFixed(6)}`,
-      long: currentLocation.longitude,
-      lat: currentLocation.latitude,
-    };
+    const fromHook = currentAddress?.formattedAddress ||
+      (currentAddress?.street && currentAddress?.city ? `${currentAddress.street}, ${currentAddress.city}` : "");
+    const isBroadExpoAddress =
+      typeof fromHook === "string" && /^[^,]+,?\s*Nigeria\s*$/i.test(fromHook.trim());
+    const hasReadableName =
+      typeof fromHook === "string" &&
+      fromHook.length > 0 &&
+      !fromHook.includes("Current Location") &&
+      !isBroadExpoAddress;
 
-    console.log("📍 Using precise current location:", {
-      lat: preciseLocation.lat,
-      lng: preciseLocation.long,
-      accuracy: `${accuracy.toFixed(0)}m`,
-      address: preciseLocation.name,
-    });
-
-    setSelected((prev) => ({
-      ...prev,
-      pickup: currentAddress?.formattedAddress || `Current Location (${accuracy.toFixed(0)}m)`,
+    setEditingPickup(false);
+    setSelected((prev) => ({ ...prev, pickup: hasReadableName ? fromHook : "Current location" }));
+    dispatch(setRideData({
+      origin: {
+        name: hasReadableName ? fromHook : "Current location",
+        long: String(currentLocation.longitude),
+        lat: String(currentLocation.latitude),
+      },
     }));
-    dispatch(setRideData({ origin: preciseLocation }));
 
-    showMessage({
-      type: accuracy < 20 ? "success" : "info",
-      message: `Using current location (${accuracy.toFixed(0)}m accuracy)`,
-    });
+    if (!hasReadableName) {
+      try {
+        const address = await resolvePickupLabel(currentLocation.latitude, currentLocation.longitude);
+        if (address) {
+          setSelected((prev) => ({ ...prev, pickup: address }));
+          dispatch(
+            setRideData({
+              origin: {
+                name: address,
+                long: String(currentLocation.longitude),
+                lat: String(currentLocation.latitude),
+              },
+            })
+          );
+        }
+      } catch (_) {}
+    }
+
+    showMessage({ type: accuracy < 20 ? "success" : "info", message: "Using current location" });
   };
 
   const setLocation = (type: "pickup" | "dropoff", locationData: any, label: string) => {
@@ -181,9 +301,11 @@ export const LocationView = ({ action, back }: Props) => {
     });
     
     if (type === "pickup") {
+      setEditingPickup(false);
       setSelected((prev) => ({ ...prev, pickup: label }));
       dispatch(setRideData({ origin: normalizedLocation }));
     } else {
+      setEditingDropoff(false);
       setSelected((prev) => ({ ...prev, dropoff: label }));
       dispatch(setRideData({ destination: normalizedLocation }));
     }
@@ -216,6 +338,7 @@ export const LocationView = ({ action, back }: Props) => {
           longitude: locationData.long,
           isDefault: false,
         });
+        invalidateRecentPlacesCache();
         if (__DEV__) {
           console.log("✅ Destination saved to recent places");
         }
@@ -229,19 +352,173 @@ export const LocationView = ({ action, back }: Props) => {
   };
 
   useEffect(() => {
-    if (!isFocused || !apiConfig) return;
-    apiClient
-      .get(GET_RECENT_PLACES)
-      .then(({ data }) => {
-        const list = data?.data?.recent_places;
-        setRecentPlaces(Array.isArray(list) ? list : []);
+    const origin = (ride?.data as any)?.origin;
+    const destination = (ride?.data as any)?.destination;
+    const oLat = parseFloat(String(origin?.lat ?? origin?.latitude ?? "0"));
+    const oLng = parseFloat(String(origin?.long ?? origin?.longitude ?? "0"));
+    const dLat = parseFloat(String(destination?.lat ?? destination?.latitude ?? "0"));
+    const dLng = parseFloat(String(destination?.long ?? destination?.longitude ?? "0"));
+
+    const hasCoords =
+      isFinite(oLat) &&
+      isFinite(oLng) &&
+      isFinite(dLat) &&
+      isFinite(dLng) &&
+      oLat !== 0 &&
+      oLng !== 0 &&
+      dLat !== 0 &&
+      dLng !== 0;
+
+    if (!isFocused || !hasCoords) {
+      setFarePreview(null);
+      setFareError(null);
+      setFareLoading(false);
+      return;
+    }
+
+    let mounted = true;
+    setFareLoading(true);
+    setFareError(null);
+
+    Promise.all([
+      apiClient.get("rides/fare-estimate", {
+        params: { originLat: oLat, originLng: oLng, destLat: dLat, destLng: dLng },
+        timeout: 10000,
+      }),
+      apiClient.get("wallet", { timeout: 10000 }),
+    ])
+      .then(([fareRes, walletRes]) => {
+        if (!mounted) return;
+        const fare = fareRes?.data?.data;
+        const data = walletRes?.data?.data;
+        const available = data?.availableBalance ?? data?.balance;
+        const num = typeof available === "number" ? available : Number(available || 0);
+        setFarePreview(fare || null);
+        setWalletAvailableBalance(Number.isFinite(num) ? num : 0);
       })
-      .catch((err) => {
-        console.log("Error fetching recent places:", err?.response?.data || err?.message);
+      .catch(() => {
+        if (!mounted) return;
+        setFarePreview(null);
+        setWalletAvailableBalance(null);
+        setFareError("Unable to load fare preview");
+      })
+      .finally(() => {
+        if (!mounted) return;
+        setFareLoading(false);
       });
-  }, [isFocused, apiConfig]);
 
+    return () => {
+      mounted = false;
+    };
+  }, [isFocused, (ride?.data as any)?.origin?.lat, (ride?.data as any)?.origin?.long, (ride?.data as any)?.destination?.lat, (ride?.data as any)?.destination?.long]);
 
+  const fareTotal = typeof farePreview?.riderTotal === "number" ? farePreview.riderTotal : Number(farePreview?.riderTotal || 0);
+  const walletOk =
+    walletAvailableBalance != null &&
+    !isNaN(fareTotal) &&
+    fareTotal > 0 &&
+    walletAvailableBalance >= fareTotal;
+  /** When fare is 0 or unknown, do not treat wallet as "insufficient" (walletOk is false for fareTotal===0). */
+  const walletInsufficientForRide =
+    farePreview != null &&
+    walletAvailableBalance != null &&
+    fareTotal > 0 &&
+    walletAvailableBalance < fareTotal;
+  const shortfall =
+    walletAvailableBalance != null && fareTotal > 0
+      ? Math.max(0, Math.ceil(fareTotal - walletAvailableBalance))
+      : 0;
+
+  useEffect(() => {
+    if (!isFocused) return;
+    const userId = String(user?.profile?.user_id ?? "");
+    if (!userId) return;
+
+    const unsub = subscribeRecentPlaces((fresh) => {
+      setRecentPlaces(fresh);
+    });
+
+    fetchRecentPlacesCached(userId)
+      .then(setRecentPlaces)
+      .catch(() => {
+        // fetchRecentPlacesCached returns stale cache on failure; only throws if nothing cached
+      });
+
+    return unsub;
+  }, [isFocused, user?.profile?.user_id]);
+
+  // Deduplicate and limit to 3 most recent (by coordinates and normalized name)
+  const recentPlacesDeduped = useMemo(() => {
+    const seenCoords = new Set<string>();
+    const seenNames = new Set<string>();
+    const round = (n: number) => Math.round(n * 1e5) / 1e5;
+    const normalizeName = (s: string) => (s || "").toLowerCase().trim().replace(/\s+/g, " ");
+    const deduped = (recentPlaces || []).filter((item) => {
+      const lat = item.location?.latitude ?? item.lat ?? item.latitude;
+      const lng = item.location?.longitude ?? item.long ?? item.longitude;
+      if (lat == null || lng == null || isNaN(Number(lat)) || isNaN(Number(lng))) return false;
+      const coordKey = `${round(Number(lat))},${round(Number(lng))}`;
+      const name = item.name || item.address || item.formatted_address || "";
+      const nameKey = normalizeName(name);
+      if (seenCoords.has(coordKey) || (nameKey && seenNames.has(nameKey))) return false;
+      seenCoords.add(coordKey);
+      if (nameKey) seenNames.add(nameKey);
+      return true;
+    });
+    return deduped.slice(0, 3);
+  }, [recentPlaces]);
+
+  const ensureDestinationCoordinates = async () => {
+    const destination = (ride?.data as any)?.destination;
+    const destinationLat = parseFloat(String(destination?.lat ?? destination?.latitude ?? "0"));
+    const destinationLng = parseFloat(String(destination?.long ?? destination?.longitude ?? "0"));
+    const hasValidCoords =
+      Number.isFinite(destinationLat) &&
+      Number.isFinite(destinationLng) &&
+      destinationLat !== 0 &&
+      destinationLng !== 0;
+
+    if (hasValidCoords) return true;
+    if (!selected.dropoff || selected.dropoff.trim() === "") return false;
+
+    try {
+      const result = await geocodeAddress(selected.dropoff.trim());
+      const firstResult = result?.results?.[0];
+      const resolvedLat = firstResult?.geometry?.location?.lat;
+      const resolvedLng = firstResult?.geometry?.location?.lng;
+
+      if (
+        !Number.isFinite(resolvedLat) ||
+        !Number.isFinite(resolvedLng) ||
+        resolvedLat === 0 ||
+        resolvedLng === 0
+      ) {
+        showMessage({
+          type: "warning",
+          message: "Please select a valid dropoff location",
+        });
+        return false;
+      }
+
+      dispatch(
+        setRideData({
+          destination: {
+            name: selected.dropoff.trim(),
+            long: String(resolvedLng),
+            lat: String(resolvedLat),
+          },
+        })
+      );
+
+      return true;
+    } catch (_) {
+      showMessage({
+        type: "warning",
+        message: "Please select a valid dropoff location",
+      });
+      return false;
+    }
+  };
 
   return (
     <>
@@ -287,42 +564,82 @@ export const LocationView = ({ action, back }: Props) => {
               )}
             </View>
             <View style={tw`pr-2`}>
-              <CustomPlacesAutocomplete
-                placeholder="Enter pick up location"
-                initialValue={selected.pickup}
-                showClearButton={false}
-                onPlaceSelected={(place) => {
-                  console.log('🎯 Pickup place selected:', place);
-                  const locationData = {
-                    place_id: place.place_id || null,
-                    name: place.name || "",
-                    formatted_address: place.formatted_address || place.name || "",
-                    long: place.long,
-                    lat: place.lat,
-                  };
-                  // Use place.name as the display value for consistency
-                  const displayValue = place.name || place.formatted_address || "Selected location";
-                  console.log('📝 Setting pickup display value:', displayValue);
-                  setSelected((prev) => ({
-                    ...prev,
-                    pickup: displayValue,
-                  }));
-                  dispatch(setRideData({ origin: locationData }));
-                }}
-                onClear={() => {
-                  setSelected((prev) => ({ ...prev, pickup: "" }));
-                  dispatch(setRideData({ origin: {} }));
-                }}
-                styles={{
-                  textInput: tw.style(`text-[15px] text-[#242E42]`, {
-                    fontFamily: "RobotoRegular",
-                    borderWidth: 0,
-                    backgroundColor: "transparent",
-                    paddingVertical: 0,
-                    paddingHorizontal: 0,
-                  }),
-                }}
-              />
+              {selected.pickup &&
+              selected.pickup !== "" &&
+              selected.pickup !== "Enter pick up location" &&
+              !editingPickup ? (
+                <View>
+                  <Text
+                    numberOfLines={1}
+                    style={tw.style(`text-[15px] text-[#242E42]`, {
+                      fontFamily: "RobotoMedium",
+                    })}
+                  >
+                    {formatAddressForDisplay(selected.pickup).primary}
+                  </Text>
+                  {!!formatAddressForDisplay(selected.pickup).secondary && (
+                    <Text
+                      numberOfLines={1}
+                      style={tw.style(`text-xs text-[#8E8E93] mt-0.5`, {
+                        fontFamily: "RobotoRegular",
+                      })}
+                    >
+                      {formatAddressForDisplay(selected.pickup).secondary}
+                    </Text>
+                  )}
+                  <TouchableOpacity
+                    onPress={() => {
+                      setEditingPickup(true);
+                      setSelected((prev) => ({ ...prev, pickup: "" }));
+                      dispatch(setRideData({ origin: { name: "", long: "", lat: "" } }));
+                    }}
+                    style={tw`mt-1.5`}
+                  >
+                    <Text
+                      style={tw.style(`text-[13px] text-base-green`, {
+                        fontFamily: "RobotoMedium",
+                      })}
+                    >
+                      Change
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <CustomPlacesAutocomplete
+                  placeholder="Enter pick up location"
+                  initialValue={selected.pickup}
+                  userLat={currentLocation.latitude}
+                  userLng={currentLocation.longitude}
+                  showClearButton={false}
+                  onPlaceSelected={(place) => {
+                    Keyboard.dismiss();
+                    const displayValue = place.name || place.formatted_address || "Selected location";
+                    console.log('📝 Setting pickup display value:', displayValue);
+                    setEditingPickup(false);
+                    setSelected((prev) => ({ ...prev, pickup: displayValue }));
+                    dispatch(setRideData({
+                      origin: {
+                        name: place.name || displayValue,
+                        long: String(place.long),
+                        lat: String(place.lat),
+                      },
+                    }));
+                  }}
+                  onClear={() => {
+                    setSelected((prev) => ({ ...prev, pickup: "" }));
+                    dispatch(setRideData({ origin: { name: "", long: "", lat: "" } }));
+                  }}
+                  styles={{
+                    textInput: tw.style(`text-[15px] text-[#242E42]`, {
+                      fontFamily: "RobotoRegular",
+                      borderWidth: 0,
+                      backgroundColor: "transparent",
+                      paddingVertical: 0,
+                      paddingHorizontal: 0,
+                    }),
+                  }}
+                />
+              )}
             </View>
           </View>
           <View style={tw`relative`}>
@@ -334,75 +651,168 @@ export const LocationView = ({ action, back }: Props) => {
               Drop-off
             </Text>
             <View style={tw`pr-2`}>
-              <CustomPlacesAutocomplete
-                placeholder="Enter drop-off location"
-                initialValue={selected.dropoff}
-                showClearButton={false}
-                onPlaceSelected={async (place) => {
-                  console.log('🎯 Drop-off place selected:', place);
-                  const locationData = {
-                    place_id: place.place_id || null,
-                    name: place.name || "",
-                    formatted_address: place.formatted_address || place.name || "",
-                    long: place.long,
-                    lat: place.lat,
-                  };
-                  // Use place.name as the display value - it should match what CustomPlacesAutocomplete set
-                  const displayValue = place.name || place.formatted_address || "Selected location";
-                  console.log('📝 Setting dropoff display value:', displayValue, 'from place:', place);
-                  
-                  // Update state immediately
-                  setSelected((prev) => ({
-                    ...prev,
-                    dropoff: displayValue,
-                  }));
-                  dispatch(setRideData({ destination: locationData }));
+              {selected.dropoff &&
+              selected.dropoff !== "" &&
+              selected.dropoff !== "Enter drop-off location" &&
+              !editingDropoff ? (
+                <View>
+                  <Text
+                    numberOfLines={1}
+                    style={tw.style(`text-[15px] text-[#242E42]`, {
+                      fontFamily: "RobotoMedium",
+                    })}
+                  >
+                    {formatAddressForDisplay(selected.dropoff).primary}
+                  </Text>
+                  {!!formatAddressForDisplay(selected.dropoff).secondary && (
+                    <Text
+                      numberOfLines={1}
+                      style={tw.style(`text-xs text-[#8E8E93] mt-0.5`, {
+                        fontFamily: "RobotoRegular",
+                      })}
+                    >
+                      {formatAddressForDisplay(selected.dropoff).secondary}
+                    </Text>
+                  )}
+                  <TouchableOpacity
+                    onPress={() => {
+                      setEditingDropoff(true);
+                      setSelected((prev) => ({ ...prev, dropoff: "" }));
+                      dispatch(setRideData({ destination: { name: "", long: "", lat: "" } }));
+                    }}
+                    style={tw`mt-1.5`}
+                  >
+                    <Text
+                      style={tw.style(`text-[13px] text-base-green`, {
+                        fontFamily: "RobotoMedium",
+                      })}
+                    >
+                      Change
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <CustomPlacesAutocomplete
+                  placeholder="Enter drop-off location"
+                  initialValue={selected.dropoff}
+                  userLat={currentLocation.latitude}
+                  userLng={currentLocation.longitude}
+                  autoFocus={editingDropoff || !selected.dropoff}
+                  showClearButton={false}
+                  onPlaceSelected={async (place) => {
+                    Keyboard.dismiss();
+                    const displayValue = place.name || place.formatted_address || "Selected location";
+                    const destCoords = { name: place.name || displayValue, long: String(place.long), lat: String(place.lat) };
+                    setEditingDropoff(false);
+                    setSelected((prev) => ({ ...prev, dropoff: displayValue }));
+                    dispatch(setRideData({ destination: destCoords }));
 
-                  // Automatically save destination to recent places
-                  if (locationData.lat && locationData.long && apiConfig) {
-                    try {
-                      await apiClient.post(SAVE_RECENT_PLACE, {
-                        name: locationData.name || displayValue,
-                        address: locationData.formatted_address || locationData.address || displayValue,
-                        latitude: locationData.lat,
-                        longitude: locationData.long,
-                        isDefault: false,
-                      });
-                      if (__DEV__) {
-                        console.log("✅ Destination saved to recent places");
-                      }
-                    } catch (error) {
-                      // Silently fail - don't interrupt user flow
-                      if (__DEV__) {
-                        console.log("⚠️ Failed to save destination to recent places:", error);
+                    if (destCoords.lat && destCoords.long && apiConfig) {
+                      try {
+                        await apiClient.post(SAVE_RECENT_PLACE, {
+                          name: destCoords.name || displayValue,
+                          address: place.formatted_address || displayValue,
+                          latitude: Number(destCoords.lat),
+                          longitude: Number(destCoords.long),
+                          isDefault: false,
+                        });
+                        invalidateRecentPlacesCache();
+                        if (__DEV__) console.log("✅ Destination saved to recent places");
+                      } catch (error) {
+                        if (__DEV__) console.log("⚠️ Failed to save destination to recent places:", error);
                       }
                     }
-                  }
-                }}
-                onClear={() => {
-                  setSelected((prev) => ({ ...prev, dropoff: "" }));
-                  dispatch(setRideData({ destination: {} }));
-                }}
-                styles={{
-                  textInput: tw.style(`text-[15px] text-[#242E42]`, {
-                    fontFamily: "RobotoRegular",
-                    borderWidth: 0,
-                    backgroundColor: "transparent",
-                    paddingVertical: 0,
-                    paddingHorizontal: 0,
-                  }),
-                }}
-              />
+                  }}
+                  onClear={() => {
+                    setSelected((prev) => ({ ...prev, dropoff: "" }));
+                    dispatch(setRideData({ destination: { name: "", long: "", lat: "" } }));
+                  }}
+                  styles={{
+                    textInput: tw.style(`text-[15px] text-[#242E42]`, {
+                      fontFamily: "RobotoRegular",
+                      borderWidth: 1,
+                      borderColor: "#E0E0E0",
+                      backgroundColor: "#F9F9F9",
+                      paddingVertical: 12,
+                      paddingHorizontal: 14,
+                      borderRadius: 10,
+                      minHeight: 48,
+                    }),
+                  }}
+                />
+              )}
             </View>
           </View>
+
+          {/* Live fare preview (non-blocking) */}
+          {fareLoading ? (
+            <View style={tw`mt-3 bg-white rounded-[12px] border border-[#EFEFEF] p-4`}>
+              <View style={tw`flex-row items-center justify-between`}>
+                <Text style={tw.style(`text-[13px] text-[#242E42]`, { fontFamily: "RobotoMedium" })}>
+                  Keke · Loading…
+                </Text>
+                <ActivityIndicator size="small" color={tw.color("base-green")} />
+              </View>
+            </View>
+          ) : farePreview ? (
+            <View style={tw`mt-3 bg-white rounded-[12px] border border-[#EFEFEF] p-4`}>
+              <Text style={tw.style(`text-[13px] text-[#242E42] mb-2`, { fontFamily: "RobotoMedium" })}>
+                Keke · {farePreview.distanceKm}km · ~{farePreview.estimatedMins} min
+              </Text>
+              <View style={tw`gap-y-2`}>
+                <View style={tw`flex-row items-center justify-between`}>
+                  <Text style={tw.style(`text-[13px] text-[#5A5A5A]`, { fontFamily: "RobotoRegular" })}>
+                    Ride fare
+                  </Text>
+                  <Text style={tw.style(`text-[13px] text-[#242E42]`, { fontFamily: "RobotoMedium" })}>
+                    {farePreview.display?.["Ride fare"] || ""}
+                  </Text>
+                </View>
+                <View style={tw`flex-row items-center justify-between`}>
+                  <Text style={tw.style(`text-[13px] text-[#5A5A5A]`, { fontFamily: "RobotoRegular" })}>
+                    Service charge
+                  </Text>
+                  <Text style={tw.style(`text-[13px] text-[#242E42]`, { fontFamily: "RobotoMedium" })}>
+                    {farePreview.display?.["Service charge"] || ""}
+                  </Text>
+                </View>
+                <View style={tw`border-t border-[#EFEFEF] pt-2 flex-row items-center justify-between`}>
+                  <Text style={tw.style(`text-[14px] text-[#242E42]`, { fontFamily: "RobotoBold" })}>
+                    Total
+                  </Text>
+                  <View style={tw`flex-row items-center gap-x-2`}>
+                    <Text style={tw.style(`text-[14px] text-[#242E42]`, { fontFamily: "RobotoBold" })}>
+                      {farePreview.display?.Total || ""}
+                    </Text>
+                    {walletOk ? (
+                      <Entypo name="check" size={16} color={tw.color("base-green")} />
+                    ) : null}
+                  </View>
+                </View>
+                {!walletOk && walletAvailableBalance != null && fareTotal > 0 ? (
+                  <Text style={tw.style(`text-[12px] text-red-600`, { fontFamily: "RobotoMedium" })}>
+                    Insufficient balance — Top up ₦{shortfall.toLocaleString()}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+          ) : fareError ? (
+            <View style={tw`mt-3 bg-white rounded-[12px] border border-[#EFEFEF] p-4`}>
+              <Text style={tw.style(`text-[12px] text-[#8E8E93]`, { fontFamily: "RobotoRegular" })}>
+                {fareError}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
       <ScrollView
         style={tw`mt-4`}
         contentContainerStyle={tw`pb-4`}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
       >
-        {recentPlaces.length > 0 && (
+        {recentPlaces.length > 0 && !selected.dropoff && (
           <>
         <Text
           style={tw.style(`text-[13px] text-[#C8C7CC] uppercase mb-2 mt-1`, {
@@ -412,14 +822,13 @@ export const LocationView = ({ action, back }: Props) => {
           Recent locations
         </Text>
             <View style={tw`bg-white rounded-[12px] border border-[#EFEFEF] mb-4`}>
-              {recentPlaces.map((item, index) => {
+              {recentPlacesDeduped.map((item, index) => {
                 // Extract coordinates from different possible structures
                 const lat = item.location?.latitude || item.lat || item.latitude;
                 const lng = item.location?.longitude || item.long || item.longitude;
                 
                 // Only render if we have valid coordinates
-                if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
-                  console.warn('⚠️ Recent place missing coordinates:', item);
+                if (!lat || !lng || isNaN(Number(lat)) || isNaN(Number(lng))) {
                   return null;
                 }
                 
@@ -440,7 +849,7 @@ export const LocationView = ({ action, back }: Props) => {
                     }
                   style={tw.style(
                     `flex-row items-center gap-x-3 px-3 py-2.5`,
-                    index < recentPlaces.length - 1 && `border-b border-[#EFEFEF]`
+                    index < recentPlacesDeduped.length - 1 && `border-b border-[#EFEFEF]`
                   )}
                 >
                   <FontAwesome name="clock-o" size={18} color="#5A5A5A" />
@@ -474,16 +883,21 @@ export const LocationView = ({ action, back }: Props) => {
       </ScrollView>
       
       {/* Fixed Navigation Button */}
-      <View style={tw`px-5 pb-5 pt-3 bg-white border-t border-[#F0F0F0]`}>
+      <View
+        style={[
+          tw`px-5 pt-3 bg-white border-t border-[#F0F0F0]`,
+          { paddingBottom: Math.max(insets.bottom + 12, 20) },
+        ]}
+      >
       <TouchableOpacity
           style={tw.style(
             `flex-row justify-center items-center px-6 py-3.5 rounded-full`,
             selected.pickup && selected.dropoff
-              ? `bg-base-green`
+              ? (walletInsufficientForRide ? `bg-gray-300` : `bg-base-green`)
               : `bg-gray-300`
           )}
-          disabled={!selected.pickup || !selected.dropoff}
-        onPress={() => {
+          disabled={!selected.pickup || !selected.dropoff || walletInsufficientForRide}
+        onPress={async () => {
           if (selected.pickup === "") {
             showMessage({
               type: "warning",
@@ -494,13 +908,59 @@ export const LocationView = ({ action, back }: Props) => {
               type: "warning",
               message: "Please select a dropoff location",
             });
+          } else if (walletInsufficientForRide) {
+            router.push("/(app)/(tabs)/(profile)/wallet");
           } else {
+            // Safety: block proceeding when Redux origin coords are missing/invalid.
+            // This prevents falling into step 2/3 with `origin.lat/long` as empty strings.
+            const reduxRide = (ride?.data as any) || {};
+            const oLatRaw = reduxRide?.origin?.lat ?? reduxRide?.origin?.latitude;
+            const oLngRaw = reduxRide?.origin?.long ?? reduxRide?.origin?.longitude;
+            const oLatNum = oLatRaw != null ? parseFloat(String(oLatRaw)) : NaN;
+            const oLngNum = oLngRaw != null ? parseFloat(String(oLngRaw)) : NaN;
+            const hasValidOriginCoords =
+              Number.isFinite(oLatNum) && Number.isFinite(oLngNum) && oLatNum !== 0 && oLngNum !== 0;
+
+            if (!hasValidOriginCoords) {
+              // If Redux origin coords are missing/invalid, populate them from GPS as a fallback
+              // so the flow doesn't get stuck (map label can be set without coords).
+              const gpsLatNum =
+                currentLocation?.latitude != null ? Number(currentLocation.latitude) : NaN;
+              const gpsLngNum =
+                currentLocation?.longitude != null ? Number(currentLocation.longitude) : NaN;
+              const hasValidGpsCoords =
+                Number.isFinite(gpsLatNum) &&
+                Number.isFinite(gpsLngNum) &&
+                gpsLatNum !== 0 &&
+                gpsLngNum !== 0;
+
+              if (!hasValidGpsCoords) {
+                showMessage({
+                  type: "warning",
+                  message: "Please select a valid pickup location (coordinates not found).",
+                });
+                return;
+              }
+
+              dispatch(
+                setRideData({
+                  origin: {
+                    name: selected.pickup || "Current location",
+                    lat: gpsLatNum.toString(),
+                    long: gpsLngNum.toString(),
+                  },
+                })
+              );
+            }
+
+            const hasResolvedDropoff = await ensureDestinationCoordinates();
+            if (!hasResolvedDropoff) return;
             action();
           }
         }}
       >
           <Text style={tw.style(`text-white text-[16px] mr-2`, { fontFamily: "RobotoBold" })}>
-            Continue
+            {walletInsufficientForRide ? "Top Up Wallet" : "Confirm Booking"}
           </Text>
           <AntDesign name="right" size={20} color="white" />
       </TouchableOpacity>

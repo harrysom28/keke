@@ -1,0 +1,39 @@
+{
+  "tabs": {
+    "home": "Ụlọ",
+    "offers": "Nnyocha",
+    "rides": "Ụgbọ ala",
+    "profile": "Profaịlụ"
+  },
+  "driver_tabs": {
+    "home": "Ụlọ",
+    "bookings": "Ndepụta",
+    "tasks": "Ọrụ",
+    "profile": "Profaịlụ"
+  },
+  "home": {
+    "welcome": "Nnọọ gị",
+    "where_to": "Ebee ka ị na-aga?"
+  },
+  "notifications": {
+    "title": "Ọkwa",
+    "mark_all_read": "Mee niile dị ka agụrụ",
+    "no_notifications": "Ọ dịghị ọkwa ugbu a"
+  },
+  "language": {
+    "title": "Asụsụ",
+    "subtitle": "Họrọ asụsụ kacha amasị gị",
+    "note": "Mara: ụfọdụ atụmatụ nwere ike ịdịghị na asụsụ niile",
+    "saved": "Echekwara mmasị asụsụ",
+    "save_failed": "Enweghị ike ịchekwaa mmasị asụsụ",
+    "names": {
+      "en": "Bekee",
+      "fr": "Fụrench",
+      "es": "Spanishi",
+      "ar": "Arabik",
+      "ha": "Hausa",
+      "ig": "Igbo",
+      "yo": "Yoruba"
+    }
+  }
+}

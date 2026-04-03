@@ -164,7 +164,7 @@ export const PromoCodeView = ({ back }: Props) => {
   const handleConfirm = useCallback(() => {
     setLoading(true);
     axios
-      .post(APPLY_CODE, { offer_id: code }, apiConfig)
+      .post(APPLY_CODE, { code }, apiConfig)
       .then(({ data }) => {
         console.log(data?.data);
         dispatch(setRideData({ promo_code: code }));

@@ -9,6 +9,10 @@ yarn.lock
 .env.production
 .env.test
 
+# Firebase service account (contains private key)
+config/firebase-service-account.json
+**/firebase-service-account.json
+
 # Logs
 logs/
 *.log

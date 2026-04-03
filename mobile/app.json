@@ -15,9 +15,13 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.keke.app",
-      "googleServicesFile": "./GoogleService-Info.plist"
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "NSContactsUsageDescription": "We need access to your contacts to help you share rides with friends."
+      }
     },
     "android": {
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -27,7 +31,8 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.READ_CONTACTS"
       ],
       "package": "com.keke.app",
       "config": {
@@ -48,6 +53,12 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location."
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow $(PRODUCT_NAME) to access your contacts to invite friends."
         }
       ],
       [
@@ -78,14 +89,14 @@
       "router": {
         "origin": false
       },
-      "eas": {
-        "projectId": "a56f26dd-0141-4e5f-b2ee-842ea9c84956"
-      },
-      "apiUrl": "http://10.0.2.2:8000",
+      "apiUrl": "https://2d7e-135-129-124-54.ngrok-free.app",
       "googleMapsApiKey": "",
       "googleClientId": "YOUR_GOOGLE_CLIENT_ID_HERE",
-      "pusherKey": "",
-      "pusherCluster": "mt1"
+      "pusherKey": "1c30639ede328b1be2fc",
+      "pusherCluster": "eu",
+      "eas": {
+        "projectId": "30082c2b-41a8-455d-86d3-984b6d259cd6"
+      }
     }
   }
 }

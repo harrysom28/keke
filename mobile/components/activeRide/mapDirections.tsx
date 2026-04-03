@@ -1,12 +1,32 @@
 import React from "react";
 import Svg, { Defs, G, Path, Rect } from "react-native-svg";
-import { View } from "react-native";
+import { View, Text } from "react-native";
 
 import { Marker } from "react-native-maps";
 import tw from "@/lib/tailwind";
 import CustomMapDirections from "./CustomMapDirections";
 
-export default function MapDirections({ check, origin, destination }) {
+interface MapDirectionsProps {
+  check: boolean;
+  origin: { latitude: number; longitude: number };
+  destination: { latitude: number; longitude: number };
+  onReady?: (result: {
+    coordinates: Array<{ latitude: number; longitude: number }>;
+    distance?: number;
+    duration?: number;
+  }) => void;
+  /** Duration in seconds – shown at origin (e.g. "8 min"), no label */
+  durationSeconds?: number | null;
+  /** Arrival time – shown at destination (e.g. "14:58"), no label */
+  arriveBy?: string | null;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return "< 1 min";
+  return `${Math.round(seconds / 60)} min`;
+}
+
+export default function MapDirections({ check, origin, destination, onReady, durationSeconds, arriveBy }: MapDirectionsProps) {
   // Additional validation: ensure coordinates are valid
   const isValid = check && 
     origin?.latitude && origin?.longitude && 
@@ -25,7 +45,8 @@ export default function MapDirections({ check, origin, destination }) {
             tracksViewChanges={false}
             anchor={{ x: 0.5, y: 0.5 }}
           >
-            <Svg width={35} height={34} viewBox="0 0 28 25" fill="none">
+            <View style={tw`items-center`}>
+              <Svg width={35} height={34} viewBox="0 0 28 25" fill="none">
               <G filter="url(#filter0_f_459_8082)">
                 <Rect
                   x={14.5859}
@@ -60,12 +81,21 @@ export default function MapDirections({ check, origin, destination }) {
               />
               <Defs></Defs>
             </Svg>
+              {durationSeconds != null && (
+                <View style={tw`mt-1 bg-white rounded-lg px-2 py-1 shadow-sm border border-gray-200 min-w-[52px] items-center`}>
+                  <Text style={tw.style("text-xs font-semibold text-gray-800", { fontFamily: "RobotoBold" })}>
+                    {formatDuration(durationSeconds)}
+                  </Text>
+                </View>
+              )}
+            </View>
           </Marker>
           <Marker 
             coordinate={destination}
             tracksViewChanges={false}
             anchor={{ x: 0.5, y: 0.5 }}
           >
+            <View style={tw`items-center`}>
             <Svg width={28} height={28} viewBox="0 0 25 24" fill="none">
               <G filter="url(#filter0_d_459_8086)">
                 <Path
@@ -90,13 +120,22 @@ export default function MapDirections({ check, origin, destination }) {
               />
               <Defs></Defs>
             </Svg>
+              {arriveBy != null && arriveBy !== "" && (
+                <View style={tw`mt-1 bg-base-green rounded-lg px-2 py-1 shadow-sm min-w-[52px] items-center`}>
+                  <Text style={tw.style("text-xs font-semibold text-white", { fontFamily: "RobotoBold" })}>
+                    {arriveBy}
+                  </Text>
+                </View>
+              )}
+            </View>
           </Marker>
           <CustomMapDirections
             origin={origin}
             destination={destination}
             strokeWidth={4}
-            strokeColor={tw.color("base-green") || "#00BFA5"}
+            strokeColor={tw.color("base-green") || "#16A34A"}
             mode="driving"
+            onReady={onReady}
           />
         </View>
       ) : null}

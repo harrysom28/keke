@@ -2,13 +2,15 @@ import {
   ActivityIndicator,
   BackHandler,
   Dimensions,
-  Pressable,
+  Modal,
+  Platform,
   ScrollView,
   Text,
   TextInput,
-  TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
+import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { Path, Svg } from "react-native-svg";
 import RNDateTimePicker, {
@@ -18,21 +20,24 @@ import React, { useCallback, useContext, useEffect, useMemo, useState } from "re
 
 import { AntDesign, MaterialCommunityIcons } from "@expo/vector-icons";
 import { AppContext } from "@/app/context";
-import { REQUEST_RIDE, VEHICLE_TYPES } from "@/constants";
-import axios from "axios";
-import { setAppData, AppDetailsState } from "@/store/AppSlice";
+import { REQUEST_RIDE } from "@/constants";
+import apiClient from "@/utils/apiClient";
+import { setAppData, setRideData, AppDetailsState } from "@/store/AppSlice";
 import { getErrorMessage } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
-import { geocodeAddress, reverseGeocode } from "@/utils/mapsApi";
+import { geocodeAddress, resolvePickupLabel, reverseGeocode } from "@/utils/mapsApi";
 import tw from "@/lib/tailwind";
 import { useDispatch, useSelector } from "react-redux";
 import { useFocusEffect } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
+import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
   getActiveBooking: () => void;
+  openVersion: number;
 }
 
 type ModeType = "date" | "time" | "datetime" | "countdown";
@@ -68,24 +73,147 @@ const calculateFare = (distanceKm: number, vehicleType: string): number => {
   return Math.round(total);
 };
 
-const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
+const RIDER_SERVICE_CHARGE = 100;
+
+const getFareBreakdown = (distanceKm: number, vehicleType: string) => {
+  const baseFare = 200;
+  const perKmRate: { [key: string]: number } = {
+    Keke: 50,
+    Okada: 40,
+    Taxi: 80,
+    Bike: 40,
+    Car: 80,
+  };
+
+  const rate = perKmRate[vehicleType] || 50;
+  const rideFare = Math.round(baseFare + distanceKm * rate);
+  const serviceCharge = RIDER_SERVICE_CHARGE;
+  const totalFare = rideFare + serviceCharge;
+
+  return {
+    rideFare,
+    serviceCharge,
+    totalFare,
+    distanceKm,
+    rate,
+  };
+};
+
+const MIN_SCHEDULE_LEAD_MINUTES = 60;
+
+const getMinimumScheduledDateTime = (now = new Date()) => {
+  const minDate = new Date(now.getTime() + MIN_SCHEDULE_LEAD_MINUTES * 60 * 1000);
+  minDate.setSeconds(0, 0);
+  const roundedMinutes = Math.ceil(minDate.getMinutes() / 5) * 5;
+  minDate.setMinutes(roundedMinutes, 0, 0);
+  return minDate;
+};
+
+const getScheduleSelectionFromDate = (date: Date, now = new Date()) => {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(date);
+  target.setHours(0, 0, 0, 0);
+
+  const dayOffset = Math.max(
+    0,
+    Math.round((target.getTime() - today.getTime()) / (24 * 60 * 60 * 1000))
+  );
+
+  return {
+    dayOffset,
+    time: new Date(date),
+  };
+};
+
+/** API responses vary: use every common label field so UI never shows blank tiles. */
+const getVehicleDisplayName = (vehicle: any): string => {
+  const raw =
+    vehicle?.name ??
+    vehicle?.displayName ??
+    vehicle?.display_name ??
+    vehicle?.vehicle_type ??
+    vehicle?.type ??
+    "";
+  const s = typeof raw === "string" ? raw.trim() : "";
+  return s || "Vehicle";
+};
+
+const getVehicleLabelBlob = (vehicle: any) =>
+  [
+    vehicle?.name,
+    vehicle?.displayName,
+    vehicle?.display_name,
+    vehicle?.vehicle_type,
+    vehicle?.type,
+  ]
+    .filter((x) => x != null && String(x).trim() !== "")
+    .join(" ")
+    .toLowerCase();
+
+/** Prefer keke/bike/taxi-style types; if filtering removes everything, caller should fall back to full list. */
+const vehicleMatchesScheduleFilter = (vehicle: any) => {
+  const blob = getVehicleLabelBlob(vehicle);
+  if (!blob) return true;
+  const keys = [
+    "keke",
+    "tricycle",
+    "bike",
+    "bicycle",
+    "okada",
+    "motor",
+    "taxi",
+    "cab",
+    "car",
+    "sedan",
+    "suv",
+  ];
+  return keys.some((k) => blob.includes(k));
+};
+
+const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props) => {
+  const { width: windowWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const dispatch = useDispatch();
   const { apiConfig } = useContext(AppContext);
   const { rideUtils } = useSelector(AppDetailsState);
   const { location } = useCurrentLocation({ isFocused: true });
+  const [selectedDate, setSelectedDate] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).dayOffset); // 0=Today, 1=Tomorrow, 2=day after...
+  const [selectedTime, setSelectedTime] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).time);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<ModeType>("date");
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
+  const [vehicleTypesLoading, setVehicleTypesLoading] = useState(true);
+  const [vehicleTypesError, setVehicleTypesError] = useState<string | null>(null);
   const [estimatedFare, setEstimatedFare] = useState<number | null>(null);
   const [pickupCoords, setPickupCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [cashPaymentEnabled, setCashPaymentEnabled] = useState(false); // Admin approval required
-  
-  // Calculate height similar to findRide.tsx
+
+  useEffect(() => {
+    if (openVersion === 0) return;
+    const nextSelection = getScheduleSelectionFromDate(getMinimumScheduledDateTime());
+    setSelectedDate(nextSelection.dayOffset);
+    setSelectedTime(nextSelection.time);
+    setShowTimePicker(false);
+  }, [openVersion]);
+
+  // Keep this sheet tall, but avoid forcing a near-fullscreen height on smaller content.
   const screenHeight = Dimensions.get('window').height;
-  const validHeight = Math.max(screenHeight * 0.95, 600); // Minimum 600px
-  const scrollViewHeight = validHeight - 200; // Subtract space for header and button
+  const validHeight = Math.min(Math.max(screenHeight * 0.85, 550), screenHeight * 0.95);
+
+  /** Percent widths collapse inside nested ScrollView + bottom sheet on iOS — use px widths. */
+  const vehicleGridLayout = useMemo(() => {
+    const SHEET_H_PAD = 40; // matches BottomSheet `px-5` (20 * 2)
+    const GAP = 6;
+    const COLS = 3;
+    const w = Math.max(windowWidth || 0, Dimensions.get("window").width || 375);
+    const rowW = Math.max(0, w - SHEET_H_PAD);
+    const tileW = Math.max(96, Math.floor((rowW - GAP * (COLS - 1)) / COLS));
+    return { rowW, tileW, GAP, COLS };
+  }, [windowWidth]);
   const [state, setState] = useState({
     pickup_location: "",
     dropoff_location: "",
@@ -153,6 +281,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
   };
 
   const handleBack = () => {
+    const nextSelection = getScheduleSelectionFromDate(getMinimumScheduledDateTime());
     setState({
       pickup_location: "",
       dropoff_location: "",
@@ -162,6 +291,8 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
       vehicle_type_id: "",
       vehicle_type_name: "",
     });
+    setSelectedDate(nextSelection.dayOffset);
+    setSelectedTime(nextSelection.time);
     setEstimatedFare(null);
     setPickupCoords(null);
     setDropoffCoords(null);
@@ -169,66 +300,106 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
     dispatch(setAppData({ isBooking: false }));
   };
 
-  // Fetch vehicle types on mount
-  useEffect(() => {
-    if (apiConfig) {
-      axios
-        .get(VEHICLE_TYPES, apiConfig)
-        .then(({ data }) => {
-          const types = data?.data?.vehicle_types || data?.data || [];
-          // Filter to only show keke, bike, and taxi
-          const allowedTypes = ['keke', 'bike', 'taxi'];
-          const filteredTypes = types.filter((vehicle: any) => {
-            const vehicleName = (vehicle.name || vehicle.displayName || "").toLowerCase();
-            return allowedTypes.some(allowed => vehicleName.includes(allowed.toLowerCase()));
-          });
-          setVehicleTypes(Array.isArray(filteredTypes) ? filteredTypes : []);
-          // Set default vehicle type if available
-          if (filteredTypes.length > 0 && !state.vehicle_type_id) {
-            const defaultType = filteredTypes[0];
-            // Vehicle objects use vehicle_id field, not _id or id
-            const defaultId = String(defaultType.vehicle_id || defaultType._id || defaultType.id || '');
-            const defaultName = defaultType.name || defaultType.displayName || defaultType.display_name || "";
-            console.log('🚗 Setting default vehicle type:', { defaultId, defaultName, defaultType });
-            if (defaultId && defaultId !== 'undefined') {
-              setState((prev) => ({ 
-                ...prev, 
-                vehicle_type_id: defaultId,
-                vehicle_type_name: defaultName
-              }));
-            }
+  // Fetch vehicle types on mount (use apiClient for correct base URL and timeout)
+  const fetchVehicleTypes = useCallback(() => {
+    setVehicleTypesLoading(true);
+    setVehicleTypesError(null);
+    apiClient
+      .get("vehicle/types", { timeout: 15000 })
+      .then(({ data }) => {
+        const types = data?.data?.vehicle_types ?? data?.data ?? [];
+        const list = Array.isArray(types) ? types : [];
+        const filteredTypes = list.filter((vehicle: any) => vehicleMatchesScheduleFilter(vehicle));
+        const toShow = filteredTypes.length > 0 ? filteredTypes : list;
+        setVehicleTypes(toShow);
+        setVehicleTypesError(null);
+        // Set default vehicle type if user hasn't selected one yet
+        if (toShow.length > 0) {
+          const defaultType = toShow[0];
+          const defaultId = String(defaultType.vehicle_id ?? defaultType._id ?? defaultType.id ?? "");
+          const defaultName = getVehicleDisplayName(defaultType);
+          if (defaultId && defaultId !== "undefined") {
+            setState((prev) =>
+              prev.vehicle_type_id ? prev : { ...prev, vehicle_type_id: defaultId, vehicle_type_name: defaultName }
+            );
           }
-        })
-        .catch((err) => {
-          console.log('Error fetching vehicle types:', err?.response?.data);
-        });
-    }
-  }, [apiConfig]);
-
-  // Set pickup location from user's current location - automatically use actual location
-  useEffect(() => {
-    if (location.latitude !== 0 && location.longitude !== 0) {
-      const accuracy = location.accuracy || 0;
-      const pickupAddress = rideUtils?.user_location?.name || rideUtils?.user_location?.formatted_address;
-      
-      // Always use current location as pickup, format with accuracy if available
-      let locationAddress = pickupAddress;
-      if (!locationAddress || locationAddress.includes('Current Location')) {
-        if (accuracy > 0) {
-          locationAddress = pickupAddress || `Current Location (${accuracy.toFixed(0)}m accuracy)`;
-        } else {
-          locationAddress = pickupAddress || `Current Location (${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)})`;
         }
-      }
-      
-      // Always update pickup location to current location
-      setState((prev) => ({ 
-        ...prev, 
-        pickup_location: locationAddress 
-      }));
+      })
+      .catch((err) => {
+        console.warn("Error fetching vehicle types:", err?.message ?? err?.response?.data);
+        setVehicleTypes([]);
+        setVehicleTypesError(err?.message ?? "Could not load vehicle types");
+      })
+      .finally(() => {
+        setVehicleTypesLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    fetchVehicleTypes();
+  }, [fetchVehicleTypes]);
+
+  // Set pickup location from user's current location - use backend resolver for a readable name
+  useEffect(() => {
+    if (!location || location.latitude === 0 || location.longitude === 0) return;
+
+    const pickupAddress = rideUtils?.user_location?.name || rideUtils?.user_location?.formatted_address;
+    if (typeof pickupAddress === 'string' && pickupAddress.trim() && pickupAddress.trim().toLowerCase() !== 'location' && !pickupAddress.includes("Current Location")) {
+      setState((prev) => ({ ...prev, pickup_location: pickupAddress }));
       setPickupCoords({ lat: location.latitude, lng: location.longitude });
+      return;
     }
+
+    setPickupCoords({ lat: location.latitude, lng: location.longitude });
+    setState((prev) => ({ ...prev, pickup_location: "Current location" }));
+
+    resolvePickupLabel(location.latitude, location.longitude)
+      .then((address) => {
+        if (address && typeof address === 'string' && address.trim().toLowerCase() !== 'location') {
+          setState((prev) => ({ ...prev, pickup_location: address }));
+        }
+      })
+      .catch(() => {});
   }, [location, rideUtils]);
+
+  // Sync pickup/dropoff to Redux so home map recenters and shows route when Schedule sheet is open
+  useEffect(() => {
+    const hasValidPickup =
+      pickupCoords &&
+      typeof pickupCoords.lat === 'number' &&
+      typeof pickupCoords.lng === 'number' &&
+      pickupCoords.lat !== 0 &&
+      pickupCoords.lng !== 0;
+
+    const hasValidDropoff =
+      dropoffCoords &&
+      typeof dropoffCoords.lat === 'number' &&
+      typeof dropoffCoords.lng === 'number' &&
+      dropoffCoords.lat !== 0 &&
+      dropoffCoords.lng !== 0;
+
+    if (!hasValidPickup) {
+      dispatch(setRideData({ origin: {}, destination: {} } as any));
+      return;
+    }
+
+    dispatch(
+      setRideData({
+        origin: {
+          lat: String(pickupCoords!.lat),
+          long: String(pickupCoords!.lng),
+          name: state.pickup_location || 'Pickup',
+        },
+        destination: hasValidDropoff
+          ? {
+              lat: String(dropoffCoords!.lat),
+              long: String(dropoffCoords!.lng),
+              name: state.dropoff_location || 'Drop-off',
+            }
+          : { lat: '', long: '', name: '' },
+      } as any)
+    );
+  }, [pickupCoords?.lat, pickupCoords?.lng, dropoffCoords?.lat, dropoffCoords?.lng, state.pickup_location, state.dropoff_location, dispatch]);
 
   // Calculate fare when locations and vehicle type change
   useEffect(() => {
@@ -265,8 +436,8 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
     }, [])
   );
 
-  const handleUseCurrentLocation = () => {
-    if (location.latitude === 0 || location.longitude === 0) {
+  const handleUseCurrentLocation = async () => {
+    if (!location || location.latitude === 0 || location.longitude === 0) {
       safeShowMessage({
         type: "warning",
         message: "Location not available. Please wait or search for a location.",
@@ -282,22 +453,26 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
       });
     }
 
-    const pickupAddress = rideUtils?.user_location?.name || rideUtils?.user_location?.formatted_address;
-    const locationAddress = pickupAddress || `Current Location (${accuracy.toFixed(0)}m accuracy)`;
-
-    setState((prev) => ({ ...prev, pickup_location: locationAddress }));
     setPickupCoords({ lat: location.latitude, lng: location.longitude });
+    setState((prev) => ({ ...prev, pickup_location: "Current location" }));
+
+    try {
+      const address = await resolvePickupLabel(location.latitude, location.longitude);
+      if (address && typeof address === 'string' && address.trim().toLowerCase() !== 'location') {
+        setState((prev) => ({ ...prev, pickup_location: address }));
+      }
+    } catch (_) {}
 
     safeShowMessage({
       type: accuracy < 20 ? "success" : "info",
-      message: `Using current location (${accuracy.toFixed(0)}m accuracy)`,
+      message: "Using current location",
     });
   };
 
   const handleVehicleTypeSelect = (vehicle: any) => {
     // Vehicle objects use vehicle_id field, not _id or id
     const vehicleId = String(vehicle.vehicle_id || vehicle._id || vehicle.id || '');
-    const vehicleName = vehicle.name || vehicle.displayName || vehicle.display_name || "";
+    const vehicleName = getVehicleDisplayName(vehicle);
     console.log('🚗 Vehicle selected:', { vehicleId, vehicleName, vehicle });
     setState((prev) => ({
       ...prev,
@@ -305,6 +480,86 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
       vehicle_type_name: vehicleName,
     }));
   };
+
+  const buildScheduledDateTime = (): Date => {
+    const base = new Date();
+    base.setDate(base.getDate() + selectedDate);
+    base.setHours(selectedTime.getHours());
+    base.setMinutes(selectedTime.getMinutes());
+    base.setSeconds(0);
+    base.setMilliseconds(0);
+    return base;
+  };
+
+  const ensureValidScheduleSelection = useCallback(
+    (dayOffset: number, timeValue: Date, notify = false) => {
+      const candidate = new Date();
+      candidate.setDate(candidate.getDate() + dayOffset);
+      candidate.setHours(timeValue.getHours(), timeValue.getMinutes(), 0, 0);
+
+      const minimum = getMinimumScheduledDateTime();
+      if (candidate >= minimum) {
+        return {
+          dayOffset,
+          time: timeValue,
+          adjusted: false,
+        };
+      }
+
+      const fallback = getScheduleSelectionFromDate(minimum);
+      if (notify) {
+        safeShowMessage({
+          type: "info",
+          message: "Scheduled rides must be at least 1 hour ahead",
+        });
+      }
+
+      return {
+        dayOffset: fallback.dayOffset,
+        time: fallback.time,
+        adjusted: true,
+      };
+    },
+    []
+  );
+
+  const handleSelectedDateChange = useCallback(
+    (dayOffset: number) => {
+      const next = ensureValidScheduleSelection(dayOffset, selectedTime, dayOffset === 0);
+      setSelectedDate(next.dayOffset);
+      setSelectedTime(next.time);
+    },
+    [ensureValidScheduleSelection, selectedTime]
+  );
+
+  const handleSelectedTimeChange = useCallback(
+    (timeValue: Date, notify = false) => {
+      const next = ensureValidScheduleSelection(selectedDate, timeValue, notify);
+      setSelectedDate(next.dayOffset);
+      setSelectedTime(next.time);
+    },
+    [ensureValidScheduleSelection, selectedDate]
+  );
+
+  const fareSummary = useMemo(() => {
+    if (!pickupCoords || !dropoffCoords || !state.vehicle_type_name) return null;
+
+    const distanceKm = calculateDistance(
+      pickupCoords.lat,
+      pickupCoords.lng,
+      dropoffCoords.lat,
+      dropoffCoords.lng
+    );
+
+    return getFareBreakdown(distanceKm, state.vehicle_type_name);
+  }, [pickupCoords, dropoffCoords, state.vehicle_type_name]);
+
+  const canShowFinanceSummary = Boolean(
+    state.pickup_location &&
+      state.dropoff_location &&
+      state.vehicle_type_id &&
+      fareSummary
+  );
 
   const handleSubmit = async () => {
     if (!state.pickup_location || !state.dropoff_location) {
@@ -315,13 +570,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
       return;
     }
 
-    if (!state.booking_date || !state.booking_time) {
-      safeShowMessage({
-        type: "danger",
-        message: "Please select both date and time for your scheduled pickup",
-      });
-      return;
-    }
+    // Date/time come from selectedDate and selectedTime (chips + picker); validated below when building scheduled datetime
 
     if (!state.payment_type) {
       safeShowMessage({
@@ -354,7 +603,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
       if (pickupCoords && pickupCoords.lat && pickupCoords.lng) {
         // Use stored coordinates (current location)
         pickupLocation = { lat: pickupCoords.lat, lng: pickupCoords.lng };
-        pickupAddress = state.pickup_location || rideUtils?.user_location?.formatted_address || `Current Location (${pickupCoords.lat}, ${pickupCoords.lng})`;
+        pickupAddress = state.pickup_location || rideUtils?.user_location?.formatted_address || "Current location";
         pickupName = rideUtils?.user_location?.name || pickupAddress.split(',')[0];
       } else {
         // Geocode pickup address
@@ -394,15 +643,15 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
         dropoffName = dropoffAddress.split(',')[0];
       }
 
-      // Combine date and time into ISO string for scheduledAt
-      const [year, month, day] = state.booking_date.split('-').map(Number);
-      const [hours, minutes, seconds] = state.booking_time.split(':').map(Number);
-      const scheduledDateTime = new Date(year, month - 1, day, hours, minutes, seconds || 0);
-      
-      if (scheduledDateTime < new Date()) {
+      const scheduledDateTime = buildScheduledDateTime();
+      const minimumScheduledDateTime = getMinimumScheduledDateTime();
+      if (scheduledDateTime < minimumScheduledDateTime) {
+        const nextSelection = getScheduleSelectionFromDate(minimumScheduledDateTime);
+        setSelectedDate(nextSelection.dayOffset);
+        setSelectedTime(nextSelection.time);
         safeShowMessage({
           type: "danger",
-          message: "Scheduled time must be in the future",
+          message: "Scheduled time must be at least 1 hour from now",
         });
         setLoading(false);
         return;
@@ -417,7 +666,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
       };
       const paymentMethod = paymentMethodMap[state.payment_type] || 'wallet';
 
-      // Prepare request data
+      // Prepare request data (scheduledFor for payload shape; backend accepts scheduledAt)
       const requestData = {
         pickupLocation: {
           lat: pickupLocation.lat,
@@ -433,44 +682,32 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
         },
         vehicleTypeId: state.vehicle_type_id,
         paymentMethod: paymentMethod,
+        scheduledFor: scheduledDateTime.toISOString(),
         scheduledAt: scheduledDateTime.toISOString(),
       };
 
       console.log('📤 Scheduling ride:', requestData);
 
-      axios
-        .post(REQUEST_RIDE, requestData, apiConfig)
-        .then(({ data }) => {
-          getActiveBooking();
-          safeShowMessage({
-            type: "success",
-            message: data?.message || "Ride scheduled successfully",
-          });
-          handleBack();
-        })
-        .catch((err) => {
-          console.log('Schedule ride error:', err?.response?.data);
-          const status = err?.response?.status || err?.status;
-          
-          if (status === 401) {
-            console.log('Authentication error (401) - token refresh should handle this');
-            return;
-          }
-          
-          const errorMessage = getErrorMessage(err);
-          safeShowMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        })
-        .finally(() => setLoading(false));
+      const { data } = await apiClient.post(REQUEST_RIDE, requestData);
+      getActiveBooking();
+      safeShowMessage({
+        type: "success",
+        message: data?.message || "Ride scheduled successfully",
+      });
+      handleBack();
     } catch (error: any) {
-      console.log('Geocoding error:', error);
+      const isGeocodeError = error?.message?.includes('axios') || !error?.response;
+      if (isGeocodeError) {
+        console.log('Geocoding error:', error);
+      } else {
+        console.log('Schedule ride error:', error?.response?.data);
+      }
       const errorMessage = getErrorMessage(error);
       safeShowMessage({
         type: "danger",
         message: errorMessage || "Failed to process locations. Please try again.",
       });
+    } finally {
       setLoading(false);
     }
   };
@@ -478,17 +715,52 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
   // Get vehicle icon based on type
   const getVehicleIcon = (vehicleType: string) => {
     const type = vehicleType.toLowerCase();
+    const iconSize = 26; // ~20% smaller than before for reduced card size
     if (type.includes('keke') || type.includes('tricycle')) {
-      return <MaterialCommunityIcons name="rickshaw" size={32} color="#3C8F7C" />;
+      return <MaterialCommunityIcons name="rickshaw" size={iconSize} color="#3C8F7C" />;
     } else if (type.includes('okada') || type.includes('bike') || type.includes('motorcycle')) {
-      return <MaterialCommunityIcons name="motorbike" size={32} color="#3C8F7C" />;
+      return <MaterialCommunityIcons name="motorbike" size={iconSize} color="#3C8F7C" />;
     } else {
-      return <MaterialCommunityIcons name="car" size={32} color="#3C8F7C" />;
+      return <MaterialCommunityIcons name="car" size={iconSize} color="#3C8F7C" />;
     }
   };
 
   return (
     <>
+      <Modal
+        visible={show}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShow(false)}
+      >
+        <Pressable
+          style={tw.style("flex-1 justify-end bg-black/50")}
+          onPress={() => setShow(false)}
+        >
+          <Pressable
+            style={tw.style("bg-white rounded-t-2xl pt-2 pb-6 px-4")}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <RNDateTimePicker
+              value={
+                mode === "date" && state.booking_date
+                  ? new Date(state.booking_date + "T00:00:00")
+                  : mode === "time" && state.booking_time
+                  ? new Date(
+                      (state.booking_date || new Date().toISOString().split("T")[0]) +
+                        "T" +
+                        state.booking_time
+                    )
+                  : new Date()
+              }
+              minimumDate={new Date()}
+              mode={mode}
+              onChange={onChange}
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
       <BottomSheet
         height={validHeight}
         ref={bottomSheetRef}
@@ -496,85 +768,238 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
         backdropMaskColor="#19191900"
         openDuration={1000}
         closeDuration={1000}
-        disableKeyboardHandling={true}
-        style={tw.style(`px-5 py-4 rounded-t-[32px] bg-white`, {
-          position: 'relative',
-        })}
+        disableKeyboardHandling={false}
+        disableBodyPanning={Platform.OS === "android"}
+        style={tw.style(`px-5 py-4 rounded-t-[32px] bg-white`)}
         closeOnDragDown={false}
       >
-        {show && (
-          <RNDateTimePicker
-            value={
-              mode === "date" && state.booking_date
-                ? new Date(state.booking_date + "T00:00:00")
-                : mode === "time" && state.booking_time
-                ? new Date(
-                    (state.booking_date || new Date().toISOString().split("T")[0]) +
-                      "T" +
-                      state.booking_time
-                  )
-                : new Date()
-            }
-            minimumDate={new Date()}
-            mode={mode}
-            onChange={onChange}
-          />
-        )}
-        <View style={tw.style(`flex-1`, {
-          minHeight: validHeight * 0.8,
-        })}>
+        <View
+          style={{
+            flex: 1,
+            minHeight: Math.min(validHeight - 48, screenHeight * 0.9),
+          }}
+        >
           {/* Header */}
-          <View style={tw`flex-row items-center justify-center mb-4`}>
-            <MaterialCommunityIcons name="calendar-clock" size={24} color="#242E42" style={tw`mr-2`} />
+          <View style={tw`flex-row items-center justify-between mb-2`}>
+            <View style={tw`w-[28px]`} />
+            <View style={tw`flex-row items-center flex-1 justify-center px-2`}>
+              <MaterialCommunityIcons name="calendar-clock" size={20} color="#242E42" style={tw`mr-1.5`} />
             <Text
-              style={tw.style(`text-2xl text-[#242E42]`, {
+              style={tw.style(`text-[22px] text-[#242E42]`, {
                 fontFamily: "RobotoBold",
               })}
             >
-              Schedule a Ride
+              Schedule a ride for later
             </Text>
+            </View>
             <TouchableOpacity
               onPress={handleBack}
-              style={tw`absolute right-0 h-[32px] w-[32px] items-center justify-center`}
+              style={tw`h-[32px] w-[32px] items-center justify-center`}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <AntDesign name="close" size={20} color="#242E42" />
+              <AntDesign name="close" size={17} color="#242E42" />
             </TouchableOpacity>
           </View>
 
-          <ScrollView 
-            style={tw.style(`flex-1`, {
-              height: scrollViewHeight,
-            })}
-            contentContainerStyle={tw.style(`pb-6`, {
-              flexGrow: 1,
-            })}
-            showsVerticalScrollIndicator={false}
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              paddingBottom: Math.max(insets.bottom + 12, 20),
+            }}
             keyboardShouldPersistTaps="handled"
-            nestedScrollEnabled={true}
-            scrollEnabled={true}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled
           >
+            {/* Date + time */}
+            <ScrollView
+                  horizontal
+                  nestedScrollEnabled
+                  directionalLockEnabled
+                  keyboardShouldPersistTaps="handled"
+                  showsHorizontalScrollIndicator
+                  style={[tw`mb-2`, { width: "100%", minHeight: 44 }]}
+                  contentContainerStyle={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    paddingVertical: 2,
+                    paddingLeft: 2,
+                    paddingRight: 24,
+                    minHeight: 44,
+                  }}
+                  bounces={false}
+                  overScrollMode="never"
+                >
+                  {[0, 1, 2, 3, 4, 5, 6].map((dayOffset) => {
+                    const d = new Date();
+                    d.setDate(d.getDate() + dayOffset);
+                    const label =
+                      dayOffset === 0
+                        ? 'Today'
+                        : dayOffset === 1
+                          ? 'Tomorrow'
+                          : d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' });
+                    const isActive = selectedDate === dayOffset;
+                    return (
+                      <TouchableOpacity
+                        key={dayOffset}
+                        onPress={() => handleSelectedDateChange(dayOffset)}
+                        style={[
+                          {
+                            flexShrink: 0,
+                            paddingHorizontal: 14,
+                            paddingVertical: 7,
+                            borderRadius: 20,
+                            backgroundColor: isActive ? '#2E7D52' : '#F5F5F5',
+                            marginRight: 8,
+                          },
+                        ]}
+                      >
+                        <Text style={{ fontSize: 13, color: isActive ? '#fff' : '#242E42' }}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+                {/* Time: tap to open picker; picker closes on Done */}
+                <TouchableOpacity
+                  onPress={() => setShowTimePicker(true)}
+                  activeOpacity={0.7}
+                  style={[
+                    tw`flex-row items-center justify-between rounded-[10px] mb-2`,
+                    { paddingVertical: 11, paddingHorizontal: 14, backgroundColor: '#F5F5F5' },
+                  ]}
+                >
+                  <Text style={tw.style(`text-[15px] text-[#242E42]`, { fontFamily: 'RobotoMedium' })}>
+                    {selectedTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
+                  </Text>
+                  <MaterialCommunityIcons name="clock-outline" size={20} color="#2E7D52" />
+                </TouchableOpacity>
+                <Modal
+                  visible={showTimePicker}
+                  transparent
+                  animationType="fade"
+                  onRequestClose={() => setShowTimePicker(false)}
+                >
+                  <Pressable
+                    style={[tw`flex-1 justify-end bg-black/50`, { paddingBottom: Math.max(insets.bottom, 8) }]}
+                    onPress={() => setShowTimePicker(false)}
+                  >
+                    <Pressable
+                      style={tw`bg-white rounded-t-2xl pt-4 pb-8 px-4`}
+                      onPress={(e) => e.stopPropagation()}
+                    >
+                      <View style={tw`flex-row items-center justify-between mb-2`}>
+                        <Text style={tw.style(`text-lg text-[#242E42]`, { fontFamily: 'RobotoBold' })}>
+                          Select time
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setShowTimePicker(false)}
+                          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                          style={[tw`py-2 px-3`, { backgroundColor: '#2E7D52', borderRadius: 8 }]}
+                        >
+                          <Text style={tw.style(`text-base text-white`, { fontFamily: 'RobotoBold' })}>
+                            Done
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                      <RNDateTimePicker
+                        value={selectedTime}
+                        mode="time"
+                        display="spinner"
+                        onChange={(_, date) => date != null && handleSelectedTimeChange(date, true)}
+                        style={{ height: 120 }}
+                      />
+                    </Pressable>
+                  </Pressable>
+                </Modal>
+                <ScrollView
+                  horizontal
+                  nestedScrollEnabled
+                  directionalLockEnabled
+                  keyboardShouldPersistTaps="handled"
+                  showsHorizontalScrollIndicator
+                  style={{ width: "100%", minHeight: 44 }}
+                  contentContainerStyle={{
+                    marginBottom: 12,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    paddingLeft: 2,
+                    paddingRight: 24,
+                    minHeight: 44,
+                  }}
+                  bounces={false}
+                  overScrollMode="never"
+                >
+                  {[
+                    { label: 'Morning  6:30am', h: 6, m: 30 },
+                    { label: 'Afternoon  3:00pm', h: 15, m: 0 },
+                    { label: 'Evening  6:00pm', h: 18, m: 0 },
+                  ].map((preset) => {
+                    const isActive =
+                      selectedTime.getHours() === preset.h && selectedTime.getMinutes() === preset.m;
+                    return (
+                      <TouchableOpacity
+                        key={preset.label}
+                        onPress={() => {
+                          const d = new Date(selectedTime);
+                          d.setHours(preset.h, preset.m, 0, 0);
+                          handleSelectedTimeChange(d, true);
+                        }}
+                        style={[
+                          {
+                            flexShrink: 0,
+                            paddingHorizontal: 14,
+                            paddingVertical: 7,
+                            borderRadius: 20,
+                            backgroundColor: isActive ? '#2E7D52' : '#E8F5E9',
+                            marginRight: 8,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 13,
+                            flexShrink: 0,
+                            color: isActive ? '#fff' : '#2E7D52',
+                          }}
+                        >
+                          {preset.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
             {/* Pickup Location Card - Same as Find a Ride */}
-            <View style={tw`bg-[#F5F5F5] rounded-[12px] p-4 mb-3`}>
-              <View style={tw`flex-row justify-between items-center mb-2`}>
-                <Text style={tw.style(`text-[13px] text-[#C8C7CC] uppercase`, { fontFamily: "RobotoRegular" })}>
+            <View style={tw`bg-[#F5F5F5] rounded-[10px] p-2.5 mb-2`}>
+              <View style={tw`flex-row justify-between items-center mb-1.5`}>
+                <Text style={tw.style(`text-[11px] text-[#C8C7CC] uppercase`, { fontFamily: "RobotoRegular" })}>
                   Pickup
                 </Text>
-                {location.latitude !== 0 && (
+                {location != null && location.latitude !== 0 && location.longitude !== 0 && (
                   <TouchableOpacity
                     onPress={handleUseCurrentLocation}
-                    style={tw`flex-row items-center gap-x-1 bg-[#3C8F7C] px-2.5 py-1 rounded-full`}
+                    style={tw`flex-row items-center gap-x-0.5 bg-[#3C8F7C] px-2 py-0.5 rounded-full`}
                   >
-                    <MaterialCommunityIcons name="crosshairs-gps" size={12} color="white" />
-                    <Text style={tw.style(`text-[10px] text-white`, { fontFamily: "RobotoMedium" })}>
+                    <MaterialCommunityIcons name="crosshairs-gps" size={10} color="white" />
+                    <Text style={tw.style(`text-[9px] text-white`, { fontFamily: "RobotoMedium" })}>
                       Use Current
                     </Text>
                   </TouchableOpacity>
                 )}
               </View>
-              <View style={tw`pr-2`}>
+              <View style={tw`pr-1.5`}>
                 <CustomPlacesAutocomplete
                   placeholder="Enter pick up location"
-                  initialValue={state.pickup_location}
+                  initialValue={(() => {
+                    const raw = state.pickup_location;
+                    if (typeof raw !== 'string') return '';
+                    if (raw.trim().toLowerCase() === 'location') {
+                      return (location != null && location.latitude !== 0 && location.longitude !== 0) ? 'Current location' : '';
+                    }
+                    return formatAddressForDisplay(raw).full || raw;
+                  })()}
+                  userLat={location?.latitude != null && location?.longitude != null ? location.latitude : 6.3249}
+                  userLng={location?.latitude != null && location?.longitude != null ? location.longitude : 8.1137}
                   showClearButton={false}
                   onPlaceSelected={(place) => {
                     const locationData = {
@@ -589,22 +1014,24 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
                     setPickupCoords({ lat: place.lat, lng: place.long });
                   }}
                   onClear={() => {
-                    // When cleared, reset to current location
-                    if (location.latitude !== 0 && location.longitude !== 0) {
-                      const accuracy = location.accuracy || 0;
-                      const pickupAddress = rideUtils?.user_location?.name || rideUtils?.user_location?.formatted_address;
-                      const locationAddress = pickupAddress || (accuracy > 0 
-                        ? `Current Location (${accuracy.toFixed(0)}m accuracy)` 
-                        : `Current Location (${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)})`);
-                      setState((prev) => ({ ...prev, pickup_location: locationAddress }));
+                    if (location != null && location.latitude !== 0 && location.longitude !== 0) {
                       setPickupCoords({ lat: location.latitude, lng: location.longitude });
+                      setState((prev) => ({ ...prev, pickup_location: "Current location" }));
+                      reverseGeocode(location.latitude, location.longitude)
+                        .then((res) => {
+                          const address = res?.results?.[0]?.formatted_address;
+                          if (address) {
+                            setState((prev) => ({ ...prev, pickup_location: address }));
+                          }
+                        })
+                        .catch(() => {});
                     } else {
                       setState((prev) => ({ ...prev, pickup_location: "" }));
                       setPickupCoords(null);
                     }
                   }}
                   styles={{
-                    textInput: tw.style(`text-[15px] text-[#242E42]`, {
+                    textInput: tw.style(`text-[13px] text-[#242E42]`, {
                       fontFamily: "RobotoRegular",
                       borderWidth: 0,
                       backgroundColor: "transparent",
@@ -617,14 +1044,16 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
             </View>
 
             {/* Destination Location Card - Same as Find a Ride */}
-            <View style={tw`bg-[#F5F5F5] rounded-[12px] p-4 mb-3`}>
-              <Text style={tw.style(`text-[13px] text-[#C8C7CC] uppercase mb-2`, { fontFamily: "RobotoRegular" })}>
+            <View style={tw`bg-[#F5F5F5] rounded-[10px] p-2.5 mb-2`}>
+              <Text style={tw.style(`text-[11px] text-[#C8C7CC] uppercase mb-1.5`, { fontFamily: "RobotoRegular" })}>
                 Drop-off
               </Text>
-              <View style={tw`pr-2`}>
+              <View style={tw`pr-1.5`}>
                 <CustomPlacesAutocomplete
                   placeholder="Enter drop-off location"
-                  initialValue={state.dropoff_location}
+                  initialValue={formatAddressForDisplay(state.dropoff_location).full || state.dropoff_location}
+                  userLat={location?.latitude != null && location?.longitude != null ? location.latitude : 6.3249}
+                  userLng={location?.latitude != null && location?.longitude != null ? location.longitude : 8.1137}
                   showClearButton={false}
                   onPlaceSelected={(place) => {
                     const locationData = {
@@ -643,7 +1072,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
                     setDropoffCoords(null);
                   }}
                   styles={{
-                    textInput: tw.style(`text-[15px] text-[#242E42]`, {
+                    textInput: tw.style(`text-[13px] text-[#242E42]`, {
                       fontFamily: "RobotoRegular",
                       borderWidth: 0,
                       backgroundColor: "transparent",
@@ -655,80 +1084,68 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
               </View>
             </View>
 
-            {/* Date and Time Cards - Side by Side */}
-            <View style={tw`flex-row gap-x-3 mb-4`}>
-              <TouchableOpacity
-                onPress={() => showPicker("date")}
-                style={tw`flex-1 bg-[#F5F5F5] rounded-[12px] p-4`}
-              >
-                <View style={tw`flex-row items-center mb-2`}>
-                  <MaterialCommunityIcons name="calendar" size={18} color="#3C8F7C" style={tw`mr-2`} />
-                  <Text style={tw.style(`text-sm text-[#666]`, { fontFamily: "RobotoMedium" })}>
-                    Date
-                  </Text>
-                </View>
-                <Text style={tw.style(`text-base text-[#242E42]`, { fontFamily: "RobotoBold" })}>
-                  {state.booking_date ? formatDateDisplay(state.booking_date) : "Select Date"}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => showPicker("time")}
-                style={tw`flex-1 bg-[#F5F5F5] rounded-[12px] p-4`}
-              >
-                <View style={tw`flex-row items-center mb-2`}>
-                  <MaterialCommunityIcons name="clock-outline" size={18} color="#3C8F7C" style={tw`mr-2`} />
-                  <Text style={tw.style(`text-sm text-[#666]`, { fontFamily: "RobotoMedium" })}>
-                    Time
-                  </Text>
-                </View>
-                <Text style={tw.style(`text-base text-[#242E42]`, { fontFamily: "RobotoBold" })}>
-                  {state.booking_time ? formatTimeDisplay(state.booking_time) : "Select Time"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
             {/* Select Vehicle Type Section */}
-            <Text style={tw.style(`text-lg text-[#242E42] mb-3`, { fontFamily: "RobotoBold" })}>
+            <Text style={tw.style(`text-[15px] text-[#242E42] mb-2`, { fontFamily: "RobotoBold" })}>
               Select Vehicle Type
             </Text>
-            {vehicleTypes.length > 0 ? (
-              <View style={tw`flex-row flex-wrap mb-4`}>
+            {vehicleTypesLoading ? (
+              <View style={tw`items-center py-2.5 mb-2`}>
+                <ActivityIndicator size="small" color="#3C8F7C" />
+                <Text style={tw.style(`text-xs text-[#666] mt-1.5`, { fontFamily: "RobotoMedium" })}>
+                  Loading vehicle types...
+                </Text>
+              </View>
+            ) : vehicleTypes.length > 0 ? (
+              <View
+                style={{
+                  width: vehicleGridLayout.rowW,
+                  alignSelf: "stretch",
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  marginBottom: 8,
+                }}
+              >
                 {vehicleTypes.map((vehicle, index) => {
                   // Vehicle objects use vehicle_id field, not _id or id
                   const vehicleId = String(vehicle.vehicle_id || vehicle._id || vehicle.id || '');
                   const isSelected = String(state.vehicle_type_id) === vehicleId && vehicleId !== '' && vehicleId !== 'undefined';
-                  const vehicleName = vehicle.name || vehicle.displayName || vehicle.display_name || "";
+                  const vehicleName = getVehicleDisplayName(vehicle);
                   // Ensure unique key by always including index to prevent duplicates
                   const uniqueKey = vehicleId && vehicleId !== 'undefined' ? `vehicle-${vehicleId}-${index}` : `vehicle-${index}-${vehicleName}`;
-                  // 3 items per row with proper spacing
-                  const marginRight = (index + 1) % 3 !== 0 ? 8 : 0;
-                  const marginBottom = index < vehicleTypes.length - 3 ? 8 : 0;
+                  const { GAP, COLS } = vehicleGridLayout;
+                  const marginRight = (index + 1) % COLS !== 0 ? GAP : 0;
+                  const lastRowIndex = Math.floor((vehicleTypes.length - 1) / COLS);
+                  const rowIndex = Math.floor(index / COLS);
+                  const marginBottom = rowIndex < lastRowIndex ? GAP : 0;
                   return (
                     <TouchableOpacity
                       key={uniqueKey}
                       onPress={() => handleVehicleTypeSelect(vehicle)}
                       style={tw.style(
-                        `bg-[#F5F5F5] rounded-[12px] p-4 items-center justify-center relative`,
+                        `bg-[#F5F5F5] rounded-[10px] p-2.5 items-center justify-center relative`,
                         isSelected && `bg-[#E8F5E9] border-2 border-[#3C8F7C]`,
-                        { 
-                          width: '31%',
+                        {
+                          width: vehicleGridLayout.tileW,
+                          minHeight: 72,
                           marginRight,
-                          marginBottom
+                          marginBottom,
                         }
                       )}
                     >
                       {getVehicleIcon(vehicleName)}
-                      <Text style={tw.style(
-                        `text-sm mt-2`, 
-                        { fontFamily: "RobotoBold" },
-                        isSelected ? `text-[#3C8F7C]` : `text-[#242E42]`
-                      )}>
+                      <Text
+                        numberOfLines={2}
+                        style={tw.style(
+                          `text-xs mt-1 text-center px-0.5`,
+                          { fontFamily: "RobotoBold" },
+                          isSelected ? `text-[#3C8F7C]` : `text-[#242E42]`
+                        )}
+                      >
                         {vehicleName}
                       </Text>
                       {isSelected && (
-                        <View style={tw`absolute top-1 right-1`}>
-                          <MaterialCommunityIcons name="check-circle" size={20} color="#3C8F7C" />
+                        <View style={tw`absolute top-0.5 right-0.5`}>
+                          <MaterialCommunityIcons name="check-circle" size={16} color="#3C8F7C" />
                         </View>
                       )}
                     </TouchableOpacity>
@@ -736,28 +1153,80 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
                 })}
               </View>
             ) : (
-              <View style={tw`items-center py-4 mb-4`}>
-                <ActivityIndicator size="small" color="#3C8F7C" />
-                <Text style={tw.style(`text-sm text-[#666] mt-2`, { fontFamily: "RobotoMedium" })}>
-                  Loading vehicle types...
+              <View style={tw`items-center py-2.5 mb-2`}>
+                <Text style={tw.style(`text-xs text-[#666] mb-1.5`, { fontFamily: "RobotoMedium" })}>
+                  {vehicleTypesError ?? "No vehicle types available"}
+                </Text>
+                <TouchableOpacity
+                  onPress={fetchVehicleTypes}
+                  style={[tw`px-3 py-1.5 rounded-lg`, { backgroundColor: "#3C8F7C" }]}
+                >
+                  <Text style={tw.style(`text-xs text-white`, { fontFamily: "RobotoBold" })}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Price summary - show as soon as the trip is fully selected */}
+            {canShowFinanceSummary && fareSummary && (
+              <View style={tw`bg-[#F5F5F5] rounded-[10px] p-2.5 mb-2`}>
+                <View style={tw`flex-row items-center justify-between mb-1.5`}>
+                  <Text style={tw.style(`text-[15px] text-[#242E42]`, { fontFamily: "RobotoBold" })}>
+                    Price Summary
+                  </Text>
+                  <Text style={tw.style(`text-[18px] text-[#3C8F7C]`, { fontFamily: "RobotoBold" })}>
+                    ₦{fareSummary.totalFare.toLocaleString()}
+                  </Text>
+                </View>
+
+                <View style={tw`gap-y-2`}>
+                  <View style={tw`flex-row items-center justify-between`}>
+                    <Text style={tw.style(`text-sm text-[#666]`, { fontFamily: "RobotoRegular" })}>
+                      Price
+                    </Text>
+                    <Text style={tw.style(`text-sm text-[#242E42]`, { fontFamily: "RobotoMedium" })}>
+                      ₦{fareSummary.rideFare.toLocaleString()}
+                    </Text>
+                  </View>
+
+                  <View style={tw`flex-row items-center justify-between`}>
+                    <Text style={tw.style(`text-sm text-[#666]`, { fontFamily: "RobotoRegular" })}>
+                      Service charge
+                    </Text>
+                    <Text style={tw.style(`text-sm text-[#242E42]`, { fontFamily: "RobotoMedium" })}>
+                      ₦{fareSummary.serviceCharge.toLocaleString()}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={tw`mt-2 pt-2 border-t border-[#E3E3E3] flex-row items-center justify-between`}>
+                  <Text style={tw.style(`text-[15px] text-[#242E42]`, { fontFamily: "RobotoBold" })}>
+                    Total estimate
+                  </Text>
+                  <Text style={tw.style(`text-[17px] text-[#3C8F7C]`, { fontFamily: "RobotoBold" })}>
+                    ₦{fareSummary.totalFare.toLocaleString()}
+                  </Text>
+                </View>
+
+                <Text style={tw.style(`text-[10px] text-[#999] mt-2`, { fontFamily: "RobotoRegular" })}>
+                  Final total may adjust slightly based on route changes.
                 </Text>
               </View>
             )}
 
             {/* Payment Type Selection */}
-            <Text style={tw.style(`text-lg text-[#242E42] mb-3`, { fontFamily: "RobotoBold" })}>
+            <Text style={tw.style(`text-[15px] text-[#242E42] mb-2`, { fontFamily: "RobotoBold" })}>
               Payment Type
             </Text>
-            <View style={tw`flex-row gap-x-3 mb-4`}>
+            <View style={tw`flex-row gap-x-2 mb-2`}>
               <TouchableOpacity
                 onPress={() => setState((prev) => ({ ...prev, payment_type: "Wallet" }))}
                 style={tw.style(
-                  `flex-1 bg-[#F5F5F5] rounded-[12px] p-2 items-center justify-center`,
+                  `flex-1 bg-[#F5F5F5] rounded-[10px] p-1.5 items-center justify-center`,
                   state.payment_type === "Wallet" && `bg-[#E8F5E9] border-2 border-[#3C8F7C]`
                 )}
               >
-                <MaterialCommunityIcons name="wallet" size={16} color="#3C8F7C" />
-                <Text style={tw.style(`text-xs text-[#242E42] mt-1`, { fontFamily: "RobotoBold" })}>
+                <MaterialCommunityIcons name="wallet" size={13} color="#3C8F7C" />
+                <Text style={tw.style(`text-[10px] text-[#242E42] mt-0.5`, { fontFamily: "RobotoBold" })}>
                   Wallet
                 </Text>
               </TouchableOpacity>
@@ -774,70 +1243,62 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking }: Props) => {
                 }}
                 disabled={!cashPaymentEnabled}
                 style={tw.style(
-                  `flex-1 bg-[#F5F5F5] rounded-[12px] p-2 items-center justify-center`,
+                  `flex-1 bg-[#F5F5F5] rounded-[10px] p-1.5 items-center justify-center`,
                   state.payment_type === "Cash" && `bg-[#E8F5E9] border-2 border-[#3C8F7C]`,
                   !cashPaymentEnabled && `opacity-50`
                 )}
               >
-                <MaterialCommunityIcons name="cash" size={16} color={cashPaymentEnabled ? "#3C8F7C" : "#999"} />
+                <MaterialCommunityIcons name="cash" size={13} color={cashPaymentEnabled ? "#3C8F7C" : "#999"} />
                 <Text style={tw.style(
-                  `text-xs mt-1`, 
+                  `text-[10px] mt-0.5`, 
                   { fontFamily: "RobotoBold" },
                   cashPaymentEnabled ? `text-[#242E42]` : `text-[#999]`
                 )}>
                   Cash
                 </Text>
                 {!cashPaymentEnabled && (
-                  <Text style={tw.style(`text-[8px] text-[#999] mt-0.5`, { fontFamily: "RobotoRegular" })}>
+                  <Text style={tw.style(`text-[7px] text-[#999]`, { fontFamily: "RobotoRegular" })}>
                     Admin approval required
                   </Text>
                 )}
               </TouchableOpacity>
             </View>
 
-            {/* Sum Fee Display - Always show when vehicle type is selected */}
-            {state.vehicle_type_id && (
-              <View style={tw`bg-[#F5F5F5] rounded-[12px] p-4 mb-3`}>
-                <View style={tw`flex-row items-center justify-between`}>
-                  <Text style={tw.style(`text-base text-[#666]`, { fontFamily: "RobotoMedium" })}>
-                    Estimated Fare
-                  </Text>
-                  <Text style={tw.style(`text-2xl text-[#3C8F7C]`, { fontFamily: "RobotoBold" })}>
-                    {estimatedFare !== null && estimatedFare > 0 
-                      ? `₦${estimatedFare.toLocaleString()}` 
-                      : "₦---"}
-                  </Text>
-                </View>
-                {!dropoffCoords && (
-                  <Text style={tw.style(`text-xs text-[#999] mt-1`, { fontFamily: "RobotoRegular" })}>
-                    Enter destination to see fare estimate
-                  </Text>
-                )}
-              </View>
-            )}
           </ScrollView>
 
-          {/* Schedule Ride Button */}
-          <Pressable
-            onPress={handleSubmit}
-            disabled={loading}
-            style={tw.style(
-              `bg-[#3C8F7C] py-4 rounded-[12px] items-center justify-center mt-2`,
-              loading && `opacity-50`
-            )}
+          {/* Schedule Ride button - fixed footer so always visible (not pushed below fare breakdown) */}
+          <View
+            style={[
+              tw`px-0 bg-white`,
+              {
+                paddingTop: 6,
+                paddingBottom: Math.max(insets.bottom + 6, 12),
+                borderTopWidth: 1,
+                borderTopColor: '#F0F0F0',
+              },
+            ]}
           >
-            {loading ? (
-              <ActivityIndicator color="white" />
-            ) : (
-              <Text
-                style={tw.style(`text-lg text-white`, {
-                  fontFamily: "RobotoBold",
-                })}
-              >
-                Schedule Ride
-              </Text>
-            )}
-          </Pressable>
+            <Pressable
+              onPress={handleSubmit}
+              disabled={loading || !state.dropoff_location}
+              style={tw.style(
+                `py-3 rounded-[10px] items-center justify-center`,
+                (loading || !state.dropoff_location) ? `opacity-50 bg-[#9E9E9E]` : `bg-[#2E7D52]`
+              )}
+            >
+              {loading ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text
+                  style={tw.style(`text-base text-white`, {
+                    fontFamily: "RobotoBold",
+                  })}
+                >
+                  Schedule Ride
+                </Text>
+              )}
+            </Pressable>
+          </View>
         </View>
       </BottomSheet>
     </>

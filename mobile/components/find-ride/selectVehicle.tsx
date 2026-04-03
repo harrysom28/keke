@@ -1,5 +1,5 @@
-import { ActivityIndicator, Image, Pressable, Text, View, StyleSheet, Dimensions, TouchableOpacity, TextInput, ScrollView } from "react-native";
-import React, { useContext, useEffect, useState, useRef } from "react";
+import { ActivityIndicator, Image, Text, View, StyleSheet, Dimensions, TextInput, FlatList, InteractionManager } from "react-native";
+import React, { useCallback, useContext, useEffect, useMemo, useState, useRef } from "react";
 
 import { AppContext } from "@/app/context";
 import { FareBreakdownModal } from "./fareBreakdown";
@@ -16,6 +16,8 @@ import apiClient from "@/utils/apiClient";
 import { AntDesign, Ionicons } from "@expo/vector-icons";
 import { Path, Svg } from "react-native-svg";
 import { requestManager } from "@/utils/requestManager";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
 
 interface Props {
   action: (vehicle: TVehicle, paymentMethod: string, promoCode?: string) => void;
@@ -91,7 +93,8 @@ const PaymentModes = {
   },
 };
 
-export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
+const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => {
+  const insets = useCombinedSafeInsets();
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
@@ -141,14 +144,14 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
   
   const rideData = ride?.data as any;
   
-  const formatPrice = (cost: number) => {
+  const formatPrice = useCallback((cost: number) => {
     return `₦${Math.round(cost).toLocaleString()}`;
-  };
+  }, []);
 
-  const calculateDiscountedPrice = (original: number) => {
+  const calculateDiscountedPrice = useCallback((original: number) => {
     if (!promoApplied) return original;
     return Math.round(original * 0.9);
-  };
+  }, [promoApplied]);
 
   const handlePromoCode = async () => {
     if (!promoCode.trim()) {
@@ -163,7 +166,7 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
       
       const response = await requestManager.execute(
         cacheKey,
-        () => axios.post(APPLY_CODE, { offer_id: promoCode }, apiConfig),
+        () => axios.post(APPLY_CODE, { code: promoCode }, apiConfig),
         30000 // Cache for 30 seconds
       );
       
@@ -195,11 +198,15 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
   const getVehicleData = async () => {
     setLoading(true);
     try {
-      // Get origin location for checking available drivers
-      const originLat = rideData?.origin ? parseFloat(String(rideData.origin.lat)) : null;
-      const originLng = rideData?.origin ? parseFloat(String(rideData.origin.long)) : null;
-      const destLat = rideData?.destination ? parseFloat(String(rideData.destination.lat)) : null;
-      const destLng = rideData?.destination ? parseFloat(String(rideData.destination.long)) : null;
+      // Get origin and destination (support both lat/long and latitude/longitude)
+      const oLat = rideData?.origin?.lat ?? rideData?.origin?.latitude;
+      const oLng = rideData?.origin?.long ?? rideData?.origin?.longitude;
+      const dLat = rideData?.destination?.lat ?? rideData?.destination?.latitude;
+      const dLng = rideData?.destination?.long ?? rideData?.destination?.longitude;
+      const originLat = oLat != null ? parseFloat(String(oLat)) : null;
+      const originLng = oLng != null ? parseFloat(String(oLng)) : null;
+      const destLat = dLat != null ? parseFloat(String(dLat)) : null;
+      const destLng = dLng != null ? parseFloat(String(dLng)) : null;
       
       const hasValidLocation = originLat && originLng && !isNaN(originLat) && !isNaN(originLng);
       const hasValidRoute = hasValidLocation && destLat && destLng && 
@@ -295,10 +302,15 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
               });
               
               const result = response.data?.data;
+              const rawDuration = result?.duration;
+              const durationValue = Math.max(1, Math.round(Number(rawDuration?.value ?? 0)));
+              const duration = rawDuration
+                ? { ...rawDuration, value: durationValue, text: `${durationValue} min` }
+                : { text: '4 min', value: 4, unit: 'minutes' };
               return {
                 cost: result?.fare?.totalFare || result?.cost || 2000,
                 distance: result?.distance || { text: '0 km', value: 0, unit: 'km' },
-                duration: result?.duration || { text: '0 min', value: 0, unit: 'minutes' },
+                duration,
               };
             },
             15000 // Cache pricing for 15 seconds
@@ -325,8 +337,7 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
             duration: pricing.duration,
             capacity: (vehicle as any).capacity || 4,
             description: (vehicle as any).description || "Mid-size cars",
-            pickupTime: pricing.duration?.text || pricing.duration?.value ? 
-              `${Math.round(pricing.duration.value || 0)} min` : "4 min",
+            pickupTime: pricing.duration?.text || (pricing.duration?.value != null ? `${Math.max(1, Math.round(pricing.duration.value))} min` : "4 min"),
           } as VehicleWithPricing);
         });
 
@@ -382,7 +393,9 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
     if (!isFocused) return;
     
     console.log('🎯 SelectVehicleView focused, loading vehicles');
-    getVehicleData();
+    const interactionTask = InteractionManager.runAfterInteractions(() => {
+      getVehicleData();
+    });
     
     // Trigger initial height measurement after a short delay
     if (onHeightChange && contentRef.current) {
@@ -406,12 +419,14 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
       }, 300);
       
       return () => {
+        interactionTask.cancel();
         clearTimeout(timeoutId);
         // Clear vehicle-related cache when component unmounts
         console.log('🧹 SelectVehicleView unmounting, clearing cache');
       };
     } else {
       return () => {
+        interactionTask.cancel();
         // Clear vehicle-related cache when component unmounts
         console.log('🧹 SelectVehicleView unmounting, clearing cache');
       };
@@ -434,16 +449,16 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
       const selectedButtonHeight = 0; // Removed selected button
       const paymentSectionHeight = selectedVehicle ? 45 : 0;
       const promoSectionHeight = selectedVehicle ? (showPromoInput ? 65 : 30) : 0;
-      const requestButtonHeight = selectedVehicle ? 38 : 0;
+      const requestButtonHeight = selectedVehicle ? 56 : 0; // button + wrapper, enough for full visibility
       const selectionHeight = selectedButtonHeight + paymentSectionHeight + promoSectionHeight + requestButtonHeight;
-      // Extra padding to ensure last item is fully visible (minimal)
-      const bottomPadding = 8;
+      // Extra padding so last button and safe area are fully visible
+      const bottomPadding = 40;
       
       // Calculate total height needed
       const totalHeight = headerHeight + vehiclesHeight + selectionHeight + bottomPadding;
       
       // Set a minimum height and maximum height (95% of screen to show all content)
-      const minHeight = Math.min(400, screenHeight * 0.5);
+      const minHeight = Math.min(480, screenHeight * 0.55);
       const maxHeight = screenHeight * 0.95; // Increased to 95% to show all content
       const finalHeight = Math.max(minHeight, Math.min(maxHeight, totalHeight));
         
@@ -465,15 +480,7 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
 
   console.log('🎨 Render state:', { loading, vehiclesCount: vehicles.length, isFocused });
 
-  // Always show loading if we have no vehicles yet
-  if ((loading && vehicles.length === 0) || (!vehicles || vehicles.length === 0)) {
-    return (
-      <View style={[styles.loadingContainer, { flex: 1, minHeight: 400, width: '100%' }]}>
-        <ActivityIndicator color={tw.color("base-green")} size="large" />
-        <Text style={styles.loadingText}>Loading vehicles...</Text>
-      </View>
-    );
-  }
+  const shouldShowLoadingState = (loading && vehicles.length === 0) || (!vehicles || vehicles.length === 0);
 
   console.log('🎨 Rendering vehicles list with', vehicles.length, 'vehicles');
 
@@ -495,20 +502,20 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
       const selectedButtonHeight = 0; // Removed selected button
       const paymentSectionHeight = selectedVehicle ? 45 : 0;
       const promoSectionHeight = selectedVehicle ? (showPromoInput ? 65 : 30) : 0;
-      const requestButtonHeight = selectedVehicle ? 38 : 0;
+      const requestButtonHeight = selectedVehicle ? 56 : 0; // button + wrapper, enough for full visibility
       const selectionHeight = selectedButtonHeight + paymentSectionHeight + promoSectionHeight + requestButtonHeight;
-      // Extra padding to ensure last item is fully visible (minimal)
-      const bottomPadding = 8;
+      // Extra padding so last button and safe area are fully visible
+      const bottomPadding = 40;
       
       // Calculate total height needed
       const totalHeight = headerHeight + vehiclesHeight + selectionHeight + bottomPadding;
       
       // Set a minimum height and maximum height (increased by 20%)
       const screenHeight = Dimensions.get('window').height;
-      const minHeight = Math.min(400, screenHeight * 0.5);
+      const minHeight = Math.min(480, screenHeight * 0.55);
       const maxHeight = screenHeight * 0.95; // Increased to 95% to show all content
-      // Increase calculated height by 20%
-      const increasedHeight = totalHeight * 1.2;
+      // Add buffer so Request Ride button is never clipped
+      const increasedHeight = totalHeight + 48;
       const finalHeight = Math.max(minHeight, Math.min(maxHeight, increasedHeight));
       
       onHeightChange(finalHeight);
@@ -530,6 +537,98 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
     }
   };
 
+  const renderVehicleItem = useCallback(({ item: vehicle }: { item: VehicleWithPricing }) => {
+    const originalPrice = vehicle.cost || 2000;
+    const finalPrice = calculateDiscountedPrice(originalPrice);
+    const hasDiscount = promoApplied && originalPrice !== finalPrice;
+    const isSelected = selectedVehicle?.vehicle_id === vehicle.vehicle_id;
+
+    return (
+      <View style={styles.vehicleCardContainer}>
+        <Pressable
+          style={[
+            styles.vehicleCard,
+            isSelected && styles.vehicleCardSelected
+          ]}
+          onPress={() => setSelectedVehicle(vehicle)}
+        >
+          <View style={styles.vehicleIconContainer}>
+            <Image
+              source={
+                vehicle.vehicle_type_image
+                  ? { uri: vehicle.vehicle_type_image }
+                  : getVehicleImage(vehicle.vehicle_id || 1, vehicle.vehicle_type)
+              }
+              style={styles.vehicleIcon}
+              resizeMode="contain"
+            />
+          </View>
+
+          <View style={styles.vehicleInfo}>
+            <View style={styles.vehicleNameRow}>
+              <Text style={styles.vehicleName}>
+                {vehicle.display_name || vehicle.name || vehicle.vehicle_type || "Vehicle"}
+              </Text>
+              {isSelected && (
+                <View style={styles.selectedBadge}>
+                  <Ionicons name="checkmark-circle" size={22} color={tw.color("base-green") || "#3C8F7C"} />
+                </View>
+              )}
+            </View>
+            <View style={styles.vehicleMeta}>
+              <Ionicons name="time-outline" size={14} color="#666" style={styles.metaIcon} />
+              <Text style={styles.metaText}>{vehicle.pickupTime || "4 min"}</Text>
+            </View>
+          </View>
+
+          {vehicle.cost !== null && vehicle.cost !== undefined && (
+            <TouchableOpacity
+              style={styles.priceContainer}
+              onPress={() => setShowFareBreakdown(true)}
+              activeOpacity={0.7}
+            >
+              {(vehicle as any).surgeMultiplier && (vehicle as any).surgeMultiplier > 1 && (
+                <View style={styles.surgeBadge}>
+                  <Text style={styles.surgeText}>
+                    {(vehicle as any).surgeMultiplier}x
+                  </Text>
+                </View>
+              )}
+              <Text style={[
+                styles.price,
+                (vehicle as any).surgeMultiplier && (vehicle as any).surgeMultiplier > 1 && styles.surgePrice
+              ]}>
+                {formatPrice(finalPrice)}
+              </Text>
+              {hasDiscount && <Text style={styles.oldPrice}>{formatPrice(originalPrice)}</Text>}
+              <Text style={styles.breakdownHint}>Tap for details</Text>
+            </TouchableOpacity>
+          )}
+        </Pressable>
+      </View>
+    );
+  }, [calculateDiscountedPrice, formatPrice, promoApplied, selectedVehicle]);
+
+  const vehicleKeyExtractor = useCallback(
+    (item: VehicleWithPricing, index: number) => item.vehicle_id?.toString() || String(index),
+    []
+  );
+
+  const requestButtonPaddingStyle = useMemo(
+    () => ({ paddingBottom: Math.max(insets.bottom + 10, 18) }),
+    [insets.bottom]
+  );
+
+  // Keep this return after all hooks to preserve stable hook order across renders.
+  if (shouldShowLoadingState) {
+    return (
+      <View style={[styles.loadingContainer, { flex: 1, minHeight: 400, width: '100%' }]}>
+        <ActivityIndicator color={tw.color("base-green")} size="large" />
+        <Text style={styles.loadingText}>Loading vehicles...</Text>
+      </View>
+    );
+  }
+
   return (
     <View 
       style={[styles.wrapper, { width: '100%' }]}
@@ -544,91 +643,20 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
         </Text>
       </View>
 
-      <ScrollView 
+      <FlatList
         style={styles.container}
         contentContainerStyle={styles.scrollContent}
+        data={vehicles}
+        renderItem={renderVehicleItem}
+        keyExtractor={vehicleKeyExtractor}
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={4}
+        windowSize={3}
+        initialNumToRender={3}
         showsVerticalScrollIndicator={true}
         nestedScrollEnabled={true}
-        bounces={true}
-        alwaysBounceVertical={false}
-      >
-      {vehicles.map((vehicle) => {
-        const originalPrice = vehicle.cost || 2000;
-        const finalPrice = calculateDiscountedPrice(originalPrice);
-        const hasDiscount = promoApplied && originalPrice !== finalPrice;
-        const isSelected = selectedVehicle?.vehicle_id === vehicle.vehicle_id;
-
-        return (
-          <View key={vehicle.vehicle_id} style={styles.vehicleCardContainer}>
-            {/* Vehicle Card */}
-            <Pressable
-              style={[
-                styles.vehicleCard,
-                isSelected && styles.vehicleCardSelected
-              ]}
-              onPress={() => setSelectedVehicle(vehicle)}
-            >
-              <View style={styles.vehicleIconContainer}>
-                <Image
-                  source={
-                    vehicle.vehicle_type_image
-                      ? { uri: vehicle.vehicle_type_image }
-                      : getVehicleImage(vehicle.vehicle_id || 1, vehicle.vehicle_type)
-                  }
-                  style={styles.vehicleIcon}
-                  resizeMode="contain"
-                />
-              </View>
-
-              <View style={styles.vehicleInfo}>
-                <View style={styles.vehicleNameRow}>
-                  <Text style={styles.vehicleName}>
-                    {vehicle.display_name || vehicle.name || vehicle.vehicle_type || "Vehicle"}
-                  </Text>
-                  {isSelected && (
-                    <View style={styles.selectedBadge}>
-                      <Ionicons name="checkmark-circle" size={22} color={tw.color("base-green") || "#3C8F7C"} />
-                    </View>
-                  )}
-                </View>
-                <View style={styles.vehicleMeta}>
-                  <Ionicons name="time-outline" size={14} color="#666" style={{ marginRight: 4 }} />
-                  <Text style={styles.metaText}>{vehicle.pickupTime || "4 min"}</Text>
-                </View>
-              </View>
-
-              {vehicle.cost !== null && vehicle.cost !== undefined && (
-                <TouchableOpacity 
-                  style={styles.priceContainer}
-                  onPress={() => setShowFareBreakdown(true)}
-                  activeOpacity={0.7}
-                >
-                  {/* Surge Pricing Indicator */}
-                  {(vehicle as any).surgeMultiplier && (vehicle as any).surgeMultiplier > 1 && (
-                    <View style={styles.surgeBadge}>
-                      <Text style={styles.surgeText}>
-                        {(vehicle as any).surgeMultiplier}x
-                      </Text>
-                    </View>
-                  )}
-                  <Text style={[
-                    styles.price,
-                    (vehicle as any).surgeMultiplier && (vehicle as any).surgeMultiplier > 1 && styles.surgePrice
-                  ]}>
-                    {formatPrice(finalPrice)}
-                  </Text>
-                  {hasDiscount && (
-                    <Text style={styles.oldPrice}>{formatPrice(originalPrice)}</Text>
-                  )}
-                  <Text style={styles.breakdownHint}>Tap for details</Text>
-                </TouchableOpacity>
-              )}
-            </Pressable>
-            
-          </View>
-        );
-      })}
-
+        ListFooterComponent={(
+          <>
       {/* Payment Selection - Only show when vehicle is selected */}
       {selectedVehicle && (
         <>
@@ -724,7 +752,7 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
 
       {/* Request Ride Button - At end of content */}
       {selectedVehicle && (
-        <View style={styles.requestButtonWrapper}>
+        <View style={[styles.requestButtonWrapper, requestButtonPaddingStyle]}>
           <TouchableOpacity
             style={styles.requestButton}
             onPress={() => action(selectedVehicle, selectedPayment, promoCode || undefined)}
@@ -761,10 +789,15 @@ export const SelectVehicleView = ({ action, back, onHeightChange }: Props) => {
           />
         );
       })()}
-      </ScrollView>
+          </>
+        )}
+      >
+      </FlatList>
     </View>
   );
 };
+
+export const SelectVehicleView = React.memo(SelectVehicleViewComponent);
 
 const styles = StyleSheet.create({
   wrapper: {
@@ -813,7 +846,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 20,
     paddingTop: 2,
-    paddingBottom: 8,
+    paddingBottom: 32,
   },
   vehicleCardContainer: {
     marginBottom: 10,
@@ -848,10 +881,7 @@ const styles = StyleSheet.create({
     borderColor: tw.color("base-green") || '#3C8F7C',
     borderWidth: 3,
     backgroundColor: '#F0F9F4',
-    shadowColor: tw.color("base-green") || '#3C8F7C',
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
+    elevation: 3,
   },
   vehicleNameRow: {
     flexDirection: 'row',
@@ -889,6 +919,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 2,
+  },
+  metaIcon: {
+    marginRight: 4,
   },
   metaText: {
     fontSize: 13,
@@ -1072,10 +1105,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: tw.color("base-green"),
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3,
     elevation: 2,
   },
   requestButtonText: {
@@ -1092,10 +1121,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: tw.color('base-green') || '#3C8F7C',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
     elevation: 2,
   },
   selectButtonText: {

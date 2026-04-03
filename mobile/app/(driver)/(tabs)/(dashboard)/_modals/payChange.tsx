@@ -63,7 +63,7 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
 
   const handlePay = () => {
     setLoading(true);
-    const data = { ride_id: ride?.ride_id, amount };
+    const data = { rideId: ride?.ride_id ?? ride?.rideId, amount };
     axios
       .post(PAY_CHANGE, data, apiConfig)
       .then(({ data }) => {
@@ -107,7 +107,7 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
       animationType="spring"
       backdropMaskColor="#19191900"
       openDuration={1000}
-      disableKeyboardHandling={true}
+      disableKeyboardHandling={false}
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
       <View>

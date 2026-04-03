@@ -17,9 +17,17 @@ const requiredEnvVars = ['MONGODB_URI', 'JWT_SECRET', 'JWT_REFRESH_SECRET'];
 
 const missingVars = requiredEnvVars.filter((varName) => !process.env[varName]);
 
-if (missingVars.length > 0 && process.env.NODE_ENV !== 'test') {
-  console.warn(`⚠️  Warning: Missing required environment variables: ${missingVars.join(', ')}`);
-  console.warn(`   Make sure .env file exists in the backend directory`);
+if (missingVars.length > 0) {
+  if (process.env.NODE_ENV === 'test') {
+    // In test, allow missing so tests can mock
+  } else if (process.env.NODE_ENV === 'production') {
+    console.error(`FATAL: Missing required environment variables: ${missingVars.join(', ')}`);
+    console.error('Set them in .env or the process environment. Exiting.');
+    process.exit(1);
+  } else {
+    console.warn(`⚠️  Warning: Missing required environment variables: ${missingVars.join(', ')}`);
+    console.warn(`   Make sure .env file exists in the backend directory. Production will exit if these are missing.`);
+  }
 }
 
 export default process.env;

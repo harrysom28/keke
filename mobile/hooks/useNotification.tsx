@@ -1,8 +1,9 @@
 import * as Notifications from "expo-notifications";
-
 import { useEffect, useState } from "react";
+import { Platform, Vibration } from "react-native";
 
 import { TRemoteNotification } from "@/types";
+import { setupNotificationChannels } from "@/utils/notifications";
 import messaging from "@react-native-firebase/messaging";
 import { useNavigation } from "expo-router";
 
@@ -22,53 +23,76 @@ export default function useNotification() {
   const navigation = useNavigation();
 
   useEffect(() => {
-    // Set up the notification handler for the app
+    // TASK 3: Create Android notification channels
+    setupNotificationChannels();
+
+    // TASK 9: Priority handling - HIGH: alert + sound + vibrate
     Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-      }),
+      handleNotification: async (notification) => {
+        const data = notification?.request?.content?.data || {};
+        const priority = data.priority || "medium";
+        const isHigh = priority === "high";
+        if (isHigh && Platform.OS === "android") {
+          Vibration.vibrate(300);
+        }
+        return {
+          shouldShowAlert: isHigh || priority === "medium",
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        };
+      },
     });
 
-    // Handle user clicking on a notification and open the screen
+    // TASK 8: Deep link - extract data.screen and rideId, navigate with params
     const handleNotificationClick = async (response) => {
-      const screen = response?.notification?.request?.content?.data
-        ?.screen as never;
-      if (screen !== null) {
-        navigation.navigate(screen);
+      const data = response?.notification?.request?.content?.data || {};
+      const screen = data.screen;
+      const rideId = data.rideId;
+      if (screen) {
+        if (rideId) {
+          navigation.navigate(screen as never, { rideId } as never);
+        } else {
+          navigation.navigate(screen as never);
+        }
       }
     };
 
-    // Listen for user clicking on a notification
+    // Listen for user clicking on a notification (Expo local)
     const notificationClickSubscription =
       Notifications.addNotificationResponseReceivedListener(
         handleNotificationClick
       );
 
-    // Handle user opening the app from a notification (when the app is in the background)
-    messaging().onNotificationOpenedApp((remoteMessage) => {
-      console.log(
-        "Notification caused app to open from background state:",
-        remoteMessage.data.screen,
-        navigation
-      );
-      if (remoteMessage?.data?.screen) {
-        navigation.navigate(`${remoteMessage.data.screen}`);
-      }
-    });
+    let messagingUnsubscribe: (() => void) | null = null;
+    try {
+      // Handle user opening the app from a notification (when the app is in the background)
+      messaging().onNotificationOpenedApp((remoteMessage) => {
+        const d = remoteMessage?.data || {};
+        const screen = d.screen;
+        const rideId = d.rideId;
+        if (screen) {
+          if (rideId) {
+            navigation.navigate(screen as never, { rideId } as never);
+          } else {
+            navigation.navigate(screen as never);
+          }
+        }
+      });
 
     // Check if the app was opened from a notification (when the app was completely quit)
     messaging()
       .getInitialNotification()
       .then((remoteMessage) => {
         if (remoteMessage) {
-          console.log(
-            "Notification caused app to open from quit state:",
-            remoteMessage.notification
-          );
-          if (remoteMessage?.data?.screen) {
-            navigation.navigate(`${remoteMessage.data.screen}`);
+          const d = remoteMessage?.data || {};
+          const screen = d.screen;
+          const rideId = d.rideId;
+          if (screen) {
+            if (rideId) {
+              navigation.navigate(screen as never, { rideId } as never);
+            } else {
+              navigation.navigate(screen as never);
+            }
           }
         }
       });
@@ -90,13 +114,19 @@ export default function useNotification() {
     });
 
     const handlePushNotification = async (remoteMessage) => {
+      const data = remoteMessage?.data || {};
       const notification = {
         title: remoteMessage?.notification?.title as string,
         body: remoteMessage?.notification?.body as string,
-        data: remoteMessage.data, // optional data payload
+        data,
       };
-      console.log(remoteMessage);
       setNotificationEvent(notification as TRemoteNotification);
+
+      // TASK 9: HIGH priority - vibrate on foreground receipt
+      const priority = data.priority || "medium";
+      if (priority === "high" && Platform.OS === "android") {
+        Vibration.vibrate(300);
+      }
 
       // Schedule the notification with a null trigger to show immediately
       await Notifications.scheduleNotificationAsync({
@@ -114,11 +144,14 @@ export default function useNotification() {
     };
 
     // Listen for push notifications when the app is in the foreground
-    const unsubscribe = messaging().onMessage(handlePushNotification);
+      messagingUnsubscribe = messaging().onMessage(handlePushNotification);
+    } catch (_) {
+      // Firebase not configured (placeholder GoogleService-Info.plist) - push won't work
+    }
 
     // Clean up the event listeners
     return () => {
-      unsubscribe();
+      messagingUnsubscribe?.();
       notificationClickSubscription.remove();
     };
   }, []);

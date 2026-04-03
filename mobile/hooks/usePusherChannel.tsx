@@ -10,6 +10,14 @@ import logger from "@/utils/logger";
 // Track active channels to prevent duplicate subscriptions
 const activeChannels = new Set<string>();
 
+/** Raw `pusher:subscription_succeeded` can reach channel onEvent (e.g. Android bindGlobal) while the JS switch only handles `pusher_internal:*`, so protocol events must not be treated as app events. */
+function isPusherProtocolEvent(eventName: string | undefined): boolean {
+  if (!eventName) return false;
+  if (eventName.startsWith("pusher:")) return true;
+  if (eventName.startsWith("pusher_internal:")) return true;
+  return false;
+}
+
 interface Props {
   channel: string;
   visible?: boolean;
@@ -29,7 +37,7 @@ export default function usePusherChannel({
   onMemberRemoved,
   onEvent,
 }: Props): { unsubscribe: () => Promise<void> } {
-  const { pusher } = useContext(AppContext);
+  const { pusher, pusherReady } = useContext(AppContext);
   const isSubscribedRef = useRef(false);
   const isUnmountingRef = useRef(false);
   
@@ -81,6 +89,9 @@ export default function usePusherChannel({
     // Prevent subscription if component is unmounting
     if (isUnmountingRef.current) return;
 
+    // Only subscribe when Pusher is ready (init+connect done). Subscribing before ready causes native crash (EXC_BREAKPOINT in PusherWebsocketReactNative.subscribe).
+    if (!pusherReady) return;
+
     // Only subscribe if visible and not already subscribed
     if (visible && !activeChannels.has(channel) && !isSubscribedRef.current) {
       logger.debug(`Attempting to subscribe to Pusher channel: ${channel}`);
@@ -123,6 +134,7 @@ export default function usePusherChannel({
           },
           onEvent: (event: PusherEvent) => {
             if (isUnmountingRef.current) return;
+            if (isPusherProtocolEvent(event?.eventName)) return;
             callbacksRef.current.onEvent(event);
           },
         })
@@ -143,7 +155,7 @@ export default function usePusherChannel({
         unsubscribe();
       }
     };
-  }, [visible, channel, pusher, unsubscribe]);
+  }, [visible, channel, pusher, pusherReady, unsubscribe]);
 
   return { unsubscribe };
 }

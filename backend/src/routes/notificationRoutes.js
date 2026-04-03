@@ -9,6 +9,13 @@ const router = express.Router();
 router.use(protect);
 
 // Notification routes
+router.get('/notifications', notificationController.getUserNotifications);
+router.get('/notifications/unread-count', notificationController.getUnreadNotificationCount);
+router.post('/notifications/fcm-token', notificationController.saveFcmToken);
+router.patch('/notifications/read-all', notificationController.markAllNotificationsAsRead);
+router.patch('/notifications/:id/read', validationRules.mongoId, validate, notificationController.markNotificationAsRead);
+
+// Legacy notification routes kept for compatibility
 router.get('/user/notifications', notificationController.getUserNotifications);
 router.patch('/user/notifications/:id/read', validationRules.mongoId, validate, notificationController.markNotificationAsRead);
 router.patch('/user/notifications/read-all', notificationController.markAllNotificationsAsRead);

@@ -34,7 +34,7 @@ const RidesInfoModal = memo(({ visible, onClose }: RidesInfoModalProps) => {
       description: 'Save time by quickly rebooking any of your past rides. Just tap the rebook button and you\'re on your way.',
     },
     {
-      icon: 'checkcircle',
+      icon: 'check-circle',
       iconFamily: 'AntDesign' as const,
       title: 'All your rides in one place',
       description: 'Easily view and manage all your rides — whether they\'re upcoming or in your history. Track everything from one convenient screen.',

@@ -1,0 +1,14 @@
+diff --git a/node_modules/@react-native-firebase/app/RNFBApp.podspec b/node_modules/@react-native-firebase/app/RNFBApp.podspec
+--- a/node_modules/@react-native-firebase/app/RNFBApp.podspec
++++ b/node_modules/@react-native-firebase/app/RNFBApp.podspec
+@@ -46,4 +46,10 @@
+   else
+     s.static_framework = false
+   end
++  # Fix: allow non-modular React-Core headers when building as static framework (RN 0.81+ / Xcode)
++  s.pod_target_xcconfig = {
++    'CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES' => 'YES',
++    'OTHER_CFLAGS' => '$(inherited) -Wno-non-modular-include-in-framework-module'
++  }
++
+ end

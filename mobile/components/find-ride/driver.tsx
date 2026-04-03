@@ -1,88 +1,29 @@
 import {
   ActivityIndicator,
+  FlatList,
   Image,
-  Pressable,
   Text,
-  TouchableOpacity,
   View,
   StyleSheet,
   Dimensions,
+  InteractionManager,
 } from "react-native";
 import { AppDetailsState, setRideData, setRideUtils } from "@/store/AppSlice";
 import { Path, Svg } from "react-native-svg";
-import { useContext, useEffect, useRef, useState, useMemo } from "react";
+import { memo, useCallback, useContext, useEffect, useRef, useState, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
 import { AntDesign } from "@expo/vector-icons";
 import { getVehicleImage } from "@/utils/vehicleImages";
 import { Image as RNImage } from "react-native";
-import { AppContext } from "@/app/context";
-import { FIND_DRIVER } from "@/constants";
-import { ScrollView } from "react-native-gesture-handler";
-import axios from "axios";
+import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import apiClient from "@/utils/apiClient";
 import { NoDriversScreen } from "./NoDriversScreen";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
-import CustomMapDirections from "@/components/activeRide/CustomMapDirections";
-import MapDirections from "@/components/activeRide/mapDirections";
 import { requestManager } from "@/utils/requestManager";
 import { getErrorMessage } from "@/utils/errorHandler";
-
-/**
- * Create test drivers for testing purposes when no real drivers are found
- */
-const createTestDrivers = (origin: any, vehicleTypeId: string) => {
-  const baseLat = parseFloat(String(origin?.lat)) || 6.32306;
-  const baseLng = parseFloat(String(origin?.long)) || 8.11201;
-  
-  const testDrivers = [
-    {
-      driver_id: `test-driver-1-${Date.now()}`,
-      user_id: `test-user-1-${Date.now()}`,
-      name: 'John Driver',
-      driver_name: 'John Driver',
-      rating: { average: 4.8, count: 150 },
-      distance: (Math.random() * 2 + 0.5).toFixed(1), // 0.5-2.5 km
-      vehicle_type: vehicleTypeId,
-      vehicle_type_id: vehicleTypeId,
-      vehicle_type_name: 'Car',
-      vehicle_number: 'ABC-123-XY',
-      profile_image: null,
-      driver_image: null,
-      location: {
-        latitude: baseLat + (Math.random() - 0.5) * 0.01,
-        longitude: baseLng + (Math.random() - 0.5) * 0.01,
-      },
-      isOnline: true,
-      isAvailable: true,
-    },
-    {
-      driver_id: `test-driver-2-${Date.now()}`,
-      user_id: `test-user-2-${Date.now()}`,
-      name: 'Mary Driver',
-      driver_name: 'Mary Driver',
-      rating: { average: 4.6, count: 120 },
-      distance: (Math.random() * 2 + 0.8).toFixed(1), // 0.8-2.8 km
-      vehicle_type: vehicleTypeId,
-      vehicle_type_id: vehicleTypeId,
-      vehicle_type_name: 'Car',
-      vehicle_number: 'DEF-456-YZ',
-      profile_image: null,
-      driver_image: null,
-      location: {
-        latitude: baseLat + (Math.random() - 0.5) * 0.01,
-        longitude: baseLng + (Math.random() - 0.5) * 0.01,
-      },
-      isOnline: true,
-      isAvailable: true,
-    },
-  ];
-  
-  return testDrivers;
-};
 
 interface LProps {
   item: object;
@@ -95,7 +36,7 @@ interface LProps {
   isActive: boolean;
 }
 
-const ListItem = ({ item, onPress, onClick, onReassign, isActive }: LProps) => {
+const ListItem = memo(({ item, onPress, onClick, onReassign, isActive }: LProps) => {
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
   const [loading, setLoading] = useState(false);
@@ -243,7 +184,7 @@ const ListItem = ({ item, onPress, onClick, onReassign, isActive }: LProps) => {
                 return typeof distance === 'string' ? distance : `${distance} km`;
               }
               return '0 km';
-            })()}{" "}
+            })()}
             <Text style={tw.style(`text-base-green`)}>
               {(() => {
                 // Try multiple sources for duration
@@ -347,7 +288,7 @@ const ListItem = ({ item, onPress, onClick, onReassign, isActive }: LProps) => {
             handleRequestRide();
           }
         }}
-        style={tw.style(`w-full -mt-8 mx-1 self-center px-8 pt-10 pb-3 bg-base-green rounded-[20px] min-h-[52px] justify-center`, {
+        style={tw.style(`w-full mt-2 mx-1 self-center px-8 py-3 bg-base-green rounded-[20px] min-h-[52px] justify-center`, {
           zIndex: 1,
           position: 'relative',
           shadowColor: tw.color("base-green") || '#00C853',
@@ -374,7 +315,7 @@ const ListItem = ({ item, onPress, onClick, onReassign, isActive }: LProps) => {
       </TouchableOpacity>
     </View>
   );
-};
+});
 
 interface Props {
   action: () => void;
@@ -388,18 +329,20 @@ interface Props {
   ) => void;
   isActive?: boolean;
   back?: () => void;
+  /** Prefer: return user to location step (e.g. setStep(1) in find-ride). */
+  onChangeLocation?: () => void;
   onHeightChange?: (height: number) => void;
 }
 
-export const DriverView = ({
+const DriverViewComponent = ({
   action,
   request = () => {},
   reassign = () => {},
   isActive = false,
   onHeightChange,
   back,
+  onChangeLocation,
 }: Props) => {
-  const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
   const rideUtils = ride?.utils as any;
@@ -407,6 +350,19 @@ export const DriverView = ({
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const isFocused = useIsFocused();
+  const measuredHeightRef = useRef(0);
+  const [headerHeight, setHeaderHeight] = useState(0);
+
+  const emitMeasuredHeight = useCallback((contentHeight: number) => {
+    if (!onHeightChange || !contentHeight || !isFinite(contentHeight)) return;
+
+    const screenHeight = Dimensions.get('window').height;
+    const cappedHeight = Math.min(contentHeight + 48, screenHeight * 0.92);
+    if (Math.abs(cappedHeight - measuredHeightRef.current) > 30) {
+      measuredHeightRef.current = cappedHeight;
+      onHeightChange(cappedHeight);
+    }
+  }, [onHeightChange]);
 
   // Initialize searching state based on whether we have data
   useEffect(() => {
@@ -422,35 +378,12 @@ export const DriverView = ({
     }
   }, [rawData, searching]);
   
-  // Fallback: Ensure we always have test drivers if no data exists after a delay
-  useEffect(() => {
-    if (!isFocused) return;
-    
-    const rideData = ride?.data as any;
-    const origin = rideData?.origin;
-    const vehicleTypeId = rideData?.vehicle_type_id;
-    
-    if (!origin?.lat || !origin?.long || !vehicleTypeId) {
-      return;
-    }
-    
-    // After 2 seconds, if we still don't have drivers, create test drivers
-    const timeoutId = setTimeout(() => {
-      const hasDrivers = rawData && Array.isArray(rawData) && rawData.length > 0;
-      if (!hasDrivers && !searching) {
-        console.log('🆘 Fallback: Creating test drivers after delay');
-        const testDrivers = createTestDrivers(origin, vehicleTypeId);
-        dispatch(setRideUtils({ drivers: testDrivers }));
-        console.log('✅ Fallback test drivers created:', testDrivers.length);
-      }
-    }, 2000);
-    
-    return () => clearTimeout(timeoutId);
-  }, [isFocused, rawData, searching, ride?.data, dispatch]);
-
-  // Debug logging - always log render state
+  // Debug logging - always log render state (origin may be lat/long, latitude/longitude, or lng)
   useEffect(() => {
     const rideData = ride?.data as any;
+    const o = rideData?.origin;
+    const oLat = o?.lat ?? o?.latitude ?? o?.location?.lat ?? o?.geometry?.location?.lat;
+    const oLng = o?.long ?? o?.longitude ?? o?.lng ?? o?.location?.long ?? o?.location?.lng ?? o?.geometry?.location?.lng;
     console.log('🚗 DriverView render:', {
       isFocused,
       hasRide: !!ride,
@@ -458,9 +391,9 @@ export const DriverView = ({
       rawData: rawData,
       rawDataLength: Array.isArray(rawData) ? rawData.length : 0,
       searching,
-      hasOrigin: !!rideData?.origin,
-      originLat: rideData?.origin?.lat,
-      originLong: rideData?.origin?.long,
+      hasOrigin: !!o,
+      originLat: oLat,
+      originLong: oLng,
       vehicleTypeId: rideData?.vehicle_type_id,
     });
   }, [isFocused, ride, rawData, searching]);
@@ -482,31 +415,115 @@ export const DriverView = ({
       return;
     }
 
-    // Validate required data
+    // Validate required data: support lat/long, latitude/longitude, lng, and nested location/geometry
     const rideData = ride?.data as any;
+    const rideUtils = ride?.utils as any;
     const origin = rideData?.origin;
     const vehicleTypeId = rideData?.vehicle_type_id;
-    
+    const waitingOrigin = rideData?.waiting?.origin;
+    const userLoc = rideUtils?.user_location;
+
+    // Raw values for logging/debugging only (may be empty strings).
+    const latFromOrigin = origin?.lat;
+    const lngFromOrigin = origin?.long;
+    const fallbackLat = userLoc?.lat ?? userLoc?.latitude;
+    const fallbackLng = userLoc?.long ?? userLoc?.longitude ?? userLoc?.lng;
+    const waitingLatFromWaitingOrigin =
+      waitingOrigin?.lat ?? waitingOrigin?.latitude ?? waitingOrigin?.location?.lat ?? waitingOrigin?.geometry?.location?.lat;
+    const waitingLngFromWaitingOrigin =
+      waitingOrigin?.long ??
+      waitingOrigin?.longitude ??
+      waitingOrigin?.lng ??
+      waitingOrigin?.location?.long ??
+      waitingOrigin?.location?.lng ??
+      waitingOrigin?.geometry?.location?.lng;
+
+    // Important: treat empty string coordinates as missing (so we can fall back to other fields/sources).
+    const toNumber = (v: any): number => {
+      if (v == null) return NaN;
+      if (typeof v === "number") return v;
+      return parseFloat(String(v));
+    };
+    const toValidCoord = (v: any): number | null => {
+      const n = toNumber(v);
+      return !Number.isNaN(n) && n !== 0 ? n : null;
+    };
+    const pickFirstValidCoord = (candidates: any[]): number | null => {
+      for (const c of candidates) {
+        const v = toValidCoord(c);
+        if (v != null) return v;
+      }
+      return null;
+    };
+
+    // Try multiple pickup sources; different parts of the app populate different ride sub-objects.
+    // Also: don't short-circuit on empty strings (e.g. origin.lat === "").
+    const originLat =
+      pickFirstValidCoord([
+        origin?.lat,
+        origin?.latitude,
+        origin?.location?.lat,
+        origin?.geometry?.location?.lat,
+        origin?.lng, // sometimes used incorrectly
+        waitingOrigin?.lat,
+        waitingOrigin?.latitude,
+        waitingOrigin?.location?.lat,
+        waitingOrigin?.geometry?.location?.lat,
+        userLoc?.lat,
+        userLoc?.latitude,
+      ]) ?? NaN;
+    const originLong =
+      pickFirstValidCoord([
+        origin?.long,
+        origin?.longitude,
+        origin?.lng,
+        origin?.location?.long,
+        origin?.location?.lng,
+        origin?.geometry?.location?.lng,
+        waitingOrigin?.long,
+        waitingOrigin?.longitude,
+        waitingOrigin?.lng,
+        waitingOrigin?.location?.long,
+        waitingOrigin?.location?.lng,
+        waitingOrigin?.geometry?.location?.lng,
+        userLoc?.long,
+        userLoc?.longitude,
+        userLoc?.lng,
+      ]) ?? NaN;
+
+    const hasValidOrigin = !Number.isNaN(originLat) && !Number.isNaN(originLong);
+
     console.log('🔍 Validating search data:', {
       isFocused,
       hasOrigin: !!origin,
-      hasLat: !!origin?.lat,
-      hasLong: !!origin?.long,
+      hasValidOrigin,
       hasVehicleType: !!vehicleTypeId,
-      originLat: origin?.lat,
-      originLong: origin?.long,
+      latFromOrigin,
+      lngFromOrigin,
+      fallbackLat,
+      fallbackLng,
+      waitingLatFromWaitingOrigin,
+      waitingLngFromWaitingOrigin,
+      originLat,
+      originLong,
       vehicleTypeId,
     });
-    
+
     if (!isFocused) {
       console.log('⚠️ Component not focused, skipping search');
       setSearching(false);
       return;
     }
-    
-    if (!origin?.lat || !origin?.long || !vehicleTypeId) {
+
+    if (!hasValidOrigin || !vehicleTypeId) {
       console.log('⚠️ Missing required data for driver search');
       setSearching(false);
+      console.log('🧾 Origin debug snapshot:', {
+        origin,
+        waitingOrigin,
+        userLoc,
+        vehicleTypeId,
+      });
       return;
     }
 
@@ -514,23 +531,23 @@ export const DriverView = ({
     const searchDrivers = async () => {
       console.log('🚀 Starting driver search...');
       setSearching(true);
-      
+
       try {
-        const cacheKey = `find-drivers-${origin.lat}-${origin.long}-${vehicleTypeId}`;
+        const cacheKey = `find-drivers-${originLat}-${originLong}-${vehicleTypeId}`;
         console.log('🔑 Cache key:', cacheKey);
-        
+
         const responseData = await requestManager.execute(
           cacheKey,
           async () => {
             console.log('📡 Making API call to find drivers...', {
-              loc_lat: origin.lat,
-              loc_long: origin.long,
+              loc_lat: originLat,
+              loc_long: originLong,
               vehicleTypeId: vehicleTypeId,
             });
             const response = await apiClient.get('booking/find-driver', {
               params: {
-                loc_lat: origin.lat,
-                loc_long: origin.long,
+                loc_lat: originLat,
+                loc_long: originLong,
                 vehicleTypeId: vehicleTypeId,
               },
             });
@@ -548,20 +565,6 @@ export const DriverView = ({
         console.log('✅ Found drivers:', drivers.length);
         console.log('📋 Drivers data:', drivers);
 
-        // TESTING: Always create test drivers for testing purposes
-        // This ensures drivers are always available
-        if (drivers.length === 0) {
-          console.log('🧪 No drivers found, creating test drivers for testing...');
-          drivers = createTestDrivers(origin, vehicleTypeId);
-          console.log('🧪 Created test drivers:', drivers.length);
-        } else {
-          // Even if we have real drivers, add test drivers to ensure we always have options
-          console.log('🧪 Adding test drivers alongside real drivers for testing...');
-          const testDrivers = createTestDrivers(origin, vehicleTypeId);
-          drivers = [...drivers, ...testDrivers];
-          console.log('🧪 Total drivers (real + test):', drivers.length);
-        }
-
         if (drivers.length > 0) {
           console.log('💾 Storing drivers in Redux...', { count: drivers.length });
           dispatch(setRideUtils({ drivers }));
@@ -577,11 +580,8 @@ export const DriverView = ({
             });
           }, 100);
         } else {
-          console.error('❌ CRITICAL: No drivers available even after creating test drivers');
-          // Force create test drivers as last resort
-          const fallbackDrivers = createTestDrivers(origin, vehicleTypeId);
-          dispatch(setRideUtils({ drivers: fallbackDrivers }));
-          console.log('🆘 Created fallback test drivers:', fallbackDrivers.length);
+          dispatch(setRideUtils({ drivers: [] }));
+          console.log('ℹ️ No drivers available nearby');
         }
       } catch (err: any) {
         console.error('❌ Find drivers error:', {
@@ -597,24 +597,14 @@ export const DriverView = ({
           return;
         }
 
-        // Handle rate limits gracefully - create test drivers
-        if (err?.status === 429 || err?.response?.status === 429) {
-          console.warn('⚠️ Rate limited - creating test drivers for testing');
-          const testDrivers = createTestDrivers(origin, vehicleTypeId);
-          dispatch(setRideUtils({ drivers: testDrivers }));
-          setSearching(false);
-          return;
-        }
-
-        // For any other error, create test drivers for testing
-        console.log('🧪 API error - creating test drivers for testing');
-        const testDrivers = createTestDrivers(origin, vehicleTypeId);
-        dispatch(setRideUtils({ drivers: testDrivers }));
-        
-        // Show error message but still provide test drivers
         const errorMessage = getErrorMessage(err);
+        dispatch(setRideUtils({ drivers: [] }));
         if (errorMessage && !errorMessage.toLowerCase().includes('too many')) {
-          console.warn('⚠️ Error occurred but test drivers created:', errorMessage);
+          showMessage({
+            type: "danger",
+            message: errorMessage,
+            duration: 4000,
+          });
         }
       } finally {
         console.log('🏁 Driver search completed, setting searching to false');
@@ -622,10 +612,13 @@ export const DriverView = ({
       }
     };
 
-    // Start search immediately
-    searchDrivers();
+    // Defer network work until modal interaction settles.
+    const interactionTask = InteractionManager.runAfterInteractions(() => {
+      searchDrivers();
+    });
 
     return () => {
+      interactionTask.cancel();
       console.log('🧹 Cleaning up driver search');
       setSearching(false);
     };
@@ -683,31 +676,6 @@ export const DriverView = ({
     });
   }, [data, searching, rawData, isFocused]);
 
-  // Calculate height for parent - ensure all drivers are fully visible
-  useEffect(() => {
-    if (onHeightChange && data && data.length > 0) {
-      const headerHeight = 60; // Header height
-      const cardHeight = 220; // Approximate height per driver card (including button and spacing)
-      const cardSpacing = 16; // Spacing between cards (mb-4 = 16px)
-      const bottomPadding = 100; // Extra padding at bottom to ensure last card is fully visible
-      const estimatedHeight = headerHeight + (data.length * cardHeight) + (data.length - 1) * cardSpacing + bottomPadding;
-      const screenHeight = Dimensions.get('window').height;
-      const maxHeight = Math.min(screenHeight * 0.95, 800); // Increased max height
-      const finalHeight = Math.min(estimatedHeight, maxHeight);
-      console.log('📐 Calculating driver modal height:', {
-        headerHeight,
-        cardHeight,
-        cardCount: data.length,
-        cardSpacing,
-        bottomPadding,
-        estimatedHeight,
-        finalHeight,
-        maxHeight,
-      });
-      onHeightChange(finalHeight);
-    }
-  }, [data?.length, onHeightChange]);
-
   // Get origin and destination for map (MUST be before any early returns)
   const rideData = ride?.data as any;
   const origin = rideData?.origin;
@@ -715,16 +683,19 @@ export const DriverView = ({
   
   // Calculate map region to show both pickup and dropoff (MUST be before any early returns)
   const mapRegion = useMemo(() => {
-    if (!origin?.lat || !origin?.long) {
-      return null;
-    }
+    const oLat = origin?.lat ?? origin?.latitude ?? origin?.location?.lat ?? origin?.geometry?.location?.lat;
+    const oLng = origin?.long ?? origin?.longitude ?? origin?.lng ?? origin?.location?.long ?? origin?.location?.lng ?? origin?.geometry?.location?.lng;
+    if (oLat == null || oLng == null) return null;
 
-    const originLat = parseFloat(String(origin.lat));
-    const originLng = parseFloat(String(origin.long));
-    
-    if (destination?.lat && destination?.long) {
-      const destLat = parseFloat(String(destination.lat));
-      const destLng = parseFloat(String(destination.long));
+    const originLat = parseFloat(String(oLat));
+    const originLng = parseFloat(String(oLng));
+    if (Number.isNaN(originLat) || Number.isNaN(originLng)) return null;
+
+    const dLat = destination?.lat ?? destination?.latitude ?? destination?.location?.lat ?? destination?.geometry?.location?.lat;
+    const dLng = destination?.long ?? destination?.longitude ?? destination?.lng ?? destination?.location?.long ?? destination?.location?.lng ?? destination?.geometry?.location?.lng;
+    if (dLat != null && dLng != null) {
+      const destLat = parseFloat(String(dLat));
+      const destLng = parseFloat(String(dLng));
       
       // Calculate bounds to include both points
       const minLat = Math.min(originLat, destLat);
@@ -755,13 +726,74 @@ export const DriverView = ({
   // Retry function
   const handleRetry = async () => {
     setSearching(true);
-    
+
     const rideData = ride?.data as any;
+    const rideUtils = ride?.utils as any;
     const origin = rideData?.origin;
     const vehicleTypeId = rideData?.vehicle_type_id;
-    
-    if (!origin?.lat || !vehicleTypeId) {
+    const waitingOrigin = rideData?.waiting?.origin;
+    const userLoc = rideUtils?.user_location;
+
+    // Same invalid/empty handling as initial search.
+    const toNumber = (v: any): number => {
+      if (v == null) return NaN;
+      if (typeof v === "number") return v;
+      return parseFloat(String(v));
+    };
+    const toValidCoord = (v: any): number | null => {
+      const n = toNumber(v);
+      return !Number.isNaN(n) && n !== 0 ? n : null;
+    };
+    const pickFirstValidCoord = (candidates: any[]): number | null => {
+      for (const c of candidates) {
+        const v = toValidCoord(c);
+        if (v != null) return v;
+      }
+      return null;
+    };
+
+    const originLat =
+      pickFirstValidCoord([
+        origin?.lat,
+        origin?.latitude,
+        origin?.location?.lat,
+        origin?.geometry?.location?.lat,
+        origin?.lng, // sometimes used incorrectly
+        waitingOrigin?.lat,
+        waitingOrigin?.latitude,
+        waitingOrigin?.location?.lat,
+        waitingOrigin?.geometry?.location?.lat,
+        userLoc?.lat,
+        userLoc?.latitude,
+      ]) ?? NaN;
+    const originLong =
+      pickFirstValidCoord([
+        origin?.long,
+        origin?.longitude,
+        origin?.lng,
+        origin?.location?.long,
+        origin?.location?.lng,
+        origin?.geometry?.location?.lng,
+        waitingOrigin?.long,
+        waitingOrigin?.longitude,
+        waitingOrigin?.lng,
+        waitingOrigin?.location?.long,
+        waitingOrigin?.location?.lng,
+        waitingOrigin?.geometry?.location?.lng,
+        userLoc?.long,
+        userLoc?.longitude,
+        userLoc?.lng,
+      ]) ?? NaN;
+    const hasValid = !Number.isNaN(originLat) && !Number.isNaN(originLong);
+
+    if (!hasValid || !vehicleTypeId) {
       setSearching(false);
+      console.log('🧾 Retry origin debug snapshot:', {
+        origin,
+        waitingOrigin,
+        userLoc,
+        vehicleTypeId,
+      });
       showMessage({
         type: "warning",
         message: "Missing pickup location or vehicle type",
@@ -771,14 +803,13 @@ export const DriverView = ({
     }
 
     try {
-      // Clear cache and fetch fresh
-      const cacheKey = `find-drivers-${origin.lat}-${origin.long}-${vehicleTypeId}`;
+      const cacheKey = `find-drivers-${originLat}-${originLong}-${vehicleTypeId}`;
       requestManager.clear(cacheKey);
 
       const response = await apiClient.get('booking/find-driver', {
         params: {
-          loc_lat: origin.lat,
-          loc_long: origin.long,
+          loc_lat: originLat,
+          loc_long: originLong,
           vehicleTypeId: vehicleTypeId,
         },
       });
@@ -826,7 +857,10 @@ export const DriverView = ({
   if (searching && !hasValidData) {
     console.log('⏳ Showing loading screen (searching)');
     return (
-      <View style={[tw`flex-1 justify-center items-center py-20 px-6`, { minHeight: 400 }]}>
+      <View
+        onLayout={(event) => emitMeasuredHeight(event.nativeEvent.layout.height)}
+        style={[tw`flex-1 justify-center items-center py-20 px-6`, { minHeight: 400 }]}
+      >
         <ActivityIndicator color={tw.color("base-green")} size="large" />
         <Text
           style={tw.style(`text-lg text-center text-[#666] mt-4`, {
@@ -850,10 +884,16 @@ export const DriverView = ({
   if (!searching && !hasValidData) {
     console.log('⚠️ Showing NoDriversScreen (no data, not searching)');
     return (
-      <NoDriversScreen 
-        onRetry={handleRetry}
-        onBack={back}
-      />
+      <View
+        onLayout={(event) => emitMeasuredHeight(event.nativeEvent.layout.height)}
+        style={[tw`flex-1 bg-white`, { minHeight: 460 }]}
+      >
+        <NoDriversScreen
+          onRetry={handleRetry}
+          onBack={back}
+          onChangeLocation={onChangeLocation}
+        />
+      </View>
     );
   }
 
@@ -867,7 +907,10 @@ export const DriverView = ({
       length: data?.length,
     });
     return (
-      <View style={[tw`flex-1 justify-center items-center py-20 px-6`, { minHeight: 400 }]}>
+      <View
+        onLayout={(event) => emitMeasuredHeight(event.nativeEvent.layout.height)}
+        style={[tw`flex-1 justify-center items-center py-20 px-6`, { minHeight: 400 }]}
+      >
         <ActivityIndicator color={tw.color("base-green")} size="large" />
         <Text
           style={tw.style(`text-lg text-center text-[#666] mt-4`, {
@@ -884,9 +927,15 @@ export const DriverView = ({
   console.log('✅ Rendering driver list with', data.length, 'drivers');
 
   return (
-    <View style={styles.container}>
+    <View
+      style={styles.container}
+      onLayout={(event) => emitMeasuredHeight(event.nativeEvent.layout.height)}
+    >
       {/* Compact Header */}
-      <View style={styles.header}>
+      <View
+        style={styles.header}
+        onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
+      >
         <Text style={styles.headerTitle}>
           Available Drivers
         </Text>
@@ -895,35 +944,34 @@ export const DriverView = ({
         </Text>
       </View>
 
-      {/* Compact Driver List - ScrollView showing 2 drivers at a time */}
-      <ScrollView
+      {/* Virtualized driver list for smoother low-end Android scrolling */}
+      <FlatList
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={true}
-        bounces={true}
-        nestedScrollEnabled={true}
-      >
-        {data.map((item, index) => {
-          const itemData = item as any;
-          if (!itemData) {
-            console.warn('⚠️ Invalid item at index', index);
-            return null;
-          }
-          return (
-            <ListItem
-              key={itemData?.driver_id || itemData?.user_id || `driver-${index}`}
-              item={item}
-              onPress={action}
-              onClick={request}
-              onReassign={reassign}
-              isActive={isActive}
-            />
-          );
-        })}
-      </ScrollView>
+        data={data}
+        renderItem={({ item }) => (
+          <ListItem
+            item={item}
+            onPress={action}
+            onClick={request}
+            onReassign={reassign}
+            isActive={isActive}
+          />
+        )}
+        keyExtractor={(item: any, index: number) => item?.driver_id || item?.user_id || `driver-${index}`}
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={4}
+        windowSize={3}
+        initialNumToRender={3}
+        onContentSizeChange={(_, contentHeight) => {
+          emitMeasuredHeight(contentHeight + headerHeight);
+        }}
+      />
     </View>
   );
 };
+
+export const DriverView = memo(DriverViewComponent);
 
 const styles = StyleSheet.create({
   container: {

@@ -1,0 +1,39 @@
+{
+  "tabs": {
+    "home": "Gida",
+    "offers": "Kyaututtuka",
+    "rides": "Tafiye-tafiye",
+    "profile": "Bayanan kai"
+  },
+  "driver_tabs": {
+    "home": "Gida",
+    "bookings": "Ajiye",
+    "tasks": "Ayyuka",
+    "profile": "Bayanan kai"
+  },
+  "home": {
+    "welcome": "Barka da dawowa",
+    "where_to": "Ina zaka?"
+  },
+  "notifications": {
+    "title": "Sanarwa",
+    "mark_all_read": "Yi duk a matsayin an karanta",
+    "no_notifications": "Babu sanarwa tukuna"
+  },
+  "language": {
+    "title": "Harshe",
+    "subtitle": "Zaɓi harshen da kuka fi so",
+    "note": "Lura: wasu fasali ba za su samu a duk harsuna ba",
+    "saved": "An adana fifikon harshe",
+    "save_failed": "Ba a iya adana fifikon harshe ba",
+    "names": {
+      "en": "Turanci",
+      "fr": "Faransanci",
+      "es": "Sifaniyanci",
+      "ar": "Larabci",
+      "ha": "Hausa",
+      "ig": "Igbo",
+      "yo": "Yarbanci"
+    }
+  }
+}

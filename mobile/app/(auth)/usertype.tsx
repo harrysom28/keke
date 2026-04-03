@@ -1,3 +1,8 @@
+/**
+ * Register-as screen (Passenger / Driver).
+ * For best performance: use compressed register.png & register-bg.png
+ * (e.g. WebP or optimized JPEG, @2x/@3x for retina).
+ */
 import { AuthState, updateRegistration } from "@/store/AuthSlice";
 import {
   Image,
@@ -8,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import Svg, { Path } from "react-native-svg";
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from "@/constants/Metrics";
 import { useDispatch, useSelector } from "react-redux";
@@ -33,16 +38,16 @@ const Users: IUsers[] = [
         <Path
           d="M9.49935 9.50016C11.6855 9.50016 13.4577 7.72796 13.4577 5.54183C13.4577 3.3557 11.6855 1.5835 9.49935 1.5835C7.31322 1.5835 5.54102 3.3557 5.54102 5.54183C5.54102 7.72796 7.31322 9.50016 9.49935 9.50016Z"
           stroke="#3C8F7C"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
         />
         <Path
           d="M16.3 17.4167C16.3 14.3529 13.2521 11.875 9.49963 11.875C5.74713 11.875 2.69922 14.3529 2.69922 17.4167"
           stroke="#3C8F7C"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
         />
       </Svg>
     ),
@@ -65,30 +70,33 @@ const Users: IUsers[] = [
 interface Props {
   item: IUsers;
   isActive: boolean;
-  setCurrent: (type: IUsers["type"]) => void;
+  onSelect: (type: IUsers["type"]) => void;
 }
 
-const CheckItem = ({ item, isActive, setCurrent }: Props) => {
+const CheckItem = React.memo(({ item, isActive, onSelect }: Props) => {
   return (
     <Pressable
-      onPress={() => setCurrent(item.type)}
+      onPress={() => onSelect(item.type)}
+      accessibilityRole="radio"
+      accessibilityState={{ checked: isActive }}
+      accessibilityLabel={`${item.title}. ${item.text}`}
       style={tw`flex-row items-center gap-x-4`}
     >
       <Svg width="18" height="19" viewBox="0 0 18 19" fill="none">
         <Path
           d="M9 1.5C6.87827 1.5 4.84344 2.34285 3.34315 3.84315C1.84285 5.34344 1 7.37827 1 9.5C1 11.6217 1.84285 13.6566 3.34315 15.1569C4.84344 16.6571 6.87827 17.5 9 17.5C11.1217 17.5 13.1566 16.6571 14.6569 15.1569C16.1571 13.6566 17 11.6217 17 9.5C17 7.37827 16.1571 5.34344 14.6569 3.84315C13.1566 2.34285 11.1217 1.5 9 1.5Z"
           stroke="#3C8F7C"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
         />
         {isActive && (
           <Path
             d="M9 6.5C8.20435 6.5 7.44129 6.81607 6.87868 7.37868C6.31607 7.94129 6 8.70435 6 9.5C6 10.2956 6.31607 11.0587 6.87868 11.6213C7.44129 12.1839 8.20435 12.5 9 12.5C9.79565 12.5 10.5587 12.1839 11.1213 11.6213C11.6839 11.0587 12 10.2956 12 9.5C12 8.70435 11.6839 7.94129 11.1213 7.37868C10.5587 6.81607 9.79565 6.5 9 6.5Z"
             stroke="#3C8F7C"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           />
         )}
       </Svg>
@@ -119,7 +127,7 @@ const CheckItem = ({ item, isActive, setCurrent }: Props) => {
       </View>
     </Pressable>
   );
-};
+});
 
 const Register = () => {
   const dispatch = useDispatch();
@@ -127,16 +135,25 @@ const Register = () => {
   const [current, setCurrent] = useState<string>(registration?.type);
   const router = useRouter();
 
+  const handleSelect = useCallback(
+    (type: IUsers["type"]) => {
+      dispatch(updateRegistration({ type }));
+      setCurrent(type);
+    },
+    [dispatch]
+  );
+
   return (
     <ImageBackground
       source={require("@/assets/images/register-bg.png")}
+      resizeMode="cover"
       style={tw.style(`flex-1 flex-col gap-y-6 pb-[90px] text-white bg-white`, {
         width: WINDOW_WIDTH,
       })}
     >
       <StatusBar barStyle="light-content" />
 
-      <View>
+      <View style={tw`overflow-hidden`}>
         <Image
           source={require("@/assets/images/register.png")}
           resizeMode="cover"
@@ -144,6 +161,7 @@ const Register = () => {
             width: WINDOW_WIDTH,
             height: WINDOW_HEIGHT * 0.6,
           })}
+          accessibilityIgnoresInvertColors
         />
       </View>
 
@@ -167,10 +185,7 @@ const Register = () => {
                 key={item.title}
                 item={item}
                 isActive={item.type === current}
-                setCurrent={(type) => {
-                  dispatch(updateRegistration({ type }));
-                  setCurrent(item.type);
-                }}
+                onSelect={handleSelect}
               />
             ))}
           </View>
@@ -181,6 +196,8 @@ const Register = () => {
         <TouchableOpacity
           onPress={() => router.push("/signup")}
           style={tw`bg-base-green py-4 rounded-[8px]`}
+          accessibilityRole="button"
+          accessibilityLabel="Continue to sign up"
         >
           <Text
             style={tw.style(`text-white text-base text-center`, {

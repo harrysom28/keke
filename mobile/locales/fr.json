@@ -1,0 +1,39 @@
+{
+  "tabs": {
+    "home": "Accueil",
+    "offers": "Offres",
+    "rides": "Courses",
+    "profile": "Profil"
+  },
+  "driver_tabs": {
+    "home": "Accueil",
+    "bookings": "Réservations",
+    "tasks": "Tâches",
+    "profile": "Profil"
+  },
+  "home": {
+    "welcome": "Bon retour",
+    "where_to": "Où allez-vous ?"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "mark_all_read": "Tout marquer comme lu",
+    "no_notifications": "Aucune notification pour le moment"
+  },
+  "language": {
+    "title": "Langue",
+    "subtitle": "Choisissez votre langue préférée",
+    "note": "Remarque : certaines fonctionnalités peuvent ne pas être disponibles dans toutes les langues",
+    "saved": "Préférence de langue enregistrée",
+    "save_failed": "Impossible d'enregistrer la préférence de langue",
+    "names": {
+      "en": "Anglais",
+      "fr": "Français",
+      "es": "Espagnol",
+      "ar": "Arabe",
+      "ha": "Haoussa",
+      "ig": "Igbo",
+      "yo": "Yoruba"
+    }
+  }
+}

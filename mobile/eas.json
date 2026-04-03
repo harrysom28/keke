@@ -1,6 +1,16 @@
 {
   "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
     "preview": {
+      "env": {
+        "NODE_ENV": "production"
+      },
       "android": {
         "buildType": "app-bundle"
       }

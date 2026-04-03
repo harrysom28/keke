@@ -1,0 +1,19 @@
+---
+description: Auth and Wallet architecture for ride-hailing backend
+globs: backend/**/*
+alwaysApply: false
+---
+
+# Auth & Wallet Architecture
+
+When working on auth, sessions, tokens, wallet, or withdrawals in this project:
+
+1. **Read the spec**: `backend/docs/AUTH_WALLET_ARCHITECTURE.md` is the source of truth.
+
+2. **Auth**: OTP-first for both riders and drivers (no passwords). Access token 15 min; refresh token stored hashed, rotated on use. Device-bound sessions required.
+
+3. **Wallet/Security** (drivers only): Transaction PIN, device trust, withdrawal freeze, risk engine. Chain: `protect` → `requireTransactionPin` → `checkDeviceTrust` → `riskEngine`.
+
+4. **OTP frequency**: Only on new device, refresh expired, or revocation. App uses `/auth/refresh` silently on access expiry.
+
+5. **DVA**: Provision async after driver approval. Never block login or signup.

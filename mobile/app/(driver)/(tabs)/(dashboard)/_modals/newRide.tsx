@@ -44,9 +44,19 @@ interface Props {
   data: Partial<TDriverActiveRide>;
   isActive: boolean;
   getActiveRide: () => void;
+  /** Wall-clock ms when the sequential offer expires (Bolt-style window). */
+  offerDeadlineMs?: number | null;
+  onOfferExpired?: () => void;
 }
 
-const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
+const NewRide = ({
+  bottomSheetRef,
+  data,
+  isActive,
+  getActiveRide,
+  offerDeadlineMs = null,
+  onOfferExpired,
+}: Props) => {
   const { apiConfig } = useContext(AppContext);
   const [loading, setLoading] = useState({
     accept: false,
@@ -59,9 +69,41 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
   const hasRideStarted = data?.is_ride_started;
   const [show, setShow] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
-  let ride_id = data?.ride_id;
+  const rideId = data?.ride_id ?? data?.rideId ?? '';
   let payment_type = data?.payment_type?.toLocaleLowerCase() as string;
   const leftValue = useRef(new Animated.Value(0)).current;
+  const offerExpiredFiredRef = useRef(false);
+  const [offerSecondsLeft, setOfferSecondsLeft] = useState<number | null>(null);
+
+  const passengerName =
+    data?.passenger?.passenger_name ??
+    (data?.passenger as { name?: string } | undefined)?.name ??
+    "Passenger";
+  const passengerImage =
+    data?.passenger?.passenger_image ??
+    (data?.passenger as { image?: string } | undefined)?.image;
+  const fareDisplay =
+    data?.cost ??
+    (data?.fare != null ? String(Math.round(Number(data.fare))) : "");
+
+  useEffect(() => {
+    offerExpiredFiredRef.current = false;
+    if (!offerDeadlineMs) {
+      setOfferSecondsLeft(null);
+      return;
+    }
+    const tick = () => {
+      const s = Math.max(0, Math.ceil((offerDeadlineMs - Date.now()) / 1000));
+      setOfferSecondsLeft(s);
+      if (s === 0 && !offerExpiredFiredRef.current) {
+        offerExpiredFiredRef.current = true;
+        onOfferExpired?.();
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [offerDeadlineMs, onOfferExpired]);
 
   const Animate = () => {
     Animated.loop(
@@ -108,7 +150,7 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
   const AcceptRide = () => {
     setLoading((prev) => ({ ...prev, accept: true }));
     axios
-      .post(DRIVER_ACCEPT_RIDE, { ride_id }, apiConfig)
+      .post(DRIVER_ACCEPT_RIDE, { rideId }, apiConfig)
       .then(({ data }) => {
         console.log(data);
         getActiveRide();
@@ -145,7 +187,7 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
   const RejectRide = () => {
     setLoading((prev) => ({ ...prev, reject: true }));
     axios
-      .post(DRIVER_REJECT_RIDE, { ride_id }, apiConfig)
+      .post(DRIVER_REJECT_RIDE, { rideId }, apiConfig)
       .then(({ data }) => {
         console.log(data);
         handleBack();
@@ -183,7 +225,7 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
   const StartRide = () => {
     setLoading((prev) => ({ ...prev, start: true }));
     axios
-      .post(DRIVER_START_RIDE, { ride_id }, apiConfig)
+      .post(DRIVER_START_RIDE, { rideId }, apiConfig)
       .then(({ data }) => {
         console.log(data);
         getActiveRide();
@@ -220,7 +262,7 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
   const CompleteRide = () => {
     setLoading((prev) => ({ ...prev, complete: true }));
     axios
-      .post(DRIVER_COMPLETE_RIDE, { ride_id }, apiConfig)
+      .post(DRIVER_COMPLETE_RIDE, { rideId }, apiConfig)
       .then(({ data }) => {
         // console.log(data);
         if (payment_type === "wallet") {
@@ -260,7 +302,7 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
   const ConfirmPayment = () => {
     setLoading((prev) => ({ ...prev, confirm: true }));
     axios
-      .post(DRIVER_CONFIRM_PAYMENT, { ride_id }, apiConfig)
+      .post(DRIVER_CONFIRM_PAYMENT, { rideId }, apiConfig)
       .then(({ data }) => {
         console.log(data);
         handleBack();
@@ -299,7 +341,7 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
   const PayChange = (amount: string) => {
     setLoading((prev) => ({ ...prev, change: true }));
     axios
-      .post(DRIVER_PAY_CHANGE, { ride_id, amount }, apiConfig)
+      .post(DRIVER_PAY_CHANGE, { rideId, amount }, apiConfig)
       .then(({ data }) => {
         console.log(data);
         showMessage({ type: "success", message: data?.message });
@@ -329,15 +371,17 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
       animationType="spring"
       backdropMaskColor="#19191900"
       openDuration={1000}
-      disableKeyboardHandling={true}
+      disableKeyboardHandling={false}
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
       <DriverChatModal
         data={{
-          id: data?.passenger?.passenger_id as string,
-          rideId: data?.ride_id as string,
-          name: data?.passenger?.passenger_name as string,
-          image: data?.passenger?.passenger_image as string,
+          id: (data?.passenger?.passenger_id ||
+            (data?.passenger as { user_id?: string } | undefined)?.user_id ||
+            "") as string,
+          rideId: (data?.ride_id ?? data?.rideId) as string,
+          name: passengerName,
+          image: (passengerImage || "") as string,
         }}
         visible={chatModal}
         onClose={() => setChatModal(false)}
@@ -356,7 +400,7 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
           <Image
             source={{
               uri:
-                data?.passenger?.passenger_image ??
+                passengerImage ??
                 `https://picsum.photos/500/300?random=2`,
             }}
             style={tw.style(
@@ -369,7 +413,7 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
                 fontFamily: "RobotoMedium",
               })}
             >
-              {data?.passenger?.passenger_name}
+              {passengerName}
             </Text>
             {/* <View style={tw`flex-row gap-x-1 items-center`}>
               <AntDesign name="star" size={12} color={tw.color("base-green")} />
@@ -384,13 +428,24 @@ const NewRide = ({ bottomSheetRef, data, isActive, getActiveRide }: Props) => {
           </View>
         </View>
 
-        <Text
-          style={tw.style(`text-xl text-white`, {
-            fontFamily: "RobotoMedium",
-          })}
-        >
-          ₦{data?.cost}
-        </Text>
+        <View style={tw`items-end`}>
+          {offerSecondsLeft != null && offerSecondsLeft > 0 && !isActive ? (
+            <Text
+              style={tw.style(`text-xs text-amber-300 mb-1`, {
+                fontFamily: "RobotoMedium",
+              })}
+            >
+              {offerSecondsLeft}s to accept
+            </Text>
+          ) : null}
+          <Text
+            style={tw.style(`text-xl text-white`, {
+              fontFamily: "RobotoMedium",
+            })}
+          >
+            ₦{fareDisplay}
+          </Text>
+        </View>
       </View>
       <View
         style={tw.style(`flex-row items-start gap-x-2 my-7`, {

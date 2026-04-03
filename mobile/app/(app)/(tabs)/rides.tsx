@@ -12,19 +12,25 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState, m
 
 import { AppContext } from "@/app/context";
 import apiClient from "@/utils/apiClient";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AuthState } from "@/store/AuthSlice";
 import { useSelector, useDispatch } from "react-redux";
 import { setRideData, setAppData } from "@/store/AppSlice";
 import RidesInfoModal from "@/components/rides/RidesInfoModal";
+import BookRideHowToModal from "@/components/rides/BookRideHowToModal";
+import { DriverBookingSheet } from "@/components/driver/bookingSheet";
+import type { BottomSheetMethods } from "@devvie/bottom-sheet";
 import logger from "@/utils/logger";
 import { ACTIVE_BOOKING } from "@/constants";
 import { formatBookingDate, formatBookingTime } from "@/lib/formatBookingDateTime";
+import { safeShowMessage } from "@/utils/safeShowMessage";
+import { useFocusRefresh } from "@/hooks/useFocusRefresh";
 
-type RideStatus = "pending" | "accepted" | "in_progress" | "completed" | "cancelled" | "scheduled";
+type RideStatus = "pending" | "accepted" | "in_progress" | "completed" | "cancelled" | "scheduled" | "requested";
 
 interface Ride {
   ride_id: string;
@@ -92,31 +98,12 @@ const EmptyPastRides = memo(() => (
 EmptyPastRides.displayName = "EmptyPastRides";
 
 // Empty State Component for Upcoming Rides
-const EmptyUpcomingRides = memo(() => {
-  const dispatch = useDispatch();
-  
-  const handleScheduleRide = useCallback(() => {
-    // Navigate to home tab and open book ride modal
-    router.push({
-      pathname: "/(app)/(tabs)/(home)/home",
-      params: { openBookRide: "true" },
-    });
-    // Also set booking state to ensure modal opens
-    dispatch(setAppData({ isBooking: true }));
-  }, [dispatch]);
-
-  const handleLearnMore = useCallback(() => {
-    showMessage({
-      type: "info",
-      message: "Schedule rides feature coming soon!",
-    });
-  }, []);
-
+const EmptyUpcomingRides = memo(({ onScheduleRide }: { onScheduleRide: () => void }) => {
   return (
     <View style={tw`flex-1 justify-center items-center px-6 py-12`}>
       <View style={tw`mb-6`}>
         <View style={tw`bg-[#F5F5F5] rounded-full p-6 items-center justify-center`}>
-          <MaterialIcons name="event" size={64} color={tw.color("base-green")} style={tw`opacity-40`} />
+          <MaterialIcons name="schedule" size={64} color={tw.color("base-green")} style={tw`opacity-40`} />
         </View>
       </View>
       <Text
@@ -124,17 +111,17 @@ const EmptyUpcomingRides = memo(() => {
           fontFamily: "RobotoBold",
         })}
       >
-        No bookings
+        No upcoming rides
       </Text>
       <Text
         style={tw.style(`text-base text-[#8E8E93] text-center leading-6 px-4 mb-6`, {
           fontFamily: "RobotoRegular",
         })}
       >
-        Whatever is on your schedule, a Scheduled Ride can get you there on time
+        Schedule rides in advance for school runs, work commutes, or airport pickups.
       </Text>
       <TouchableOpacity
-        onPress={handleScheduleRide}
+        onPress={onScheduleRide}
         style={tw`bg-base-green py-4 px-8 rounded-full`}
       >
         <Text
@@ -142,19 +129,7 @@ const EmptyUpcomingRides = memo(() => {
             fontFamily: "RobotoBold",
           })}
         >
-          Schedule a ride
-        </Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        onPress={handleLearnMore}
-        style={tw`mt-4`}
-      >
-        <Text
-          style={tw.style(`text-base text-base-green`, {
-            fontFamily: "RobotoMedium",
-          })}
-        >
-          Learn how it works
+          Schedule a Ride
         </Text>
       </TouchableOpacity>
     </View>
@@ -282,8 +257,95 @@ const formatLocation = (placeName: string, address: string, maxLength: number = 
   return formatted.substring(0, maxLength - 3) + "...";
 };
 
+const inferRideStatus = (ride: any): RideStatus => {
+  const rawStatus = String(ride?.status || ride?.ride_status || "").trim().toLowerCase();
+
+  if (ride?.cancelled_at || ride?.cancelledAt || ride?.canceled_at || ride?.canceledAt) {
+    return "cancelled";
+  }
+
+  if (ride?.completed_at || ride?.completedAt) {
+    return "completed";
+  }
+
+  if (rawStatus === "cancelled" || rawStatus === "canceled") {
+    return "cancelled";
+  }
+
+  if (rawStatus === "completed") {
+    return "completed";
+  }
+
+  if (rawStatus === "in_progress" || rawStatus === "in progress" || ride?.is_started || ride?.is_ride_started) {
+    return "in_progress";
+  }
+
+  if (rawStatus === "accepted") {
+    return "accepted";
+  }
+
+  if (rawStatus === "pending") {
+    return "pending";
+  }
+
+  if (rawStatus === "requested") {
+    return "requested";
+  }
+
+  return "scheduled";
+};
+
+type BookingStage = "scheduled" | "searching" | "confirmed" | "ongoing";
+
+const getBookingStage = (ride: Ride): BookingStage => {
+  const status = String(ride.status || "").toLowerCase();
+  if (status === "in_progress") return "ongoing";
+  if (status === "accepted") return "confirmed";
+  if (status === "pending" || status === "requested") return "searching";
+  return "scheduled";
+};
+
+const getBookingStatusMeta = (ride: Ride, bookingTime?: string) => {
+  const stage = getBookingStage(ride);
+
+  switch (stage) {
+    case "ongoing":
+      return {
+        stage,
+        label: "On trip",
+        hint: "Your ride is currently in progress",
+        accent: "#2563EB",
+        background: "#E8F0FF",
+      };
+    case "confirmed":
+      return {
+        stage,
+        label: "Driver confirmed",
+        hint: "A driver has accepted this booking",
+        accent: "#2E7D52",
+        background: "#E8F5E9",
+      };
+    case "searching":
+      return {
+        stage,
+        label: "Finding driver",
+        hint: "We are still matching you with a driver",
+        accent: "#F59E0B",
+        background: "#FFF6E5",
+      };
+    default:
+      return {
+        stage,
+        label: "Scheduled",
+        hint: bookingTime ? `Pickup planned for ${formatBookingTime(bookingTime)}` : "Pickup time has been reserved",
+        accent: "#0F9D8A",
+        background: "#E7F7F3",
+      };
+  }
+};
+
 // Ride List Item Component - Memoized and Optimized
-const RideListItem = memo(({ item, onRebook }: { item: Ride; onRebook: (ride: Ride) => void }) => {
+const RideListItem = memo(({ item, onRebook, onRideDetails }: { item: Ride; onRebook: (ride: Ride) => void; onRideDetails?: (ride: Ride) => void }) => {
   const formatDate = useCallback((dateString: string) => {
     try {
       const date = new Date(dateString);
@@ -311,11 +373,12 @@ const RideListItem = memo(({ item, onRebook }: { item: Ride; onRebook: (ride: Ri
   }, []);
 
   const handleRidePress = useCallback(() => {
-    showMessage({
-      type: "info",
-      message: "Ride details coming soon",
-    });
-  }, []);
+    if (onRideDetails) {
+      onRideDetails(item);
+    } else {
+      router.push({ pathname: "/(app)/ride-details", params: { rideId: item.ride_id } });
+    }
+  }, [item, onRideDetails]);
 
   // For scheduled rides, use scheduled_at; otherwise use completed/cancelled/created
   const displayDate = item.scheduled_at || item.completed_at || item.cancelled_at || item.created_at;
@@ -345,7 +408,11 @@ const RideListItem = memo(({ item, onRebook }: { item: Ride; onRebook: (ride: Ri
   const formattedPrice = formatPrice(price, isCancelled);
 
   return (
-    <View style={tw`flex-row items-start gap-x-3 py-4 px-1 border-b border-[#F0F0F0]`}>
+    <TouchableOpacity
+      style={tw`flex-row items-start gap-x-3 py-4 px-1 border-b border-[#F0F0F0]`}
+      onPress={handleRidePress}
+      activeOpacity={0.7}
+    >
       <View style={tw`pt-0.5`}>
         <View style={tw`w-5 h-5 items-center justify-center`}>
           <AntDesign name="car" size={18} color={isCancelled ? "#8E8E93" : "#3C8F7C"} />
@@ -382,7 +449,10 @@ const RideListItem = memo(({ item, onRebook }: { item: Ride; onRebook: (ride: Ri
           </Text>
           <TouchableOpacity
             style={tw`p-2 rounded-full bg-[#F5F5F5] active:bg-[#E5E5E5]`}
-            onPress={() => onRebook(item)}
+            onPress={(e) => {
+              e.stopPropagation();
+              onRebook(item);
+            }}
             activeOpacity={0.7}
             accessibilityLabel="Rebook this ride"
           >
@@ -390,7 +460,7 @@ const RideListItem = memo(({ item, onRebook }: { item: Ride; onRebook: (ride: Ri
           </TouchableOpacity>
         </View>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 });
 
@@ -416,6 +486,7 @@ const BookingListItem = memo(({ item, onView }: { item: Ride; onView: (ride: Rid
   // Extract dropoff location
   const rawDropoff = item.destination?.address || item.destination?.name || item._raw?.dropoff?.address || item._raw?.dropoff_location || '';
   const dropoffLocation = rawDropoff || "Drop-off location";
+  const statusMeta = getBookingStatusMeta(item, bookingTime);
 
   return (
     <View style={tw`mb-3`}>
@@ -450,15 +521,33 @@ const BookingListItem = memo(({ item, onView }: { item: Ride; onView: (ride: Rid
               >
                 Origin
               </Text>
-              <Text
-                style={tw.style(`text-[12px] text-[#5A5A5A]`, {
-                  fontFamily: "RobotoRegular",
-                })}
-              >
-                {bookingDate && bookingTime
-                  ? `${formatBookingDate(bookingDate)} ${formatBookingTime(bookingTime)}`
-                  : "Select Date Select Time"}
-              </Text>
+              <View style={tw`items-end`}>
+                <Text
+                  style={tw.style(`text-[12px] text-[#5A5A5A]`, {
+                    fontFamily: "RobotoRegular",
+                  })}
+                >
+                  {bookingDate && bookingTime
+                    ? `${formatBookingDate(bookingDate)} ${formatBookingTime(bookingTime)}`
+                    : "Select Date Select Time"}
+                </Text>
+                <View
+                  style={[
+                    tw`mt-1 px-2.5 py-1 rounded-full`,
+                    { backgroundColor: statusMeta.background },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: statusMeta.accent,
+                      fontSize: 11,
+                      fontFamily: "RobotoBold",
+                    }}
+                  >
+                    {statusMeta.label}
+                  </Text>
+                </View>
+              </View>
             </View>
             <Text
               style={tw.style(`text-[12px] text-[#B8B8B8]`, {
@@ -533,10 +622,45 @@ SectionHeader.displayName = "SectionHeader";
 
 // Transform ride data helper
 const transformRide = (ride: any): Ride => {
+  console.log("RAW RIDE:", JSON.stringify(ride, null, 2));
+
+  const pickFirstValue = (...values: any[]) =>
+    values.find((value) => value !== undefined && value !== null && value !== "");
+
+  const toNumber = (...values: any[]) => {
+    for (const value of values) {
+      if (value === undefined || value === null || value === "") continue;
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return 0;
+  };
+
+  const firstPositiveNumber = (...values: any[]) => {
+    for (const value of values) {
+      if (value === undefined || value === null || value === "") continue;
+      const parsed = Number(
+        typeof value === "object" && value !== null
+          ? value.totalFare ?? value.amount ?? value.value ?? 0
+          : value
+      );
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+    return 0;
+  };
+
   // Helper to extract name and address separately
   const getLocationData = (location: any) => {
     if (!location) {
       return { name: "", address: "" };
+    }
+
+    if (typeof location === "string") {
+      return { name: "", address: location };
     }
     
     // Backend now returns both name (place name) and address (full address)
@@ -608,28 +732,113 @@ const transformRide = (ride: any): Ride => {
   };
 
   // Backend returns origin/destination in API response
-  const pickupLocation = ride.origin || ride.pickupLocation || ride.pickup || {};
-  const dropoffLocation = ride.destination || ride.dropoffLocation || {};
+  const pickupLocation =
+    pickFirstValue(ride.origin, ride.pickupLocation, ride.pickup, ride.pickup_location) || {};
+  const dropoffLocation =
+    pickFirstValue(
+      ride.dropoff_location,
+      ride.dropoffLocation,
+      ride.destination,
+      ride.dropoff,
+      ride.destination_name
+    ) || {};
   
   const pickupData = getLocationData(pickupLocation);
   const destinationData = getLocationData(dropoffLocation);
+  const fare = firstPositiveNumber(
+    ride.fare?.totalFare,
+    ride.fare,
+    ride.total_fare,
+    ride.totalFare,
+    ride.amount,
+    ride.ride_fare,
+    ride.price,
+    ride.cost
+  );
+  const pickupLat = toNumber(
+    ride.pickupLocation?.lat,
+    ride.pickup?.lat,
+    ride.pickup_location?.lat,
+    ride.origin?.lat,
+    ride.origin?.latitude,
+    ride.origin?.location?.latitude,
+    ride.origin?.location?.lat,
+    ride.pickupLocation?.coordinates?.[1],
+    ride.pickup?.coordinates?.[1],
+    ride.origin?.coordinates?.[1]
+  );
+  const pickupLng = toNumber(
+    ride.pickupLocation?.lng,
+    ride.pickupLocation?.long,
+    ride.pickup?.lng,
+    ride.pickup?.long,
+    ride.pickup_location?.lng,
+    ride.pickup_location?.long,
+    ride.origin?.lng,
+    ride.origin?.long,
+    ride.origin?.longitude,
+    ride.origin?.location?.longitude,
+    ride.origin?.location?.long,
+    ride.origin?.location?.lng,
+    ride.pickupLocation?.coordinates?.[0],
+    ride.pickup?.coordinates?.[0],
+    ride.origin?.coordinates?.[0]
+  );
+  const dropoffLat = toNumber(
+    ride.dropoff_location?.lat,
+    ride.dropoffLocation?.lat,
+    ride.destination?.lat,
+    ride.dropoff?.lat,
+    ride.destination?.location?.latitude,
+    ride.destination?.location?.lat,
+    ride.dropoff?.location?.latitude,
+    ride.dropoff?.location?.lat,
+    ride.dropoff_lat,
+    ride.destination_lat,
+    ride.dropoffLocation?.coordinates?.[1],
+    ride.destination?.coordinates?.[1],
+    ride.dropoff?.coordinates?.[1]
+  );
+  const dropoffLng = toNumber(
+    ride.dropoff_location?.lng,
+    ride.dropoff_location?.long,
+    ride.dropoffLocation?.lng,
+    ride.dropoffLocation?.long,
+    ride.destination?.lng,
+    ride.destination?.long,
+    ride.dropoff?.lng,
+    ride.dropoff?.long,
+    ride.destination?.location?.longitude,
+    ride.destination?.location?.long,
+    ride.destination?.location?.lng,
+    ride.dropoff?.location?.longitude,
+    ride.dropoff?.location?.long,
+    ride.dropoff?.location?.lng,
+    ride.dropoff_lng,
+    ride.dropoff_long,
+    ride.destination_lng,
+    ride.destination_long,
+    ride.dropoffLocation?.coordinates?.[0],
+    ride.destination?.coordinates?.[0],
+    ride.dropoff?.coordinates?.[0]
+  );
 
   return {
     ride_id: ride.ride_id || ride._id || String(Math.random()),
     pickup: {
       name: pickupData.name,
       address: pickupData.address,
-      lat: ride.pickupLocation?.lat || ride.pickup?.lat || ride.pickupLocation?.coordinates?.[1] || ride.pickup?.coordinates?.[1] || ride.origin?.lat || ride.origin?.coordinates?.[1] || 0,
-      lng: ride.pickupLocation?.lng || ride.pickup?.lng || ride.pickupLocation?.coordinates?.[0] || ride.pickup?.coordinates?.[0] || ride.origin?.lng || ride.origin?.coordinates?.[0] || 0,
+      lat: pickupLat,
+      lng: pickupLng,
     },
     destination: {
       name: destinationData.name,
       address: destinationData.address,
-      lat: ride.dropoffLocation?.lat || ride.destination?.lat || ride.dropoffLocation?.coordinates?.[1] || ride.destination?.coordinates?.[1] || 0,
-      lng: ride.dropoffLocation?.lng || ride.destination?.lng || ride.dropoffLocation?.coordinates?.[0] || ride.destination?.coordinates?.[0] || 0,
+      lat: dropoffLat,
+      lng: dropoffLng,
     },
-    status: (ride.status || "completed").toLowerCase() as RideStatus,
-    fare: ride.fare || ride.total_fare || 0,
+    status: inferRideStatus(ride),
+    fare,
     created_at: ride.created_at || ride.createdAt || new Date().toISOString(),
     completed_at: ride.completed_at || ride.completedAt,
     cancelled_at: ride.cancelled_at || ride.cancelledAt,
@@ -644,6 +853,7 @@ const transformRide = (ride: any): Ride => {
 };
 
 const RidesScreen = () => {
+  const insets = useSafeAreaInsets();
   const { token } = useSelector(AuthState);
   const { apiConfig } = useContext(AppContext);
   const dispatch = useDispatch();
@@ -652,110 +862,107 @@ const RidesScreen = () => {
   const [upcomingRides, setUpcomingRides] = useState<Ride[]>([]);
   const [loading, setLoading] = useState(false);
   const [showInfoModal, setShowInfoModal] = useState(false);
+  const [showBookRideHowToModal, setShowBookRideHowToModal] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState<Record<string, unknown>>({});
+  const [viewLoading, setViewLoading] = useState(false);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const bookingSheetRef = useRef<BottomSheetMethods>(null);
   const lastFetchRef = useRef<number>(0);
 
   const isFocused = useIsFocused();
+  const refreshOnFocus = useFocusRefresh(60_000);
+  const { tab } = useLocalSearchParams<{ tab?: string }>();
+
+  // Open on Bookings tab when navigating with ?tab=upcoming (e.g. "View all Bookings")
+  useEffect(() => {
+    if (tab === "upcoming") {
+      setActiveTab("upcoming");
+    }
+  }, [tab]);
+
+  const handleScheduleRide = useCallback(() => {
+    dispatch(setAppData({ isBooking: true, requestOpenBookRide: true }));
+    router.push({
+      pathname: "/(app)/(tabs)/(home)/home",
+      params: { openBookRide: "true" },
+    });
+  }, [dispatch]);
 
   const handleRebook = useCallback((ride: Ride) => {
-    // Try to extract coordinates from transformed ride first
-    let pickupLat = ride.pickup?.lat || 0;
-    let pickupLng = ride.pickup?.lng || 0;
-    let destLat = ride.destination?.lat || 0;
-    let destLng = ride.destination?.lng || 0;
+    console.log("Ride data fields:", JSON.stringify(ride, null, 2));
 
-    // If coordinates are missing, try to extract from raw data (original API response)
-    if ((!pickupLat || pickupLat === 0) && ride._raw) {
-      const raw = ride._raw;
-      pickupLat = raw.pickupLocation?.lat || raw.pickup?.lat || raw.pickupLocation?.coordinates?.[1] || 
-                   raw.pickup?.coordinates?.[1] || raw.origin?.lat || raw.origin?.coordinates?.[1] || 0;
-      pickupLng = raw.pickupLocation?.lng || raw.pickup?.lng || raw.pickupLocation?.coordinates?.[0] || 
-                   raw.pickup?.coordinates?.[0] || raw.origin?.lng || raw.origin?.coordinates?.[0] || 0;
-    }
+    const raw = ride._raw || {};
+    const dropoffName =
+      ride.destination?.address ||
+      ride.destination?.name ||
+      raw.dropoff_location ||
+      raw.dropoff?.address ||
+      raw.dropoff?.name ||
+      raw.dropoff?.location?.address ||
+      raw.dropoff?.location?.name ||
+      raw.destination?.address ||
+      raw.destination?.name ||
+      raw.destination_name ||
+      raw.destination ||
+      "";
 
-    if ((!destLat || destLat === 0) && ride._raw) {
-      const raw = ride._raw;
-      destLat = raw.dropoffLocation?.lat || raw.destination?.lat || raw.dropoffLocation?.coordinates?.[1] || 
-                raw.destination?.coordinates?.[1] || 0;
-      destLng = raw.dropoffLocation?.lng || raw.destination?.lng || raw.dropoffLocation?.coordinates?.[0] || 
-                raw.destination?.coordinates?.[0] || 0;
-    }
+    const parsedDropoffLat = Number(
+      ride.destination?.lat ||
+        raw.dropoffLocation?.lat ||
+        raw.dropoff?.lat ||
+        raw.dropoff_lat ||
+        raw.destination?.lat ||
+        raw.destination_lat ||
+        raw.dropoffLocation?.coordinates?.[1] ||
+        raw.dropoff?.coordinates?.[1] ||
+        raw.destination?.coordinates?.[1] ||
+        raw.dropoff?.location?.latitude ||
+        raw.dropoff?.location?.lat ||
+        0
+    );
+    const parsedDropoffLng = Number(
+      ride.destination?.lng ||
+        raw.dropoffLocation?.lng ||
+        raw.dropoff?.lng ||
+        raw.dropoff_lng ||
+        raw.destination?.lng ||
+        raw.destination_lng ||
+        raw.dropoffLocation?.coordinates?.[0] ||
+        raw.dropoff?.coordinates?.[0] ||
+        raw.destination?.coordinates?.[0] ||
+        raw.dropoff?.location?.longitude ||
+        raw.dropoff?.location?.lng ||
+        0
+    );
 
-    // Check if we have at least addresses
-    const hasPickupAddress = ride.pickup?.address || ride.pickup?.name;
-    const hasDestAddress = ride.destination?.address || ride.destination?.name;
+    const hasValidDropoffCoords =
+      Number.isFinite(parsedDropoffLat) &&
+      Number.isFinite(parsedDropoffLng) &&
+      parsedDropoffLat !== 0 &&
+      parsedDropoffLng !== 0;
 
-    // Format origin (pickup) location
-    const origin = {
-      name: ride.pickup?.name || "Pickup Location",
-      address: ride.pickup?.address || "",
-      formatted_address: ride.pickup?.address || ride.pickup?.name || "",
-      lat: pickupLat?.toString() || "0",
-      long: pickupLng?.toString() || "0",
-      latitude: pickupLat || 0,
-      longitude: pickupLng || 0,
-    };
-
-    // Format destination location
-    const destination = {
-      name: ride.destination?.name || "Destination",
-      address: ride.destination?.address || "",
-      formatted_address: ride.destination?.address || ride.destination?.name || "",
-      lat: destLat?.toString() || "0",
-      long: destLng?.toString() || "0",
-      latitude: destLat || 0,
-      longitude: destLng || 0,
-    };
-
-    // Validate that we have at least addresses
-    if (!hasPickupAddress || !hasDestAddress) {
-      showMessage({
-        type: "warning",
-        message: "Cannot rebook: Missing location information",
-      });
+    if (!dropoffName || !dropoffName.trim()) {
+      safeShowMessage({ type: "info", message: "Cannot rebook this ride" });
       return;
     }
 
-    // Check if we have valid coordinates
-    const hasValidCoordinates = pickupLat && pickupLng && destLat && destLng && 
-                                 pickupLat !== 0 && pickupLng !== 0 && 
-                                 destLat !== 0 && destLng !== 0;
-
-    if (!hasValidCoordinates) {
-      // Log warning but still allow rebooking - addresses will be used for search
-      logger.warn("Rebooking with addresses only (coordinates missing)", {
-        pickup: { name: origin.name, address: origin.address },
-        destination: { name: destination.name, address: destination.address },
-      });
-      
-      showMessage({
-        type: "info",
-        message: "Locations will be searched by address. Please confirm on the map.",
-        duration: 4000,
+    if (!hasValidDropoffCoords) {
+      logger.warn("Rebooking with name-only dropoff fallback", {
+        rideId: ride.ride_id,
+        dropoffName,
+        raw,
       });
     }
 
-    // Set ride data in Redux
-    dispatch(setRideData({
-      origin,
-      destination,
-    }));
-
-    // Set booking state to open findRide sheet
-    dispatch(setAppData({
-      isBooking: true,
-    }));
-
-    // Navigate to home tab and open findRide
-    router.push({
-      pathname: "/(app)/(tabs)/(home)",
-      params: { openFindRide: "true" },
+    router.replace({
+      pathname: "/(app)/(tabs)/(home)/home",
+      params: {
+        rebook_dropoff_name: dropoffName.trim(),
+        rebook_dropoff_lat: hasValidDropoffCoords ? String(parsedDropoffLat) : undefined,
+        rebook_dropoff_lng: hasValidDropoffCoords ? String(parsedDropoffLng) : undefined,
+      },
     });
-
-    showMessage({
-      type: "success",
-      message: "Ride details loaded. Select your vehicle to continue.",
-    });
-  }, [dispatch]);
+  }, []);
 
   // Group rides by month and year - Memoized
   const groupedPastRides = useMemo(() => {
@@ -812,186 +1019,259 @@ const RidesScreen = () => {
 
   // Fetch rides - Optimized to use single API call
   useEffect(() => {
-    if (!isFocused || !token || !apiConfig) {
-      if (!token) {
-        setPastRides([]);
-        setUpcomingRides([]);
+    refreshOnFocus(() => {
+      if (!token || !apiConfig) {
+        if (!token) {
+          setPastRides([]);
+          setUpcomingRides([]);
+        }
+        return;
       }
-      return;
-    }
 
-    // Prevent duplicate fetches within 2 seconds
-    const now = Date.now();
-    if (now - lastFetchRef.current < 2000 && !loading) {
-      return;
-    }
+      // Prevent duplicate fetches within 2 seconds
+      const now = Date.now();
+      if (now - lastFetchRef.current < 2000 && !loading) {
+        return;
+      }
 
-    // Debounce to prevent rapid re-fetches
-    const fetchTimer = setTimeout(() => {
-      lastFetchRef.current = Date.now();
-      setLoading(true);
+      // Debounce to prevent rapid re-fetches
+      const fetchTimer = setTimeout(() => {
+        lastFetchRef.current = Date.now();
+        setLoading(true);
 
-      // Fetch both ride history and scheduled bookings
-      Promise.all([
-        apiClient.get("booking/history", { params: { limit: 200 } }),
-        apiClient.get("schedule/latest/booking").catch(() => ({ data: { data: [] } })) // Don't fail if bookings endpoint fails
-      ])
-        .then(([ridesResponse, bookingsResponse]) => {
-          const allRides = ridesResponse.data?.data?.rides || [];
-          const bookings = bookingsResponse.data?.data || [];
-          
-          // Transform bookings to ride format
-          const transformedBookings = Array.isArray(bookings) 
-            ? bookings.map((booking: any) => {
-                // Parse scheduled_at date
-                const scheduledAt = booking.scheduled_at ? new Date(booking.scheduled_at) : null;
-                const bookingDate = scheduledAt && !isNaN(scheduledAt.getTime())
-                  ? scheduledAt.toISOString().split('T')[0]
-                  : booking.booking_date || '';
-                const bookingTime = scheduledAt && !isNaN(scheduledAt.getTime())
-                  ? scheduledAt.toTimeString().split(' ')[0].substring(0, 5)
-                  : booking.booking_time || '';
-                
-                return {
-                  ride_id: booking.ride_id || booking.booking_id || booking._id || '',
-                  _id: booking._id || booking.ride_id || booking.booking_id || '',
-                  status: booking.status || 'scheduled',
-                  isScheduled: true,
-                  is_scheduled: true,
-                  scheduledAt: booking.scheduled_at || booking.scheduled_at,
-                  scheduled_at: booking.scheduled_at || booking.scheduled_at,
-                  pickupLocation: {
-                    address: booking.pickup?.address || booking.pickup_location || booking.origin || '',
-                    coordinates: booking.pickup?.location 
-                      ? [booking.pickup.location.longitude || 0, booking.pickup.location.latitude || 0]
-                      : [0, 0]
-                  },
-                  dropoffLocation: {
-                    address: booking.dropoff?.address || booking.dropoff_location || booking.destination || '',
-                    coordinates: booking.dropoff?.location
-                      ? [booking.dropoff.location.longitude || 0, booking.dropoff.location.latitude || 0]
-                      : [0, 0]
-                  },
-                  fare: booking.fare || booking.cost || 0,
-                  vehicleType: booking.vehicle_type,
-                  driver: booking.driver,
-                  createdAt: booking.created_at || new Date().toISOString(),
-                  ...booking, // Include all other fields
-                };
+        // Fetch both ride history and scheduled bookings
+        Promise.all([
+          apiClient.get("booking/history", { params: { limit: 200 } }),
+          apiClient.get("schedule/latest/booking").catch(() => ({ data: { data: [] } })), // Don't fail if bookings endpoint fails
+        ])
+          .then(([ridesResponse, bookingsResponse]) => {
+            const allRides = ridesResponse.data?.data?.rides || [];
+            const bookings = bookingsResponse.data?.data || [];
+
+            // Transform bookings to ride format
+            const transformedBookings = Array.isArray(bookings)
+              ? bookings.map((booking: any) => {
+                  // Parse scheduled_at date
+                  const scheduledAt = booking.scheduled_at ? new Date(booking.scheduled_at) : null;
+                  const bookingDate =
+                    scheduledAt && !isNaN(scheduledAt.getTime())
+                      ? scheduledAt.toISOString().split("T")[0]
+                      : booking.booking_date || "";
+                  const bookingTime =
+                    scheduledAt && !isNaN(scheduledAt.getTime())
+                      ? scheduledAt.toTimeString().split(" ")[0].substring(0, 5)
+                      : booking.booking_time || "";
+
+                  return {
+                    ride_id: booking.ride_id || booking.booking_id || booking._id || "",
+                    _id: booking._id || booking.ride_id || booking.booking_id || "",
+                    status: inferRideStatus(booking),
+                    isScheduled: true,
+                    is_scheduled: true,
+                    scheduledAt: booking.scheduled_at || booking.scheduled_at,
+                    scheduled_at: booking.scheduled_at || booking.scheduled_at,
+                    pickupLocation: {
+                      address: booking.pickup?.address || booking.pickup_location || booking.origin || "",
+                      coordinates: booking.pickup?.location
+                        ? [booking.pickup.location.longitude || 0, booking.pickup.location.latitude || 0]
+                        : [0, 0],
+                    },
+                    dropoffLocation: {
+                      address: booking.dropoff?.address || booking.dropoff_location || booking.destination || "",
+                      coordinates: booking.dropoff?.location
+                        ? [booking.dropoff.location.longitude || 0, booking.dropoff.location.latitude || 0]
+                        : [0, 0],
+                    },
+                    fare: booking.fare || booking.cost || 0,
+                    vehicleType: booking.vehicle_type,
+                    driver: booking.driver,
+                    createdAt: booking.created_at || new Date().toISOString(),
+                    ...booking, // Include all other fields
+                  };
+                })
+              : [];
+
+            // Merge bookings with rides (avoid duplicates by ride_id)
+            const rideIds = new Set(allRides.map((r: any) => r.ride_id || r._id));
+            const uniqueBookings = transformedBookings.filter((b: any) => !rideIds.has(b.ride_id || b._id));
+            const combinedRides = [...allRides, ...uniqueBookings];
+
+            if (__DEV__) {
+              console.log("📋 Total rides fetched:", allRides.length);
+              console.log("📅 Scheduled bookings fetched:", bookings.length);
+              console.log("📋 Combined rides:", combinedRides.length);
+            }
+
+            // Filter past rides (completed and cancelled)
+            const past = combinedRides
+              .filter((ride: any) => {
+                const status = (ride.status || "").toLowerCase();
+                return ["completed", "cancelled"].includes(status);
               })
-            : [];
-          
-          // Merge bookings with rides (avoid duplicates by ride_id)
-          const rideIds = new Set(allRides.map((r: any) => r.ride_id || r._id));
-          const uniqueBookings = transformedBookings.filter((b: any) => !rideIds.has(b.ride_id || b._id));
-          const combinedRides = [...allRides, ...uniqueBookings];
-          
-          if (__DEV__) {
-            console.log('📋 Total rides fetched:', allRides.length);
-            console.log('📅 Scheduled bookings fetched:', bookings.length);
-            console.log('📋 Combined rides:', combinedRides.length);
-          }
+              .map(transformRide);
 
-          // Filter past rides (completed and cancelled)
-          const past = combinedRides
-            .filter((ride: any) => {
-              const status = (ride.status || "").toLowerCase();
-              return ["completed", "cancelled"].includes(status);
-            })
-            .map(transformRide);
+            // Filter bookings/upcoming rides (pending, accepted, in_progress, scheduled)
+            // Also include scheduled rides that haven't been completed/cancelled
+            const upcoming = combinedRides
+              .filter((ride: any) => {
+                const status = (ride.status || "").toLowerCase();
+                // Check for scheduled flag in both camelCase and snake_case
+                const isScheduled = ride.isScheduled || ride.is_scheduled || false;
+                const scheduledAt = ride.scheduledAt || ride.scheduled_at;
 
-          // Filter bookings/upcoming rides (pending, accepted, in_progress, scheduled)
-          // Also include scheduled rides that haven't been completed/cancelled
-          const upcoming = combinedRides
-            .filter((ride: any) => {
-              const status = (ride.status || "").toLowerCase();
-              // Check for scheduled flag in both camelCase and snake_case
-              const isScheduled = ride.isScheduled || ride.is_scheduled || false;
-              const scheduledAt = ride.scheduledAt || ride.scheduled_at;
-              
-              // Include active rides (but exclude if they're completed/cancelled)
-              if (["pending", "accepted", "in_progress"].includes(status)) {
-                // If it's a scheduled ride, check if scheduled time is in the future
-                if (isScheduled && scheduledAt) {
-                  const scheduledDate = new Date(scheduledAt);
-                  const now = new Date();
-                  return scheduledDate > now;
-                }
-                return true;
-              }
-              
-              // Include scheduled rides (status might be "scheduled" or "requested" with isScheduled flag)
-              if (isScheduled && scheduledAt) {
-                const scheduledDate = new Date(scheduledAt);
-                const now = new Date();
-                // Only include if scheduled time is in the future
-                if (scheduledDate > now) {
-                  if (__DEV__) {
-                    console.log('✅ Including scheduled ride:', {
-                      id: ride.ride_id || ride._id,
-                      scheduledAt: scheduledAt,
-                      scheduledDate: scheduledDate.toISOString(),
-                      now: now.toISOString(),
-                    });
+                // Include active rides (but exclude if they're completed/cancelled)
+                if (["pending", "accepted", "in_progress"].includes(status)) {
+                  // If it's a scheduled ride, check if scheduled time is in the future
+                  if (isScheduled && scheduledAt) {
+                    const scheduledDate = new Date(scheduledAt);
+                    const now = new Date();
+                    return scheduledDate > now;
                   }
                   return true;
                 }
-              }
-              
-              // Include rides with status "scheduled" even if flag is missing
-              if (status === "scheduled" && scheduledAt) {
-                const scheduledDate = new Date(scheduledAt);
-                const now = new Date();
-                const isFuture = scheduledDate > now;
-                if (__DEV__ && isFuture) {
-                  console.log('✅ Including ride with status "scheduled":', {
-                    id: ride.ride_id || ride._id,
-                    scheduledAt: scheduledAt,
-                  });
+
+                // Include scheduled rides (status might be "scheduled" or "requested" with isScheduled flag)
+                if (isScheduled && scheduledAt) {
+                  const scheduledDate = new Date(scheduledAt);
+                  const now = new Date();
+                  // Only include if scheduled time is in the future
+                  if (scheduledDate > now) {
+                    if (__DEV__) {
+                      console.log("✅ Including scheduled ride:", {
+                        id: ride.ride_id || ride._id,
+                        scheduledAt: scheduledAt,
+                        scheduledDate: scheduledDate.toISOString(),
+                        now: now.toISOString(),
+                      });
+                    }
+                    return true;
+                  }
                 }
-                return isFuture;
-              }
-              
-              return false;
-            })
-            .map(transformRide);
 
-          if (__DEV__) {
-            console.log('📊 Bookings count:', upcoming.length);
-            console.log('📊 Past rides count:', past.length);
-          }
+                // Include rides with status "scheduled" even if flag is missing
+                if (status === "scheduled" && scheduledAt) {
+                  const scheduledDate = new Date(scheduledAt);
+                  const now = new Date();
+                  const isFuture = scheduledDate > now;
+                  if (__DEV__ && isFuture) {
+                    console.log('✅ Including ride with status "scheduled":', {
+                      id: ride.ride_id || ride._id,
+                      scheduledAt: scheduledAt,
+                    });
+                  }
+                  return isFuture;
+                }
 
-          setPastRides(past);
-          setUpcomingRides(upcoming);
-        })
-        .catch((err) => {
-          const errorData = err?.response?.data || {};
-          const errorMessage = errorData.message || err?.message || "Failed to fetch rides";
+                return false;
+              })
+              .map(transformRide);
 
-          // Handle rate limit errors gracefully
-          if (errorMessage.includes("Too many requests") || err?.response?.status === 429) {
-            showMessage({
-              type: "warning",
-              message: "Too many requests. Please wait a moment and try again.",
-              duration: 4000,
-            });
-            // Don't clear existing data on rate limit - keep what we have
-            return;
-          }
+            if (__DEV__) {
+              console.log("📊 Bookings count:", upcoming.length);
+              console.log("📊 Past rides count:", past.length);
+            }
 
-          // Only show error for other failures
-          if (err?.response?.status !== 401) {
-            console.error("Error fetching rides:", errorMessage);
-            // Only clear data if it's a real error (not rate limit)
-            setPastRides([]);
-            setUpcomingRides([]);
-          }
-        })
-        .finally(() => setLoading(false));
-    }, 300); // 300ms debounce
+            setPastRides(past);
+            setUpcomingRides(upcoming);
+          })
+          .catch((err) => {
+            const errorData = err?.response?.data || {};
+            const errorMessage = errorData.message || err?.message || "Failed to fetch rides";
 
-    return () => clearTimeout(fetchTimer);
-  }, [isFocused, token, apiConfig]);
+            // Handle rate limit errors gracefully
+            if (errorMessage.includes("Too many requests") || err?.response?.status === 429) {
+              showMessage({
+                type: "warning",
+                message: "Too many requests. Please wait a moment and try again.",
+                duration: 4000,
+              });
+              // Don't clear existing data on rate limit - keep what we have
+              return;
+            }
+
+            // Only show error for other failures
+            if (err?.response?.status !== 401) {
+              console.error("Error fetching rides:", errorMessage);
+              // Only clear data if it's a real error (not rate limit)
+              setPastRides([]);
+              setUpcomingRides([]);
+            }
+          })
+          .finally(() => setLoading(false));
+      }, 300); // 300ms debounce
+
+      return () => clearTimeout(fetchTimer);
+    });
+  }, [isFocused, refreshOnFocus, token, apiConfig]);
+
+  // Explicit refreshes (cancel booking, etc.) should bypass focus staleness guard.
+  useEffect(() => {
+    if (!isFocused) return;
+    if (!token || !apiConfig) return;
+    if (refreshTrigger === 0) return;
+    lastFetchRef.current = 0;
+    setLoading(true);
+    Promise.all([
+      apiClient.get("booking/history", { params: { limit: 200 } }),
+      apiClient.get("schedule/latest/booking").catch(() => ({ data: { data: [] } })),
+    ])
+      .then(([ridesResponse, bookingsResponse]) => {
+        const allRides = ridesResponse.data?.data?.rides || [];
+        const bookings = bookingsResponse.data?.data || [];
+        const transformedBookings = Array.isArray(bookings)
+          ? bookings.map((booking: any) => ({
+              ride_id: booking.ride_id || booking.booking_id || booking._id || "",
+              _id: booking._id || booking.ride_id || booking.booking_id || "",
+              status: inferRideStatus(booking),
+              isScheduled: true,
+              is_scheduled: true,
+              scheduledAt: booking.scheduled_at || booking.scheduled_at,
+              scheduled_at: booking.scheduled_at || booking.scheduled_at,
+              pickupLocation: {
+                address: booking.pickup?.address || booking.pickup_location || booking.origin || "",
+                coordinates: booking.pickup?.location
+                  ? [booking.pickup.location.longitude || 0, booking.pickup.location.latitude || 0]
+                  : [0, 0],
+              },
+              dropoffLocation: {
+                address: booking.dropoff?.address || booking.dropoff_location || booking.destination || "",
+                coordinates: booking.dropoff?.location
+                  ? [booking.dropoff.location.longitude || 0, booking.dropoff.location.latitude || 0]
+                  : [0, 0],
+              },
+              fare: booking.fare || booking.cost || 0,
+              vehicleType: booking.vehicle_type,
+              driver: booking.driver,
+              createdAt: booking.created_at || new Date().toISOString(),
+              ...booking,
+            }))
+          : [];
+        const rideIds = new Set(allRides.map((r: any) => r.ride_id || r._id));
+        const uniqueBookings = transformedBookings.filter((b: any) => !rideIds.has(b.ride_id || b._id));
+        const combinedRides = [...allRides, ...uniqueBookings];
+        const past = combinedRides
+          .filter((ride: any) => ["completed", "cancelled"].includes(String(ride.status || "").toLowerCase()))
+          .map(transformRide);
+        const upcoming = combinedRides
+          .filter((ride: any) => {
+            const status = String(ride.status || "").toLowerCase();
+            const isScheduled = ride.isScheduled || ride.is_scheduled || false;
+            const scheduledAt = ride.scheduledAt || ride.scheduled_at;
+            if (["pending", "accepted", "in_progress"].includes(status)) {
+              if (isScheduled && scheduledAt) return new Date(scheduledAt) > new Date();
+              return true;
+            }
+            if (isScheduled && scheduledAt) return new Date(scheduledAt) > new Date();
+            if (status === "scheduled" && scheduledAt) return new Date(scheduledAt) > new Date();
+            return false;
+          })
+          .map(transformRide);
+        setPastRides(past);
+        setUpcomingRides(upcoming);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [refreshTrigger, isFocused, token, apiConfig]);
 
   const handleTabChange = useCallback((tab: "past" | "upcoming") => {
     setActiveTab(tab);
@@ -1003,6 +1283,13 @@ const RidesScreen = () => {
 
   const handleCloseInfoModal = useCallback(() => {
     setShowInfoModal(false);
+  }, []);
+
+  const handleOpenBookRideHowTo = useCallback(() => {
+    setShowBookRideHowToModal(true);
+  }, []);
+  const handleCloseBookRideHowTo = useCallback(() => {
+    setShowBookRideHowToModal(false);
   }, []);
 
   const renderPastRides = useCallback(() => {
@@ -1043,20 +1330,71 @@ const RidesScreen = () => {
   }, [loading, pastRides.length, groupedPastRides]);
 
   const handleViewBooking = useCallback((ride: Ride) => {
-    // Navigate to booked-rides page with the booking ID
     const bookingId = ride.ride_id || ride._raw?.ride_id || ride._raw?._id;
-    if (bookingId) {
-      router.push({
-        pathname: "/(app)/booked-rides",
-        params: { bookingId },
-      });
-    } else {
-      showMessage({
-        type: "warning",
-        message: "Booking details not available",
-      });
+    if (!bookingId) {
+      showMessage({ type: "warning", message: "Booking details not available" });
+      return;
     }
+    const raw = ride._raw || {};
+    const scheduledAt = ride.scheduled_at ? new Date(ride.scheduled_at) : null;
+    const bookingDate = scheduledAt && !isNaN(scheduledAt.getTime())
+      ? scheduledAt.toISOString().split("T")[0]
+      : raw.booking_date || "";
+    const bookingTime = scheduledAt && !isNaN(scheduledAt.getTime())
+      ? scheduledAt.toTimeString().split(" ")[0].substring(0, 5)
+      : raw.booking_time || "";
+    const fare = typeof ride.fare === "number" ? ride.fare : (raw.fare ?? raw.cost ?? 0);
+    const mapped: Record<string, unknown> = {
+      booking_id: bookingId,
+      ride_id: bookingId,
+      pickup_location: ride.pickup?.address || ride.pickup?.name || raw.pickup_location || "",
+      dropoff_location: ride.destination?.address || ride.destination?.name || raw.dropoff_location || "",
+      booking_date: bookingDate,
+      booking_time: bookingTime,
+      scheduled_at: ride.scheduled_at || raw.scheduled_at,
+      fare,
+      cost: fare,
+      status: ride.status || raw.status || "scheduled",
+      payment_method: raw.payment_method || raw.payment_type || "cash",
+      is_started: raw.is_started ?? raw.is_ride_started ?? false,
+      username: raw.username || raw.passenger?.name || "Passenger",
+      driver_id: raw.driver_id ?? null,
+      driver_name: raw.driver_name ?? raw.driver?.name ?? null,
+      driver_phone: raw.driver_phone ?? raw.driver?.phone ?? null,
+      vehicle_type: raw.vehicle_type?.name ?? raw.vehicle_type ?? null,
+    };
+    setSelectedBooking(mapped);
+    setViewLoading(false);
+    bookingSheetRef.current?.open();
   }, []);
+
+  const cancelBooking = useCallback((booking_id: string, setLoadingState: React.Dispatch<React.SetStateAction<boolean>>) => {
+    const currentStatus = String(selectedBooking?.status ?? "").toLowerCase();
+    if (currentStatus === "in_progress" || currentStatus === "in progress" || currentStatus === "started") {
+      safeShowMessage({
+        type: "warning",
+        message: "This ride has already started and cannot be cancelled.",
+      });
+      return;
+    }
+
+    setLoadingState(true);
+    apiClient
+      .post("schedule/cancel/booking", { booking_id })
+      .then(() => {
+        bookingSheetRef.current?.close();
+        setSelectedBooking({});
+        lastFetchRef.current = 0;
+        setRefreshTrigger((t) => t + 1);
+      })
+      .catch((err: any) => {
+        showMessage({
+          type: "danger",
+          message: err?.response?.data?.message || err?.response?.data?.error || "Failed to cancel booking",
+        });
+      })
+      .finally(() => setLoadingState(false));
+  }, [selectedBooking?.status]);
 
   const renderUpcomingRides = useCallback(() => {
     if (loading) {
@@ -1068,14 +1406,14 @@ const RidesScreen = () => {
     }
 
     if (upcomingRides.length === 0) {
-      return <EmptyUpcomingRides />;
+      return <EmptyUpcomingRides onScheduleRide={handleScheduleRide} />;
     }
 
     return (
       <FlatList
         data={upcomingRides}
         keyExtractor={(item) => item.ride_id || `booking-${item._raw?._id || Math.random()}`}
-        contentContainerStyle={tw`pb-20 px-4 pt-4`}
+        contentContainerStyle={tw`pb-36 px-4 pt-4`}
         removeClippedSubviews={true}
         maxToRenderPerBatch={10}
         windowSize={10}
@@ -1084,13 +1422,14 @@ const RidesScreen = () => {
         renderItem={({ item }) => <BookingListItem item={item} onView={handleViewBooking} />}
       />
     );
-  }, [loading, upcomingRides, handleViewBooking]);
+  }, [loading, upcomingRides, handleViewBooking, handleScheduleRide]);
 
+  const topInset = Math.max(insets.top, StatusBar.currentHeight ?? 0, 44);
   return (
     <ImageBackground
       style={tw.style(`bg-white`, {
         flex: 1,
-        paddingTop: StatusBar.currentHeight,
+        paddingTop: topInset + 12,
       })}
       source={require("@images/pattern-bg.png")}
     >
@@ -1159,10 +1498,56 @@ const RidesScreen = () => {
         {activeTab === "past" ? renderPastRides() : renderUpcomingRides()}
       </View>
 
+      {activeTab === "upcoming" && upcomingRides.length > 0 ? (
+        <View
+          style={tw.style(`bg-white px-4 pt-3`, {
+            paddingBottom: Math.max(insets.bottom, 16),
+            borderTopWidth: 1,
+            borderTopColor: "#EFEFEF",
+          })}
+        >
+          <TouchableOpacity
+            onPress={handleScheduleRide}
+            activeOpacity={0.85}
+            style={tw`bg-base-green rounded-full py-4 items-center justify-center`}
+          >
+            <Text
+              style={tw.style(`text-lg text-white`, {
+                fontFamily: "RobotoBold",
+              })}
+            >
+              Schedule a Ride
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {/* Booking detail bottom sheet (same as former booked-rides screen) */}
+      <DriverBookingSheet
+        bottomSheetRef={bookingSheetRef}
+        data={selectedBooking as any}
+        isloading={viewLoading}
+        cancel={
+          String(selectedBooking?.status ?? "").toLowerCase() !== "cancelled"
+            ? cancelBooking
+            : undefined
+        }
+        viewBooking={() => {}}
+        accepted={
+          !!selectedBooking?.driver_id ||
+          ["accepted", "in_progress", "completed", "cancelled"].includes(
+            String(selectedBooking?.status ?? "").toLowerCase()
+          )
+        }
+      />
       {/* Info Modal */}
       <RidesInfoModal
         visible={showInfoModal}
         onClose={handleCloseInfoModal}
+      />
+      <BookRideHowToModal
+        visible={showBookRideHowToModal}
+        onClose={handleCloseBookRideHowTo}
       />
     </ImageBackground>
   );

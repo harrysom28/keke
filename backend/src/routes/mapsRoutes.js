@@ -1,15 +1,15 @@
 import express from 'express';
-import * as mapsController from '../controllers/mapsController.js';
+import * as osrmMapsController from '../controllers/osrmMapsController.js';
+import * as placeController from '../controllers/placeController.js';
 import { protect } from '../middleware/auth.js';
+import { validationRules, validate } from '../middleware/validation.js';
 import rateLimit from 'express-rate-limit';
 
 const router = express.Router();
 
-// Rate limit Maps proxy endpoints to reduce abuse/cost.
-// Fine-tune via env if needed.
 const mapsRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: parseInt(process.env.MAPS_RATE_LIMIT_MAX || '120', 10), // 120 req / 15 min by default
+  max: parseInt(process.env.MAPS_RATE_LIMIT_MAX || '200', 10),
   message: {
     status: 'error',
     message: 'Too many maps requests, please try again later.',
@@ -19,16 +19,17 @@ const mapsRateLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === 'test',
 });
 
-// Maps routes - can be public or protected based on requirements
-// For now, we'll make them protected to track usage
 router.use(protect);
 router.use(mapsRateLimiter);
 
-// Google Maps proxy endpoints
-router.get('/places/autocomplete', mapsController.placesAutocomplete);
-router.get('/places/details', mapsController.placeDetails);
-router.get('/directions', mapsController.getDirections);
-router.get('/geocode', mapsController.geocodeAddress);
-router.get('/distance-matrix', mapsController.distanceMatrix);
+// OSRM + Nominatim (OpenStreetMap) - replaces Google Maps
+router.get('/places/search', validationRules.placeSearchQuery, validate, placeController.placeSearch);
+router.get('/places/autocomplete', validationRules.placesAutocompleteQuery, validate, osrmMapsController.placeSearch);
+router.get('/places/details', validationRules.placeDetailsQuery, validate, osrmMapsController.placeDetails);
+router.get('/places/nearby', validationRules.placesNearbyQuery, validate, osrmMapsController.placesNearby);
+router.get('/pickup-label', validationRules.pickupLabelQuery, validate, osrmMapsController.resolvePickupLabel);
+router.get('/directions', osrmMapsController.getDirections);
+router.get('/geocode', osrmMapsController.geocodeAddress);
+router.get('/distance-matrix', osrmMapsController.distanceMatrix);
 
 export default router;

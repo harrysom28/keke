@@ -7,6 +7,8 @@ import logger from '../utils/logger.js';
 import { calculateDistance } from '../utils/geolocation.js';
 import rideMatchingService from '../services/rideMatchingService.js';
 import { getSocketService } from '../services/socketService.js';
+import { processCancellation } from '../services/escrowWalletService.js';
+import { cache } from '../config/redis.js';
 
 /**
  * Get scheduled bookings - GET /api/schedule/list-bookings
@@ -47,6 +49,7 @@ export const getScheduledBookings = asyncHandler(async (req, res) => {
       driver: driver._id,
       isScheduled: true,
       scheduledAt: { $gte: new Date() }, // Only future scheduled rides
+      status: { $nin: ['cancelled', 'completed'] },
     };
   } else {
     // Get scheduled rides for rider
@@ -54,6 +57,7 @@ export const getScheduledBookings = asyncHandler(async (req, res) => {
       rider: userId,
       isScheduled: true,
       scheduledAt: { $gte: new Date() }, // Only future scheduled rides
+      status: { $nin: ['cancelled', 'completed'] },
     };
   }
 
@@ -140,6 +144,7 @@ export const acceptScheduledBooking = asyncHandler(async (req, res) => {
   });
 
   await ride.save();
+  await cache.set(`ride_accepted:${rideId}`, driver._id.toString(), 30);
   await ride.populate('rider', 'name phone profileImage rating');
   await ride.populate('vehicleType');
 
@@ -192,6 +197,7 @@ export const getLatestScheduledBooking = asyncHandler(async (req, res) => {
       driver: driver._id,
       isScheduled: true,
       scheduledAt: { $gte: new Date() }, // Only future scheduled rides
+      status: { $nin: ['cancelled', 'completed'] },
     };
   } else {
     // Get latest scheduled ride for rider
@@ -199,6 +205,7 @@ export const getLatestScheduledBooking = asyncHandler(async (req, res) => {
       rider: userId,
       isScheduled: true,
       scheduledAt: { $gte: new Date() }, // Only future scheduled rides
+      status: { $nin: ['cancelled', 'completed'] },
     };
   }
 
@@ -218,6 +225,35 @@ export const getLatestScheduledBooking = asyncHandler(async (req, res) => {
   res.json({
     status: 'success',
     data: [latestBooking],
+  });
+});
+
+/**
+ * Get single scheduled booking by id - GET /api/schedule/show/:id/booking
+ */
+export const getScheduledBookingById = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { id } = req.params;
+
+  const ride = await Ride.findById(id)
+    .populate('rider', 'name phone profileImage rating')
+    .populate({ path: 'driver', populate: { path: 'user', select: 'name phone profileImage' } })
+    .populate('vehicleType');
+
+  if (!ride) {
+    throw new NotFoundError('Booking');
+  }
+
+  const isRider = ride.rider && ride.rider._id.toString() === userId.toString();
+  const driver = await Driver.findOne({ user: userId });
+  const isDriver = driver && ride.driver && ride.driver._id.toString() === driver._id.toString();
+  if (!isRider && !isDriver) {
+    throw new NotFoundError('Booking');
+  }
+
+  res.json({
+    status: 'success',
+    data: formatScheduledRideResponse(ride, !!isDriver),
   });
 });
 
@@ -383,14 +419,39 @@ export const cancelScheduledBooking = asyncHandler(async (req, res) => {
     throw new ValidationError(`Cannot cancel a ${ride.status} ride`);
   }
 
+  if (ride.status === 'in_progress' || ride.status === 'started') {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot cancel a ride that is already in progress.',
+    });
+  }
+
   // Determine who cancelled
   const cancelledBy = isRider ? 'rider' : (isDriver ? 'driver' : 'admin');
   
   // Calculate cancellation fee (usually 0 for scheduled rides cancelled well in advance)
   const cancellationFee = 0; // No fee for scheduled bookings cancelled in advance
+  const cancellationScenario = cancelledBy === 'driver' ? 'driverCancel' : 'beforeAccept';
+
+  const riderId = ride.rider?._id ?? ride.rider;
+  let driverUserId = ride.driver?.user?._id ?? ride.driver?.user ?? null;
+  if (!driverUserId && ride.driver?._id) {
+    const driverDoc = await Driver.findById(ride.driver._id).select('user').lean();
+    driverUserId = driverDoc?.user ?? null;
+  }
+
+  const fareAmount = Number(ride?.fare?.totalFare || 0);
+  const isEscrowRide =
+    ride.paymentMethod === 'wallet' &&
+    ['held', 'charged'].includes(String(ride.paymentStatus || '').toLowerCase()) &&
+    fareAmount > 0;
+
+  if (isEscrowRide) {
+    await processCancellation(ride._id, riderId, driverUserId, fareAmount, cancellationScenario);
+  }
 
   // Cancel the ride using the Ride model method
-  await ride.cancelRide(cancelledBy, reason, cancellationFee);
+  await ride.cancelRide(cancelledBy, reason, cancellationFee, isEscrowRide ? cancellationScenario : null);
 
   // Cancel any automation timers for this ride
   if (global.automationTimers && global.automationTimers.has(rideIdToCancel)) {

@@ -12,10 +12,11 @@ import {
 import { Path, Svg } from "react-native-svg";
 import React, { useContext, useEffect, useState } from "react";
 
-import { AntDesign } from "@expo/vector-icons";
+import { AntDesign, FontAwesome5 } from "@expo/vector-icons";
 import { AppContext } from "@/app/context";
 import { DRIVER_TASKS } from "@/constants";
 import EmptyData from "@/components/emptyData";
+import apiClient from "@/utils/apiClient";
 import axios from "axios";
 import { getErrorMessage } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
@@ -23,7 +24,7 @@ import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 
-const Tab = ["Daily task", "Completed"];
+const Tab = ["Daily task", "Completed", "Challenges"];
 
 interface ITask {
   amount?: string | number;
@@ -37,9 +38,85 @@ interface ITask {
   created_at?: string;
 }
 
+interface IChallenge {
+  challenge_id: string;
+  title: string;
+  description: string;
+  target: number;
+  unit: string;
+  reward_amount: number;
+  current_progress: number;
+  completed: boolean;
+  completed_at: string | null;
+  reward_claimed: number | null;
+}
+
 interface LProps {
   item: ITask;
   completed: boolean;
+}
+
+interface ChallengeItemProps {
+  challenge: IChallenge;
+}
+
+function ChallengeItem({ challenge }: Readonly<ChallengeItemProps>) {
+  const progress = challenge.target > 0 ? Math.min(challenge.current_progress / challenge.target, 1) : 0;
+  return (
+    <View
+      style={tw.style(
+        "flex-row justify-between items-center bg-white rounded-[12px] p-4 border border-gray-100",
+        { elevation: 2 }
+      )}
+    >
+      <View style={tw.style("flex-1 gap-y-1")}>
+        <View style={tw.style("flex-row items-center gap-x-2")}>
+          <View
+            style={tw.style(
+              "w-10 h-10 rounded-full items-center justify-center",
+              challenge.completed ? "bg-[#3C8F7C]" : "bg-amber-400"
+            )}
+          >
+            {challenge.completed ? (
+              <AntDesign name="check" size={22} color="white" />
+            ) : (
+              <FontAwesome5 name="bullseye" size={18} color="white" />
+            )}
+          </View>
+          <Text style={tw.style("text-[16px] text-black", { fontFamily: "RobotoMedium" })}>
+            {challenge.title}
+          </Text>
+        </View>
+        <Text style={tw.style("text-[12px] text-gray-600", { fontFamily: "RobotoRegular" })}>
+          {challenge.description}
+        </Text>
+        <View style={tw.style("h-2 bg-gray-100 rounded-full overflow-hidden mt-2")}>
+          <View
+            style={[
+              tw.style(
+                "h-full rounded-full",
+                challenge.completed ? "bg-[#3C8F7C]" : "bg-amber-400"
+              ),
+              { width: `${progress * 100}%` },
+            ]}
+          />
+        </View>
+        <Text style={tw.style("text-[11px] text-gray-500 mt-1", { fontFamily: "RobotoRegular" })}>
+          {challenge.current_progress}/{challenge.target} {challenge.unit}
+        </Text>
+      </View>
+      <View style={tw.style("items-end")}>
+        <Text style={tw.style("text-[15px] text-[#3C8F7C]", { fontFamily: "RobotoBold" })}>
+          ₦{Number(challenge.reward_amount || 0).toLocaleString()}
+        </Text>
+        {challenge.completed && challenge.reward_claimed != null && (
+          <Text style={tw.style("text-[11px] text-gray-500", { fontFamily: "RobotoRegular" })}>
+            Claimed
+          </Text>
+        )}
+      </View>
+    </View>
+  );
 }
 
 function ListItem({ item, completed }: Readonly<LProps>) {
@@ -100,7 +177,7 @@ function ListItem({ item, completed }: Readonly<LProps>) {
         </View>
       </View>
       {completed && (
-        <AntDesign name="checkcircle" size={24} color="#3C8F7C" />
+        <AntDesign name="check-circle" size={24} color="#3C8F7C" />
       )}
     </Pressable>
   );
@@ -113,8 +190,10 @@ const Tasks = () => {
   let isFocused = useIsFocused();
   const { apiConfig } = useContext(AppContext);
   const [loading, setLoading] = useState(false);
+  const [challengesLoading, setChallengesLoading] = useState(false);
   const [data, setData] = useState<ITask[]>([]);
   const [completed_task, setCompleted_task] = useState<ITask[]>([]);
+  const [challenges, setChallenges] = useState<IChallenge[]>([]);
 
   // Helper function to map backend ride data to frontend task format
   const mapRideToTask = (ride: any): ITask => {
@@ -147,63 +226,52 @@ const Tasks = () => {
   };
 
   useEffect(() => {
-    if (isFocused) {
+    if (isFocused && (selected === Tab[0] || selected === Tab[1])) {
       setLoading(true);
-      // Always fetch from the same endpoint - backend returns all today's rides
       axios
         .get(DRIVER_TASKS, apiConfig)
         .then(({ data }) => {
-          console.log('Tasks data:', data?.data);
-          // Backend returns { tasks: {...}, rides: [...] }
-          // The 'rides' array contains the actual task items
           const rides = data?.data?.rides || [];
           const ridesArray = Array.isArray(rides) ? rides : [];
-          
-          // Map all rides to task format
           const mappedTasks = ridesArray.map((ride: any) => mapRideToTask(ride));
-          
           if (selected === Tab[1]) {
-            // Filter completed tasks
-            const completedTasks = mappedTasks.filter((task: ITask) => task.status === 'completed');
-            setCompleted_task(completedTasks);
-            setData([]); // Clear daily tasks when viewing completed
+            setCompleted_task(mappedTasks.filter((t: ITask) => t.status === "completed"));
+            setData([]);
           } else {
-            // Show active/pending tasks (exclude completed)
-            const activeTasks = mappedTasks.filter((task: ITask) => task.status !== 'completed');
-            setData(activeTasks);
-            setCompleted_task([]); // Clear completed tasks when viewing daily
+            setData(mappedTasks.filter((t: ITask) => t.status !== "completed"));
+            setCompleted_task([]);
           }
         })
         .catch((err) => {
-          console.log('Tasks error:', err?.response?.data);
           const status = err?.response?.status || err?.status;
-          
-          // Silently handle 404 errors (driver profile not found, etc.)
-          if (status === 404) {
-            console.log('Resource not found (404) - silently handling');
+          if (status === 404 || status === 401) {
             setData([]);
             setCompleted_task([]);
             return;
           }
-          
-          // Silently handle 401 errors - token refresh should happen automatically via API client
-          if (status === 401) {
-            console.log('Authentication error (401) - token refresh should handle this');
-            setData([]);
-            setCompleted_task([]);
-            return;
-          }
-          
-          // Use centralized error handler to extract safe string message
-          const errorMessage = getErrorMessage(err);
-          safeShowMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-          setData([]); // Ensure data is always an array on error
+          safeShowMessage({ type: "danger", message: getErrorMessage(err) });
+          setData([]);
           setCompleted_task([]);
         })
         .finally(() => setLoading(false));
+    }
+  }, [isFocused, selected]);
+
+  useEffect(() => {
+    if (isFocused && selected === Tab[2]) {
+      setChallengesLoading(true);
+      apiClient
+        .get("driver/challenges")
+        .then(({ data }) => {
+          setChallenges(data?.data?.challenges || []);
+        })
+        .catch((err) => {
+          if (err?.response?.status !== 404 && err?.response?.status !== 401) {
+            safeShowMessage({ type: "danger", message: getErrorMessage(err) });
+          }
+          setChallenges([]);
+        })
+        .finally(() => setChallengesLoading(false));
     }
   }, [isFocused, selected]);
 
@@ -265,7 +333,7 @@ const Tasks = () => {
                 fontFamily: "RobotoBold",
               })}
             >
-              Today's Task
+              {selected === Tab[2] ? "Challenges" : "Today's Task"}
             </Text>
           </View>
         </View>
@@ -287,22 +355,19 @@ const Tasks = () => {
             />
           </View>
 
-          <View style={tw`flex-row items-center justify-between mx-16`}>
+          <View style={tw`flex-row items-center justify-between mx-4`}>
             {Tab.map((item) => (
               <Pressable
                 key={item}
-                style={tw`flex-col items-center gap-y-[2px]`}
+                style={tw`flex-col items-center gap-y-[2px] flex-1`}
                 onPress={() => setSelected(item)}
               >
                 <Text
                   style={tw.style(
-                    `text-[16px]`,
-                    selected === item && selected === Tab[0] && `text-black`,
-                    selected === item && selected === Tab[1] && `text-white`,
+                    `text-[14px]`,
+                    selected === item && (selected === Tab[0] ? `text-black` : `text-white`),
                     selected !== item && `text-[#C8C7CC]`,
-                    {
-                      fontFamily: "RobotoMedium",
-                    }
+                    { fontFamily: "RobotoMedium" }
                   )}
                 >
                   {item}
@@ -310,7 +375,7 @@ const Tasks = () => {
                 {selected === item && (
                   <View
                     style={tw.style(
-                      `w-[48px] h-[3px] rounded`,
+                      `w-[32px] h-[3px] rounded`,
                       selected === Tab[0] ? `bg-base-green` : `bg-white`
                     )}
                   />
@@ -320,13 +385,16 @@ const Tasks = () => {
           </View>
 
           <ScrollView
-            style={tw`mt-6 py-4 `}
+            style={tw`mt-6 py-4`}
             contentContainerStyle={tw.style(
               "flex-col gap-y-3 px-6",
-              selected === Tab[0] ? ` pb-[500px]` : ` pb-[250px]`
+              selected === Tab[0] ? "pb-[500px]" : selected === Tab[2] ? "pb-[300px]" : "pb-[250px]"
             )}
           >
-            {loading && (
+            {selected !== Tab[2] && loading && (
+              <ActivityIndicator color={tw.color("base-green")} size="large" />
+            )}
+            {selected === Tab[2] && challengesLoading && (
               <ActivityIndicator color={tw.color("base-green")} size="large" />
             )}
 
@@ -339,7 +407,7 @@ const Tasks = () => {
                     <ListItem
                       key={item?.task_id || item?.ride_id}
                       item={item}
-                      completed={item?.status === 'completed' || !!item?.completed_at}
+                      completed={item?.status === "completed" || !!item?.completed_at}
                     />
                   ))
                 )}
@@ -357,6 +425,18 @@ const Tasks = () => {
                       item={item}
                       completed={true}
                     />
+                  ))
+                )}
+              </>
+            )}
+
+            {!challengesLoading && selected === Tab[2] && (
+              <>
+                {!Array.isArray(challenges) || challenges.length === 0 ? (
+                  <EmptyData text="No challenges right now" />
+                ) : (
+                  challenges.map((c) => (
+                    <ChallengeItem key={c.challenge_id} challenge={c} />
                   ))
                 )}
               </>

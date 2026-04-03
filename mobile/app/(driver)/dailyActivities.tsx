@@ -1,4 +1,4 @@
-import { ADD_BANK_ACCOUNT, BANK_LIST, DRIVER_EARNINGS } from "@/constants";
+import { ADD_BANK_ACCOUNT, DRIVER_EARNINGS } from "@/constants";
 import {
   ActivityIndicator,
   Image,
@@ -24,6 +24,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -101,7 +102,14 @@ const DailyActivities = () => {
   const [loading, setLoading] = useState(false);
   const [addLoading, setAddLoading] = useState(false);
   const [data, setData] = useState<Partial<TDriverStats>>({});
-  const [list, setList] = useState<Array<{ name: string }>>([]);
+  // Static list of Nigerian banks for dropdown (backend BANK_LIST returns driver's saved accounts, not bank list)
+  const bankList = useMemo(() => [
+    "Access Bank", "Citibank Nigeria", "Ecobank Nigeria", "Fidelity Bank", "First Bank of Nigeria",
+    "First City Monument Bank", "Globus Bank", "Guaranty Trust Bank", "Heritage Bank", "Keystone Bank",
+    "Kuda Bank", "PalmPay", "Polaris Bank", "Providus Bank", "Stanbic IBTC Bank", "Standard Chartered",
+    "Sterling Bank", "SunTrust Bank", "Union Bank of Nigeria", "United Bank for Africa", "Unity Bank",
+    "Wema Bank", "Zenith Bank",
+  ].map((name) => ({ name })), []);
   const [changed, setChanged] = useState(false);
   const [state, setState] = useState({
     bank_name: "",
@@ -112,7 +120,11 @@ const DailyActivities = () => {
   const AddBank = () => {
     setAddLoading(true);
     axios
-      .post(ADD_BANK_ACCOUNT, state, apiConfig)
+      .post(ADD_BANK_ACCOUNT, {
+        bankName: state.bank_name,
+        accountName: state.account_name,
+        accountNumber: state.account_number,
+      }, apiConfig)
       .then(({ data }) => {
         setChanged((prev) => !prev);
         bottomSheetRef?.current?.close();
@@ -175,43 +187,6 @@ const DailyActivities = () => {
     }
   }, [isFocused, changed]);
 
-  useEffect(() => {
-    if (isFocused) {
-      setLoading(true);
-      axios
-        .get(BANK_LIST, apiConfig)
-        .then(({ data }) => {
-          setList(data?.data);
-        })
-        .catch((err) => {
-          console.log(err?.response?.data);
-          const errorMessage = typeof err?.response?.data?.message === 'string' 
-            ? err.response.data.message 
-            : String(err.response.data.message || 'An error occurred');
-          if (errorMessage && errorMessage !== 'An error occurred') {
-            showMessage({
-              type: "danger",
-              message: errorMessage,
-            });
-          } else if (err?.response?.data?.error) {
-            const errorData = err.response.data.error;
-            const extractedErrorMessage = typeof errorData === 'string' 
-              ? errorData 
-              : (errorData?.message || errorData?.name || 'An error occurred');
-            showMessage({
-              type: "danger",
-              message: extractedErrorMessage,
-            });
-          } else {
-            showMessage({
-              type: "danger",
-              message: 'An error occurred. Please try again.',
-            });
-          }
-        })
-        .finally(() => setLoading(false));
-    }
-  }, [isFocused]);
 
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
@@ -548,10 +523,10 @@ const DailyActivities = () => {
                 )}
                 mode="default"
                 data={
-                  list.length > 0
-                    ? list?.map((item) => ({
-                        label: item?.name,
-                        value: item?.name,
+                  bankList.length > 0
+                    ? bankList.map((item) => ({
+                        label: item.name,
+                        value: item.name,
                       }))
                     : [{ label: "No data available", value: "" }]
                 }

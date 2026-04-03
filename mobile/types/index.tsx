@@ -17,6 +17,8 @@ export type TUser = {
   topup_account_name: string;
   topup_account_number: string;
   topup_bank_name: string;
+  topup_reference?: string;
+  wallet_account_number?: string;
   user_id: string;
 };
 
@@ -57,7 +59,7 @@ type Passenger = {
   passenger_phone_number: string;
 };
 
-type RideStatus = "Active" | "Completed" | "Cancelled"; // Add other possible statuses if needed
+type RideStatus = "Active" | "Completed" | "Cancelled" | "active" | "completed" | "cancelled" | "pending" | "accepted" | "in_progress" | "scheduled"; // API may return lowercase
 type PaymentType = "Wallet" | "Cash"; // Add other payment options if applicable
 
 export type TDriverActiveRide = {
@@ -128,7 +130,13 @@ export type TRemoteNotification = {
   title: string;
   body: string;
   data: {
-    sub_type: string;
-    type: "event" | "notification";
+    sub_type?: string;
+    subType?: string;
+    type?: "event" | "notification" | "ride_update" | "payment" | "system";
+    screen?: string;
+    rideId?: string;
+    paymentId?: string;
+    priority?: "high" | "medium" | "low";
+    [key: string]: string | undefined;
   };
 };

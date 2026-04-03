@@ -1,0 +1,39 @@
+{
+  "tabs": {
+    "home": "Ilé",
+    "offers": "Ìpèsè",
+    "rides": "Irìn",
+    "profile": "Profaili"
+  },
+  "driver_tabs": {
+    "home": "Ilé",
+    "bookings": "Àṣẹ",
+    "tasks": "Iṣẹ́",
+    "profile": "Profaili"
+  },
+  "home": {
+    "welcome": "Kaabo pada",
+    "where_to": "Nibo ni o ń lọ?"
+  },
+  "notifications": {
+    "title": "Iwifunni",
+    "mark_all_read": "Samisi gbogbo bi ti ka ka",
+    "no_notifications": "Ko si iwifunni sibẹsibẹ"
+  },
+  "language": {
+    "title": "Èdè",
+    "subtitle": "Yan èdè tí o fẹ́",
+    "note": "Àkíyèsí: àwọn ẹya kan lè má sí ní gbogbo èdè",
+    "saved": "A fi ifẹ́ èdè pamọ́",
+    "save_failed": "Kò le fi ifẹ́ èdè pamọ́",
+    "names": {
+      "en": "Gẹ̀ẹ́sì",
+      "fr": "Fàránsì",
+      "es": "Sípáníì",
+      "ar": "Lárúbáwá",
+      "ha": "Háúsà",
+      "ig": "Ígbò",
+      "yo": "Yorùbá"
+    }
+  }
+}

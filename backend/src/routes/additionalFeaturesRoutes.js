@@ -22,6 +22,10 @@ router.delete('/recent-places', additionalFeaturesController.clearRecentPlaces);
 
 // Promocodes and offers
 router.get('/special/offers', additionalFeaturesController.getSpecialOffers);
+router.get('/special/offers/milestone', additionalFeaturesController.getMilestoneOffer);
+router.post('/special/offers/milestone/claim', additionalFeaturesController.claimMilestoneOffer);
+router.get('/special/offers/referral', additionalFeaturesController.getReferralProgram);
+router.post('/special/offers/referral/claim', additionalFeaturesController.claimReferralReward);
 router.post('/special/offers/validate', validationRules.validatePromocode, validate, additionalFeaturesController.validatePromocode);
 
 // Re-bookings

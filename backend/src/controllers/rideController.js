@@ -1,6 +1,8 @@
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
+import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import VehicleType from '../models/VehicleType.js';
+import { getAdminSettings } from '../utils/adminSettingsCache.js';
 import User from '../models/User.js';
 import { calculateDistance, calculateDuration, calculateFare } from '../utils/geolocation.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
@@ -8,7 +10,26 @@ import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import rideMatchingService from '../services/rideMatchingService.js';
 import surgePricingService from '../services/surgePricingService.js';
+import {
+  offerRideToDrivers,
+  notifyNoDriverFound,
+  cancelUnacceptedRide,
+} from '../services/driverNotificationService.js';
 import { getSocketService } from '../services/socketService.js';
+import { calculateFareBreakdown } from '../config/feeConfig.js';
+import {
+  validateRiderBalance,
+  holdRideFunds,
+  chargeServiceFee,
+  settleRide,
+  processCancellation,
+  EscrowWalletError,
+} from '../services/escrowWalletService.js';
+
+const normalizeRideCurrency = (currency) => {
+  const normalized = String(currency || 'NGN').toUpperCase();
+  return normalized === 'USD' ? 'NGN' : normalized;
+};
 
 /**
  * Request ride - matches mobile app endpoint /api/booking/request-ride
@@ -81,14 +102,26 @@ export const requestRide = asyncHandler(async (req, res) => {
     dropoff: { lat: normalizedDropoffLat, lng: normalizedDropoffLng, name: dropoffLocation.name, address: dropoffLocation.address },
   });
 
+  const [activeRide, vehicleType, settings] = await Promise.all([
+    Ride.findActiveRideForRider(riderId),
+    VehicleType.findById(vehicleTypeId),
+    getAdminSettings(),
+  ]);
+
   // Check if rider has active ride
-  const activeRide = await Ride.findActiveRideForRider(riderId);
   if (activeRide) {
     throw new ConflictError('You already have an active ride');
   }
 
+  // Validate scheduled time is in the future
+  if (scheduledAt) {
+    const scheduledTime = new Date(scheduledAt);
+    if (isNaN(scheduledTime.getTime()) || scheduledTime <= new Date()) {
+      throw new ValidationError('Scheduled time must be a valid future date and time');
+    }
+  }
+
   // Validate vehicle type
-  const vehicleType = await VehicleType.findById(vehicleTypeId);
   if (!vehicleType || !vehicleType.isActive) {
     throw new NotFoundError('Vehicle type');
   }
@@ -105,8 +138,10 @@ export const requestRide = asyncHandler(async (req, res) => {
 
   const durationMinutes = calculateDuration(distanceKm);
 
-  // Calculate base fare
-  const fareBreakdown = calculateFare(distanceKm, durationMinutes, vehicleTypeId);
+  // Fetch admin pricing settings for KEKE fare formula (Redis-backed when available)
+  const pricing = settings?.pricing ? { ...settings.pricing } : null;
+
+  const fareBreakdown = calculateFare(distanceKm, durationMinutes, vehicleTypeId, pricing);
 
   // Calculate surge pricing based on demand using normalized coordinates
   const surgePricing = await surgePricingService.calculateSurgeMultiplier(
@@ -120,6 +155,19 @@ export const requestRide = asyncHandler(async (req, res) => {
     fareBreakdown.totalFare,
     surgePricing.multiplier
   );
+
+  const totalFare = fareWithSurge.finalFare;
+  const isWalletPayment = paymentMethod === 'wallet';
+  let escrowBreakdown = null;
+  if (isWalletPayment) {
+    try {
+      const validated = await validateRiderBalance(riderId, totalFare);
+      escrowBreakdown = validated.breakdown;
+    } catch (err) {
+      if (err.name === 'EscrowWalletError') throw err;
+      throw new ValidationError(err.message || 'Wallet validation failed');
+    }
+  }
 
   // Create ride request with normalized coordinates
   const rideData = {
@@ -145,8 +193,14 @@ export const requestRide = asyncHandler(async (req, res) => {
       distanceFare: fareBreakdown.distanceFare,
       timeFare: fareBreakdown.timeFare,
       surgeMultiplier: fareWithSurge.surgeMultiplier,
-      totalFare: fareWithSurge.finalFare,
+      totalFare,
+      ...(escrowBreakdown && {
+        riderServiceCharge: escrowBreakdown.riderServiceCharge,
+        platformRevenue: escrowBreakdown.platformFee,
+        driverNetAmount: escrowBreakdown.driverEarning,
+      }),
     },
+    ...(isWalletPayment && { paymentStatus: 'held' }),
     distance: {
       value: distanceKm,
       unit: 'km',
@@ -165,6 +219,15 @@ export const requestRide = asyncHandler(async (req, res) => {
   };
 
   const ride = await Ride.create(rideData);
+  if (isWalletPayment) {
+    try {
+      await holdRideFunds(riderId, ride._id, totalFare);
+    } catch (err) {
+      await Ride.deleteOne({ _id: ride._id });
+      if (err.name === 'EscrowWalletError') throw err;
+      throw new ValidationError(err.message || 'Failed to hold fare');
+    }
+  }
   await ride.populate('rider', 'name phone profileImage rating');
   await ride.populate('vehicleType', 'name displayName image');
 
@@ -173,190 +236,64 @@ export const requestRide = asyncHandler(async (req, res) => {
   
   logger.info(`Found ${matchedDrivers.length} matched drivers for ride ${ride._id}`);
 
-  // Notify matched drivers via Socket.io (if available)
   if (matchedDrivers.length > 0) {
-    const socketService = getSocketService();
-    if (socketService) {
-      socketService.emitRideRequest(ride, matchedDrivers.map((d) => d.driver));
+    const notifiedIds = matchedDrivers
+      .map((m) => m.driver?._id || m.driver)
+      .filter(Boolean);
+    await Ride.findByIdAndUpdate(ride._id, { $set: { notifiedDriverIds: notifiedIds } });
+    ride.notifiedDriverIds = notifiedIds;
+  }
+
+  const DISABLE_AUTO_ASSIGNMENT = process.env.DISABLE_AUTO_ASSIGNMENT === 'true';
+
+  // Sequential driver offers (FCM + Pusher + Socket.io), background — instant HTTP response for rider
+  if (!ride.isScheduled && ride.status === 'requested') {
+    if (matchedDrivers.length > 0) {
+      setImmediate(() => {
+        (async () => {
+          try {
+            const assignedDriverId = await offerRideToDrivers(ride, matchedDrivers);
+            if (!assignedDriverId) {
+              const fresh = await Ride.findById(ride._id).populate('rider');
+              if (fresh?.status === 'requested' && !fresh.driver) {
+                await cancelUnacceptedRide(fresh._id);
+                await notifyNoDriverFound(fresh);
+              }
+            }
+          } catch (err) {
+            logger.error(`offerRideToDrivers error for ride ${ride._id}: ${err.message}`);
+          }
+        })();
+      });
     } else {
-      logger.warn('Socket service not available, skipping driver notifications');
+      logger.warn(`No matched drivers for ride ${ride._id}`);
+      setImmediate(() => {
+        notifyNoDriverFound(ride).catch((err) =>
+          logger.error(`notifyNoDriverFound failed: ${err.message}`)
+        );
+      });
     }
   }
-  
-  // Auto-assign driver immediately for testing (bypass waiting screen)
-  // In production, you can change this to 30000 (30 seconds) or remove for manual acceptance
-  // ALWAYS schedule auto-assignment, even if no drivers found initially (will retry in timeout)
-  
-  // ⛔ AUTO-ASSIGNMENT DISABLED - Check environment variable to enable/disable
-  const DISABLE_AUTO_ASSIGNMENT = process.env.DISABLE_AUTO_ASSIGNMENT === 'true' || true; // Set to false to enable
-  const autoAssignDelay = process.env.NODE_ENV === 'production' ? 30000 : 1000; // 1 second for dev, 30s for prod
 
-  if (DISABLE_AUTO_ASSIGNMENT) {
-    logger.info(`🚫 Auto-assignment DISABLED for ride ${ride._id} - drivers must manually accept rides`);
-  } else {
-    logger.info(`Scheduling auto-assignment for ride ${ride._id} in ${autoAssignDelay}ms`);
-    
-    // Store ride ID and vehicle type for re-matching if needed
+  // Auto-assignment is a separate dev-only tool — only runs when offer queue is disabled
+  // In production, offerRideToDrivers above handles everything
+  if (!DISABLE_AUTO_ASSIGNMENT && process.env.NODE_ENV !== 'production') {
+    logger.info(`Dev auto-assignment scheduled for ride ${ride._id}`);
     const rideId = ride._id.toString();
-    // Use the vehicleTypeId from the populated ride object (should match req.body.vehicleTypeId)
-    const rideVehicleTypeId = ride.vehicleType._id.toString();
-    const pickupLat = ride.pickupLocation.coordinates[1];
-    const pickupLng = ride.pickupLocation.coordinates[0];
-    
     setTimeout(async () => {
       try {
         const updatedRide = await Ride.findById(rideId).populate('vehicleType');
-        if (!updatedRide) {
-          logger.warn(`Ride ${rideId} not found for auto-assignment`);
-          return;
-        }
+        if (!updatedRide || updatedRide.status !== 'requested' || updatedRide.driver) return;
 
-        if (updatedRide.status !== 'requested' || updatedRide.driver) {
-          logger.info(`Ride ${rideId} already has driver or status changed: status=${updatedRide.status}, driver=${updatedRide.driver ? 'assigned' : 'none'}`);
-          return;
-        }
-
-        logger.info(`Auto-assigning driver for ride ${rideId}`);
-        
-        let driversToUse = [];
-        
-        // If we had matched drivers initially, try to validate them first
-        if (matchedDrivers.length > 0) {
-          // Re-validate matched drivers are still available before auto-assigning
-          const validMatchedDrivers = await Promise.all(
-            matchedDrivers.map(async (match) => {
-              try {
-                const driverId = match.driver._id || match.driver;
-                const driverDoc = await Driver.findById(driverId).populate('vehicleDetails.vehicleType');
-                if (driverDoc && driverDoc.isAvailable && driverDoc.isOnline) {
-                  // Verify vehicle type still matches
-                  const driverVehicleType = driverDoc.vehicleDetails?.vehicleType?._id?.toString() || driverDoc.vehicleDetails?.vehicleType?.toString();
-                  if (driverVehicleType === rideVehicleTypeId) {
-                    return match;
-                  } else {
-                    logger.warn(`Driver ${driverId} vehicle type mismatch: ${driverVehicleType} !== ${rideVehicleTypeId}`);
-                  }
-                } else {
-                  logger.warn(`Driver ${driverId} not available: isAvailable=${driverDoc?.isAvailable}, isOnline=${driverDoc?.isOnline}`);
-                }
-                return null;
-              } catch (err) {
-                logger.warn(`Error validating driver ${match.driver._id || match.driver}: ${err.message}`);
-                return null;
-              }
-            })
-          );
-          
-          driversToUse = validMatchedDrivers.filter(Boolean);
-          logger.info(`Validated ${driversToUse.length} of ${matchedDrivers.length} initially matched drivers`);
-        }
-        
-        // If no valid drivers from initial match, try to find new drivers
-        if (driversToUse.length === 0) {
-          logger.warn(`No valid drivers from initial match for ride ${rideId}, attempting to re-match...`);
-          const newMatchedDrivers = await rideMatchingService.findAndMatchDrivers(updatedRide, 10, 5);
-          if (newMatchedDrivers.length > 0) {
-            logger.info(`Found ${newMatchedDrivers.length} new drivers, attempting auto-assignment...`);
-            driversToUse = newMatchedDrivers;
-          } else {
-            logger.warn(`⚠️ No drivers found for auto-assignment for ride ${rideId}`);
-          }
-        }
-
-        // Attempt auto-assignment if we have drivers
-        if (driversToUse.length > 0) {
-          const assignedDriver = await rideMatchingService.autoAssignDriver(updatedRide, driversToUse);
-          if (assignedDriver) {
-            logger.info(`✅ Successfully auto-assigned driver ${assignedDriver._id} to ride ${rideId}`);
-          } else {
-            logger.warn(`⚠️ Auto-assignment failed for ride ${rideId} - driver assignment returned null`);
-            
-            // In development, try to find ANY available driver (ignore vehicle type temporarily)
-            if (process.env.NODE_ENV !== 'production') {
-              logger.info(`🔄 Development mode: Attempting to find any available driver...`);
-              const anyDrivers = await Driver.find({
-                isOnline: true,
-                isAvailable: true,
-                documentsVerified: true,
-                verificationStatus: 'approved',
-              }).limit(1).populate('user');
-              
-              if (anyDrivers.length > 0) {
-                logger.info(`✅ Found fallback driver ${anyDrivers[0]._id}, attempting assignment...`);
-                // Update driver's vehicle type to match ride temporarily
-                const fallbackDriver = anyDrivers[0];
-                const originalVehicleType = fallbackDriver.vehicleDetails?.vehicleType;
-                if (fallbackDriver.vehicleDetails) {
-                  fallbackDriver.vehicleDetails.vehicleType = updatedRide.vehicleType._id || updatedRide.vehicleType;
-                  await fallbackDriver.save();
-                }
-                
-                const fallbackAssigned = await rideMatchingService.autoAssignDriver(updatedRide, [{ driver: fallbackDriver }]);
-                if (fallbackAssigned) {
-                  logger.info(`✅ Successfully auto-assigned fallback driver ${fallbackAssigned._id} to ride ${rideId}`);
-                } else {
-                  // Restore original vehicle type
-                  if (fallbackDriver.vehicleDetails && originalVehicleType) {
-                    fallbackDriver.vehicleDetails.vehicleType = originalVehicleType;
-                    await fallbackDriver.save();
-                  }
-                }
-              }
-            }
-          }
-        } else {
-          logger.warn(`⚠️ No drivers available for auto-assignment for ride ${rideId}`);
-          
-          // In development, try to find ANY available driver as fallback
-          if (process.env.NODE_ENV !== 'production') {
-            logger.info(`🔄 Development mode: No matched drivers, trying fallback...`);
-            const anyDrivers = await Driver.find({
-              isOnline: true,
-              isAvailable: true,
-              documentsVerified: true,
-              verificationStatus: 'approved',
-            }).limit(1).populate('user');
-            
-            if (anyDrivers.length > 0) {
-              logger.info(`✅ Found fallback driver ${anyDrivers[0]._id}, updating vehicle type and assigning...`);
-              const fallbackDriver = anyDrivers[0];
-              const originalVehicleType = fallbackDriver.vehicleDetails?.vehicleType;
-              
-              // Temporarily update vehicle type to match ride
-              if (fallbackDriver.vehicleDetails) {
-                fallbackDriver.vehicleDetails.vehicleType = updatedRide.vehicleType._id || updatedRide.vehicleType;
-                await fallbackDriver.save();
-              }
-              
-              // Try to find drivers again with updated vehicle type
-              const retryDrivers = await rideMatchingService.findAndMatchDrivers(updatedRide, 10, 5);
-              if (retryDrivers.length > 0) {
-                const fallbackAssigned = await rideMatchingService.autoAssignDriver(updatedRide, retryDrivers);
-                if (fallbackAssigned) {
-                  logger.info(`✅ Successfully auto-assigned fallback driver ${fallbackAssigned._id} to ride ${rideId}`);
-                } else {
-                  // Restore original vehicle type if assignment failed
-                  if (fallbackDriver.vehicleDetails && originalVehicleType) {
-                    fallbackDriver.vehicleDetails.vehicleType = originalVehicleType;
-                    await fallbackDriver.save();
-                  }
-                }
-              } else {
-                // Restore original vehicle type
-                if (fallbackDriver.vehicleDetails && originalVehicleType) {
-                  fallbackDriver.vehicleDetails.vehicleType = originalVehicleType;
-                  await fallbackDriver.save();
-                }
-              }
-            }
-          }
+        const newMatchedDrivers = await rideMatchingService.findAndMatchDrivers(updatedRide, 10, 5);
+        if (newMatchedDrivers.length > 0) {
+          await rideMatchingService.autoAssignDriver(updatedRide, newMatchedDrivers);
         }
       } catch (error) {
-        logger.error(`❌ Error in auto-assignment timeout for ride ${rideId}: ${error.message}`);
-        logger.error(error.stack);
+        logger.error(`Dev auto-assignment error for ride ${rideId}: ${error.message}`);
       }
-    }, autoAssignDelay);
-  } // End of auto-assignment block
+    }, 1000);
+  }
 
   res.status(201).json({
     status: 'success',
@@ -396,8 +333,10 @@ export const getFareEstimate = asyncHandler(async (req, res) => {
 
   const durationMinutes = calculateDuration(distanceKm);
 
-  // Calculate fare
-  const fareBreakdown = calculateFare(distanceKm, durationMinutes, vehicleTypeId);
+  const settings = await getAdminSettings();
+  const pricing = settings?.pricing ? { ...settings.pricing } : null;
+
+  const fareBreakdown = calculateFare(distanceKm, durationMinutes, vehicleTypeId, pricing);
 
   // Calculate surge pricing based on demand
   const surgePricing = await surgePricingService.calculateSurgeMultiplier(
@@ -429,13 +368,80 @@ export const getFareEstimate = asyncHandler(async (req, res) => {
         baseFare: fareBreakdown.baseFare,
         distanceFare: fareBreakdown.distanceFare,
         timeFare: fareBreakdown.timeFare,
+        minimumFare: fareBreakdown.minimumFare,
         totalFare: fareWithSurge.finalFare,
         surgeMultiplier: surgePricing.multiplier,
         isSurged: surgePricing.isSurged,
         surgeReason: surgePricing.reason,
-        currency: 'USD',
+        currency: fareBreakdown.currency || 'NGN',
       },
       cost: fareWithSurge.finalFare.toString(), // For mobile app compatibility
+    },
+  });
+});
+
+/**
+ * Fare estimate preview (Keke default) - GET /api/rides/fare-estimate
+ * Query: originLat, originLng, destLat, destLng
+ * Response shape matches mobile booking sheet preview requirements.
+ */
+export const getFareEstimatePreview = asyncHandler(async (req, res) => {
+  const { originLat, originLng, destLat, destLng } = req.query;
+
+  const oLat = parseFloat(originLat);
+  const oLng = parseFloat(originLng);
+  const dLat = parseFloat(destLat);
+  const dLng = parseFloat(destLng);
+
+  if ([oLat, oLng, dLat, dLng].some((n) => Number.isNaN(n))) {
+    throw new ValidationError('originLat, originLng, destLat, destLng must be valid numbers');
+  }
+
+  const vehicleType = await VehicleType.findOne({
+    isActive: true,
+    $or: [
+      { name: { $regex: /keke/i } },
+      { displayName: { $regex: /keke/i } },
+    ],
+  })
+    .select('_id')
+    .lean();
+
+  if (!vehicleType?._id) {
+    throw new ValidationError('Default vehicle type (Keke) is not configured');
+  }
+
+  const distanceKm = calculateDistance(oLat, oLng, dLat, dLng);
+  const estimatedMins = calculateDuration(distanceKm);
+
+  const settings = await getAdminSettings();
+  const pricing = settings?.pricing ? { ...settings.pricing } : null;
+
+  const fareBreakdown = calculateFare(distanceKm, estimatedMins, vehicleType._id, pricing);
+  const surgePricing = await surgePricingService.calculateSurgeMultiplier(oLat, oLng, vehicleType._id);
+  const fareWithSurge = surgePricingService.applySurgePricing(
+    fareBreakdown.totalFare,
+    surgePricing.multiplier
+  );
+
+  const fareAmount = Math.round(Number(fareWithSurge.finalFare || 0));
+  const breakdown = calculateFareBreakdown(fareAmount);
+
+  const formatNgn = (n) => `₦${Number(n || 0).toLocaleString()}`;
+
+  res.json({
+    status: 'success',
+    data: {
+      fareAmount: breakdown.fareAmount,
+      riderServiceCharge: breakdown.riderServiceCharge,
+      riderTotal: breakdown.riderTotal,
+      distanceKm: Number(distanceKm.toFixed(1)),
+      estimatedMins,
+      display: {
+        'Ride fare': formatNgn(breakdown.fareAmount),
+        'Service charge': formatNgn(breakdown.riderServiceCharge),
+        Total: formatNgn(breakdown.riderTotal),
+      },
     },
   });
 });
@@ -521,30 +527,34 @@ export const findNearbyDrivers = asyncHandler(async (req, res) => {
 
   logger.info(`Found ${nearbyDrivers.length} nearby available drivers at (${latitude}, ${longitude})`);
 
-  // Debug: Check total drivers in database with different criteria
-  const totalDrivers = await Driver.countDocuments({});
-  const onlineDrivers = await Driver.countDocuments({ isOnline: true });
-  const availableDrivers = await Driver.countDocuments({ isOnline: true, isAvailable: true });
-  const verifiedDrivers = await Driver.countDocuments({ 
-    isOnline: true, 
-    isAvailable: true, 
-    documentsVerified: true 
-  });
-  const approvedDrivers = await Driver.countDocuments({ 
-    isOnline: true, 
-    isAvailable: true, 
-    documentsVerified: true, 
-    verificationStatus: 'approved' 
-  });
-  const withLocation = await Driver.countDocuments({ 
-    isOnline: true, 
-    isAvailable: true, 
-    documentsVerified: true, 
-    verificationStatus: 'approved',
-    currentLocation: { $exists: true, $ne: null }
-  });
+  if (process.env.DEBUG_DRIVER_STATS === 'true') {
+    // Debug: Check total drivers in database with different criteria
+    const totalDrivers = await Driver.countDocuments({});
+    const onlineDrivers = await Driver.countDocuments({ isOnline: true });
+    const availableDrivers = await Driver.countDocuments({ isOnline: true, isAvailable: true });
+    const verifiedDrivers = await Driver.countDocuments({
+      isOnline: true,
+      isAvailable: true,
+      documentsVerified: true,
+    });
+    const approvedDrivers = await Driver.countDocuments({
+      isOnline: true,
+      isAvailable: true,
+      documentsVerified: true,
+      verificationStatus: 'approved',
+    });
+    const withLocation = await Driver.countDocuments({
+      isOnline: true,
+      isAvailable: true,
+      documentsVerified: true,
+      verificationStatus: 'approved',
+      currentLocation: { $exists: true, $ne: null },
+    });
 
-  logger.info(`Driver statistics: Total=${totalDrivers}, Online=${onlineDrivers}, Available=${availableDrivers}, Verified=${verifiedDrivers}, Approved=${approvedDrivers}, WithLocation=${withLocation}`);
+    logger.info(
+      `Driver statistics: Total=${totalDrivers}, Online=${onlineDrivers}, Available=${availableDrivers}, Verified=${verifiedDrivers}, Approved=${approvedDrivers}, WithLocation=${withLocation}`
+    );
+  }
 
   // Filter by vehicle type if provided
   let matchingDrivers = nearbyDrivers;
@@ -623,13 +633,75 @@ export const cancelRide = asyncHandler(async (req, res) => {
 
   // Determine who is cancelling
   const cancelledBy = ride.rider._id.toString() === userId.toString() ? 'rider' : 'driver';
-  
-  // Calculate cancellation fee
-  const { calculateCancellationFee } = await import('../utils/cancellationFeeCalculator.js');
-  const { cancellationFee, feeReason } = calculateCancellationFee(ride, cancelledBy);
+
+  const riderId = ride.rider?._id ?? ride.rider;
+  let driverUserId = ride.driver?.user?._id ?? ride.driver?.user ?? null;
+  if (!driverUserId && ride.driver) {
+    const driverDoc = await Driver.findById(ride.driver._id ?? ride.driver).select('user').lean();
+    driverUserId = driverDoc?.user ?? null;
+  }
+  const fareAmount = ride.fare?.totalFare ?? 0;
+  const hasWalletHold = await UserWalletTransaction.findOne({
+    idempotencyKey: `hold:${ride._id}`,
+    type: 'hold',
+  })
+    .select('_id')
+    .lean();
+  // Wallet rides: release escrow when a hold exists even if paymentStatus was not persisted correctly.
+  const isEscrow =
+    ride.paymentMethod === 'wallet' &&
+    (['held', 'charged'].includes(ride.paymentStatus) || !!hasWalletHold);
+  const previousRideStatus = ride.status;
+
+  let cancellationFee = 0;
+  let cancellationScenario = null;
+  let driverCompensation = 0;
+
+  if (isEscrow && (fareAmount > 0 || !!hasWalletHold)) {
+    if (cancelledBy === 'driver') {
+      cancellationScenario = 'driverCancel';
+    } else if (ride.status === 'requested' || ride.status === 'scheduled') {
+      cancellationScenario = 'beforeAccept';
+    } else if (ride.status === 'accepted') {
+      const { getCancellationGuards } = await import('../services/settingsService.js');
+      const { gracePeriodSeconds } = await getCancellationGuards();
+      const minutesSinceAccepted = ride.acceptedAt
+        ? (Date.now() - new Date(ride.acceptedAt).getTime()) / 60000
+        : 999;
+      const withinGracePeriod = minutesSinceAccepted * 60 <= (gracePeriodSeconds ?? 60);
+      const driverNotMoving = ride.driverMovementFlag === 'not_approaching';
+      cancellationScenario = withinGracePeriod || driverNotMoving ? 'beforeAccept' : 'afterAccept';
+    } else {
+      cancellationScenario = 'afterArrival';
+    }
+    const { getCancellationPolicy } = await import('../services/settingsService.js');
+    const policy = await getCancellationPolicy(cancellationScenario);
+    cancellationFee = policy.riderPenalty ?? 0;
+    driverCompensation = policy.driverPayout ?? 0;
+    try {
+      await processCancellation(ride._id, riderId, driverUserId, fareAmount, cancellationScenario);
+    } catch (err) {
+      logger.error(`Escrow cancellation failed for ride ${rideId}: ${err.message}`);
+      throw new ValidationError(err.message || 'Cancellation failed');
+    }
+  } else {
+    const { calculateCancellationFee } = await import('../utils/cancellationFeeCalculator.js');
+    const result = calculateCancellationFee(ride, cancelledBy);
+    cancellationFee = result.cancellationFee;
+    if (cancelledBy === 'rider' && ['accepted', 'arrived'].includes(ride.status)) {
+      try {
+        const { getCancellationPolicy } = await import('../services/settingsService.js');
+        const fallbackScenario = ride.status === 'arrived' ? 'afterArrival' : 'afterAccept';
+        const policy = await getCancellationPolicy(fallbackScenario);
+        driverCompensation = policy.driverPayout ?? cancellationFee;
+      } catch {
+        driverCompensation = cancellationFee;
+      }
+    }
+  }
 
   // Cancel ride
-  await ride.cancelRide(cancelledBy, reason, cancellationFee);
+  await ride.cancelRide(cancelledBy, reason, cancellationFee, cancellationScenario);
 
   // Cancel any automation timers for this ride
   if (global.automationTimers && global.automationTimers.has(rideId)) {
@@ -681,6 +753,37 @@ export const cancelRide = asyncHandler(async (req, res) => {
     socketService.emitRideCancelled(ride, cancelledBy, reason);
   }
 
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    if (cancelledBy === 'driver') {
+      await sendToUser(riderId, 'rider', {
+        title: 'Driver cancelled',
+        message: 'Your driver cancelled the ride. We are finding you a new driver.',
+        type: 'alert',
+        priority: 'high',
+        screen: 'home',
+        ride_id: ride._id,
+        event_key: 'ride_cancelled_by_driver',
+        data: { subType: 'driver_cancelled', rideId: ride._id.toString() },
+      });
+    }
+
+    if (cancelledBy === 'rider' && driverUserId && ['accepted', 'arrived', 'in-progress'].includes(previousRideStatus)) {
+      await sendToUser(driverUserId, 'driver', {
+        title: 'Rider cancelled',
+        message: `${ride.rider?.name || 'The rider'} cancelled the ride. You will receive your ₦${Math.round(Number(driverCompensation || 0)).toLocaleString()} compensation.`,
+        type: 'alert',
+        priority: 'normal',
+        screen: 'home',
+        ride_id: ride._id,
+        event_key: 'ride_cancelled_by_rider',
+        data: { subType: 'passenger_cancelled', rideId: ride._id.toString() },
+      });
+    }
+  } catch (err) {
+    logger.error(`Ride cancellation notification failed for ride ${rideId}: ${err.message}`);
+  }
+
   // Process refunds if applicable (only for rider cancellations with fees)
   if (cancelledBy === 'rider' && ride.paymentStatus === 'completed') {
     try {
@@ -703,23 +806,37 @@ export const cancelRide = asyncHandler(async (req, res) => {
 });
 
 /**
- * Get ride history - matches /api/history
+ * Get ride history - matches /api/booking/history
+ * Returns rides for the current user as rider or driver based on role.
  */
 export const getRideHistory = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, status } = req.query;
   const userId = req.user._id;
+  const role = req.user.role;
   const skip = (page - 1) * limit;
 
-  const filter = {
-    rider: userId,
-  };
+  let filter = {};
+  if (role === 'driver') {
+    const driver = await Driver.findOne({ user: userId });
+    if (!driver) {
+      return res.json({
+        status: 'success',
+        data: { rides: [], pagination: { page: parseInt(page), limit: parseInt(limit), total: 0, pages: 0 } },
+      });
+    }
+    filter.driver = driver._id;
+  } else {
+    filter.rider = userId;
+  }
 
   if (status) {
     filter.status = status;
   }
 
   const rides = await Ride.find(filter)
+    .populate('driver', 'user vehicleDetails currentLocation')
     .populate('driver.user', 'name phone profileImage rating')
+    .populate('rider', 'name phone profileImage rating')
     .populate('vehicleType')
     .sort({ createdAt: -1 })
     .skip(skip)
@@ -738,6 +855,98 @@ export const getRideHistory = asyncHandler(async (req, res) => {
         pages: Math.ceil(total / limit),
       },
     },
+  });
+});
+
+/**
+ * Get ride details (user-facing) - GET /api/booking/rides/:rideId
+ * Returns ride info and fare breakdown by user type (rider vs driver).
+ */
+export const getRideDetails = asyncHandler(async (req, res) => {
+  const { rideId } = req.params;
+  const userId = req.user._id;
+  const userRole = req.user.role;
+
+  const ride = await Ride.findById(rideId)
+    .populate('rider', 'name phone profileImage email')
+    .populate({
+      path: 'driver',
+      populate: { path: 'user', select: 'name phone profileImage' },
+    })
+    .populate('vehicleType', 'name displayName');
+
+  if (!ride) {
+    throw new NotFoundError('Ride');
+  }
+
+  const isRider = ride.rider._id.toString() === userId.toString();
+  const isDriver = ride.driver && ride.driver.user?._id?.toString() === userId.toString();
+
+  if (!isRider && !isDriver) {
+    throw new NotFoundError('Ride');
+  }
+
+  const base = {
+    ride_id: ride._id.toString(),
+    status: ride.status,
+    origin: {
+      name: ride.pickupLocation.name || null,
+      address: ride.pickupLocation.address || '',
+      lat: ride.pickupLocation.coordinates?.[1],
+      lng: ride.pickupLocation.coordinates?.[0],
+    },
+    destination: {
+      name: ride.dropoffLocation.name || null,
+      address: ride.dropoffLocation.address || '',
+      lat: ride.dropoffLocation.coordinates?.[1],
+      lng: ride.dropoffLocation.coordinates?.[0],
+    },
+    date: ride.createdAt,
+    scheduled_at: ride.scheduledAt || null,
+    distance_km: ride.distance?.value || 0,
+    duration_min: ride.duration?.estimated || ride.duration?.actual || 0,
+    payment_method: ride.paymentMethod,
+    payment_status: ride.paymentStatus,
+  };
+
+  if (isRider) {
+    const fare = ride.fare?.totalFare ?? 0;
+    const serviceCharge = ride.fare?.riderServiceCharge ?? 0;
+    base.fare_breakdown = {
+      ride_fare: fare,
+      service_charge: serviceCharge,
+      total_paid: fare + serviceCharge,
+      currency: normalizeRideCurrency(ride.fare?.currency),
+    };
+    base.driver = ride.driver
+      ? {
+          name: ride.driver.user?.name || null,
+          phone: ride.driver.user?.phone || null,
+          image: ride.driver.user?.profileImage || null,
+          vehicle_name: ride.driver.vehicleDetails?.make && ride.driver.vehicleDetails?.model
+            ? `${ride.driver.vehicleDetails.make} ${ride.driver.vehicleDetails.model}`
+            : ride.vehicleType?.name || null,
+          vehicle_plate: ride.driver.vehicleDetails?.plateNumber || null,
+        }
+      : null;
+  } else {
+    const gross = ride.fare?.totalFare ?? 0;
+    const platformFee = ride.fare?.commissionAmount ?? 0;
+    const net = ride.fare?.driverNetAmount ?? gross - platformFee;
+    base.earnings_breakdown = {
+      gross,
+      platform_fee: platformFee,
+      net,
+      currency: normalizeRideCurrency(ride.fare?.currency),
+    };
+    base.rider = ride.rider
+      ? { name: ride.rider.name || null, phone: ride.rider.phone || null }
+      : null;
+  }
+
+  res.json({
+    status: 'success',
+    data: { ride: base },
   });
 });
 
@@ -827,23 +1036,13 @@ export const getDriverLocation = asyncHandler(async (req, res) => {
     throw new ValidationError('You are not authorized to view driver location for this ride');
   }
 
-  if (!ride.driver) {
-    return res.json({
-      status: 'success',
-      data: {
-        driver_location: null,
-        message: 'No driver assigned to this ride',
-      },
-    });
-  }
-
-  const driver = await Driver.findById(ride.driver._id);
+  const driver = ride.driver;
   if (!driver || !driver.currentLocation) {
     return res.json({
       status: 'success',
       data: {
         driver_location: null,
-        message: 'Driver location not available',
+        message: driver ? 'Driver location not available' : 'No driver assigned to this ride',
       },
     });
   }
@@ -952,11 +1151,33 @@ export const assignNewDriver = asyncHandler(async (req, res) => {
   alternativeDriver.isAvailable = false;
   await alternativeDriver.save();
 
+  await Ride.findByIdAndUpdate(rideId, {
+    $addToSet: { notifiedDriverIds: alternativeDriver._id },
+  });
+
   // Send real-time notifications
   const socketService = getSocketService();
   if (socketService) {
     socketService.emitRideAccepted(ride, alternativeDriver);
     socketService.emitRideStatusUpdate(ride, 'accepted', alternativeDriver);
+  }
+
+  // Push notification to rider: new driver assigned
+  try {
+    const { createNotification } = await import('../services/notificationService.js');
+    const riderUser = await User.findById(ride.rider._id).select('deviceToken').lean();
+    if (riderUser?.deviceToken) {
+      await createNotification(
+        { _id: ride.rider._id, deviceToken: riderUser.deviceToken },
+        'ride_accepted',
+        'New driver assigned',
+        'A new driver has been assigned to your ride and is on the way.',
+        { rideId: ride._id.toString(), screen: 'home' },
+        ride._id
+      );
+    }
+  } catch (err) {
+    logger.error(`New driver assigned push notification failed: ${err.message}`);
   }
 
   logger.info(`Ride ${rideId} reassigned to driver ${alternativeDriver._id}`);

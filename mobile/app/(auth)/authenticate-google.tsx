@@ -202,6 +202,7 @@ const AuthenticateGoogle = () => {
         textContainerStyle={tw`bg-white`}
         renderDropdownImage={renderDropdownImage()}
         flagButtonStyle={tw`flex-row items-center pl-5`}
+        filterProps={{ placeholder: "Search country" }}
       />
 
       <SelectItem

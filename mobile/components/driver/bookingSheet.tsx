@@ -1,12 +1,17 @@
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
-import { COMPLETE_BOOKED_RIDE, START_BOOKED_RIDE } from "@/constants";
+import {
+  DRIVER_COMPLETE_RIDE,
+  DRIVER_START_RIDE,
+  START_BOOKED_RIDE,
+} from "@/constants";
 import React, { useContext, useState } from "react";
 import {
   formatBookingDate,
@@ -15,6 +20,8 @@ import {
 
 import { AppContext } from "@/app/context";
 import { AuthState } from "@/store/AuthSlice";
+import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
+import { formatPhoneForDisplay } from "@/utils/phoneFormat";
 import { Entypo } from "@expo/vector-icons";
 import { Portal } from "@gorhom/portal";
 import { TBooking } from "@/types";
@@ -23,18 +30,17 @@ import { showMessage } from "react-native-flash-message";
 import { getErrorMessage } from "@/utils/errorHandler";
 import tw from "@/lib/tailwind";
 import { useSelector } from "react-redux";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+
+type SheetBookingStage = "scheduled" | "searching" | "confirmed" | "ongoing" | "finished";
 
 function isBookingValid(booking_date: string, booking_time: string) {
-  // Get current date and time
   const now = new Date();
-
-  // Get today's date in "YYYY-MM-DD" format
-  const today = now.toISOString().split("T")[0];
-
-  // Combine today's date and booking time to create a Date object
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const today = `${y}-${m}-${d}`;
   const bookingDateTime = new Date(`${booking_date}T${booking_time}`);
-
-  // Check if the booking date is today and the booking time is now or past
   return booking_date === today && now >= bookingDateTime;
 }
 
@@ -44,7 +50,7 @@ interface Props {
     booking_id: string,
     loading: React.Dispatch<React.SetStateAction<boolean>>
   ) => void;
-  cancel: (
+  cancel?: (
     booking_id: string,
     loading: React.Dispatch<React.SetStateAction<boolean>>
   ) => void;
@@ -63,6 +69,7 @@ export const DriverBookingSheet = ({
   accepted = false,
   viewBooking,
 }: Props) => {
+  const insets = useCombinedSafeInsets();
   const { apiConfig } = useContext(AppContext);
   const { user } = useSelector(AuthState);
   const [accept, setAccept] = useState(false);
@@ -70,12 +77,148 @@ export const DriverBookingSheet = ({
   const [ride, setRide] = useState(false);
   const isDriver = user?.profile?.role === "driver";
 
-  const BookingAction = (booking_id: string) => {
-    const URL = isDriver ? COMPLETE_BOOKED_RIDE : START_BOOKED_RIDE;
+  const rawStatus = String(data?.status ?? "").trim().toLowerCase().replace(/-/g, "_");
+  const isCancelled = rawStatus === "cancelled";
+  const isCompleted = rawStatus === "completed";
+  const isInProgressOrStarted =
+    rawStatus === "in_progress" ||
+    rawStatus === "in progress" ||
+    rawStatus === "started" ||
+    !!data?.is_started;
+  const hasAssignedDriver =
+    accepted ||
+    !!data?.driver_id ||
+    ["accepted", "in_progress", "in progress", "completed", "cancelled"].includes(rawStatus);
+
+  const bookingStage: SheetBookingStage =
+    rawStatus === "in_progress" || rawStatus === "in progress"
+      ? "ongoing"
+      : rawStatus === "accepted"
+        ? "confirmed"
+        : rawStatus === "pending" || rawStatus === "requested"
+          ? "searching"
+          : rawStatus === "completed" || rawStatus === "cancelled"
+            ? "finished"
+            : "scheduled";
+
+  // Human-readable status label and colors for details page
+  const statusConfig = (() => {
+    switch (rawStatus) {
+      case "cancelled":
+        return { label: "Cancelled", bg: "#FEE2E2", text: "#B91C1C" };
+      case "completed":
+        return { label: "Completed", bg: "#D1FAE5", text: "#047857" };
+      case "pending":
+      case "requested":
+        return { label: "Pending", bg: "#FEF3C7", text: "#B45309" };
+      case "accepted":
+        return { label: "Accepted", bg: "#DBEAFE", text: "#1D4ED8" };
+      case "in_progress":
+      case "in progress":
+        return { label: "In progress", bg: "#DBEAFE", text: "#1D4ED8" };
+      case "scheduled":
+        return { label: "Scheduled", bg: "#F3F4F6", text: "#374151" };
+      default:
+        return rawStatus
+          ? { label: rawStatus.replace(/_/g, " "), bg: "#F3F4F6", text: "#374151" }
+          : null;
+    }
+  })();
+
+  const statusDetails = (() => {
+    switch (rawStatus) {
+      case "cancelled":
+        return {
+          hint: "This booking was cancelled before pickup",
+          accent: "#B91C1C",
+          background: "#FEE2E2",
+        };
+      case "completed":
+        return {
+          hint: "This ride has already been completed",
+          accent: "#047857",
+          background: "#D1FAE5",
+        };
+      case "in_progress":
+      case "in progress":
+        return {
+          hint: "The ride is ongoing right now",
+          accent: "#2563EB",
+          background: "#DBEAFE",
+        };
+      case "accepted":
+        return {
+          hint: "A driver has been assigned to this booking",
+          accent: "#2E7D52",
+          background: "#E8F5E9",
+        };
+      case "pending":
+      case "requested":
+        return {
+          hint: "We are still matching this booking with a driver",
+          accent: "#B45309",
+          background: "#FEF3C7",
+        };
+      default:
+        return {
+          hint: "Your pickup time has been reserved",
+          accent: "#0F9D8A",
+          background: "#E7F7F3",
+        };
+    }
+  })();
+  const progressSteps = [
+    { key: "scheduled", label: "Scheduled" },
+    { key: "searching", label: "Matching" },
+    { key: "confirmed", label: "Confirmed" },
+    { key: "ongoing", label: "Ride" },
+  ];
+  const progressIndex =
+    bookingStage === "scheduled"
+      ? 0
+      : bookingStage === "searching"
+        ? 1
+        : bookingStage === "confirmed"
+          ? 2
+          : 3;
+
+  const handleCancelPress = () => {
+    if (!cancel) return;
+    if (isInProgressOrStarted) {
+      showMessage({
+        type: "warning",
+        message: "This ride has already started and cannot be cancelled.",
+      });
+      return;
+    }
+    Alert.alert(
+      isDriver ? "Cancel Ride" : "Cancel Booking",
+      "Are you sure you want to cancel? This action cannot be undone.",
+      [
+        { text: "No", style: "cancel" },
+        {
+          text: "Yes, Cancel",
+          style: "destructive",
+          onPress: () => cancel(data?.booking_id as string, setReject),
+        },
+      ]
+    );
+  };
+
+  const rideId = (data?.ride_id ?? data?.rideId ?? data?.booking_id) as string;
+
+  const BookingAction = (booking_id: string, action: "start" | "complete") => {
+    const URL =
+      isDriver
+        ? action === "start"
+          ? DRIVER_START_RIDE
+          : DRIVER_COMPLETE_RIDE
+        : START_BOOKED_RIDE;
+    const payload = isDriver ? { rideId: rideId || booking_id } : { booking_id };
 
     setRide(true);
     axios
-      .post(URL, { booking_id }, apiConfig)
+      .post(URL, payload, apiConfig)
       .then(() => {
         viewBooking(booking_id);
       })
@@ -104,7 +247,7 @@ export const DriverBookingSheet = ({
         animationType="spring"
         backdropMaskColor="#19191933"
         openDuration={1000}
-        disableKeyboardHandling={true}
+        disableKeyboardHandling={false}
         style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
       >
         {isloading ? (
@@ -117,9 +260,9 @@ export const DriverBookingSheet = ({
               <View style={tw`flex-row items-center gap-x-4`}>
                 <Image
                   source={{
-                    uri: isDriver && !accepted 
+                    uri: isDriver && !hasAssignedDriver 
                       ? (data?.image || data?.passenger_image) // Driver viewing passenger
-                      : (accepted && data?.driver_image ? data?.driver_image : data?.image),
+                      : (hasAssignedDriver && data?.driver_image ? data?.driver_image : data?.image),
                   }}
                   style={tw`h-[48px] w-[48px] rounded-full`}
                 />
@@ -129,11 +272,11 @@ export const DriverBookingSheet = ({
                       fontFamily: "RobotoMedium",
                     })}
                   >
-                    {isDriver && !accepted
+                    {isDriver && !hasAssignedDriver
                       ? (data?.username || data?.name || data?.passenger_name || "Passenger") // Driver viewing passenger
-                      : (accepted && data?.driver_name ? data?.driver_name : data?.username)}
+                      : (hasAssignedDriver && data?.driver_name ? data?.driver_name : data?.username)}
                   </Text>
-                  {isDriver && !accepted && (
+                  {isDriver && !hasAssignedDriver && (
                     <Text
                       style={tw.style(`text-xs text-gray-300 mt-1`, {
                         fontFamily: "RobotoRegular",
@@ -142,7 +285,7 @@ export const DriverBookingSheet = ({
                       Ride Request
                     </Text>
                   )}
-                  {accepted && data?.driver_id && (
+                  {hasAssignedDriver && data?.driver_id && (
                     <Text
                       style={tw.style(`text-xs text-gray-300 mt-1`, {
                         fontFamily: "RobotoRegular",
@@ -185,6 +328,88 @@ export const DriverBookingSheet = ({
               </Text>
             </View>
 
+            {/* Status badge - show cancelled, completed, pending, etc. */}
+            {statusConfig && (
+              <View style={tw`mx-4 mt-3 mb-2`}>
+                <View style={tw`rounded-[18px] p-4`} >
+                  <View
+                    style={[
+                      tw`self-start px-3 py-1.5 rounded-full mb-2`,
+                      { backgroundColor: statusConfig.bg },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        tw`text-sm capitalize`,
+                        { color: statusConfig.text, fontFamily: "RobotoMedium" },
+                      ]}
+                    >
+                      {statusConfig.label}
+                    </Text>
+                  </View>
+                  <Text
+                    style={tw.style(`text-[16px] text-[#242E42]`, {
+                      fontFamily: "RobotoBold",
+                    })}
+                  >
+                    {statusConfig.label}
+                  </Text>
+                  <Text
+                    style={tw.style(`text-[13px] text-[#7B7F87] mt-1`, {
+                      fontFamily: "RobotoRegular",
+                    })}
+                  >
+                    {statusDetails.hint}
+                  </Text>
+                  <View style={tw`flex-row items-center mt-4`}>
+                    {progressSteps.map((step, index) => {
+                      const active = bookingStage === "finished" ? true : index <= progressIndex;
+                      const isLast = index === progressSteps.length - 1;
+                      return (
+                        <React.Fragment key={step.key}>
+                          <View style={tw`items-center`}>
+                            <View
+                              style={{
+                                width: 10,
+                                height: 10,
+                                borderRadius: 999,
+                                backgroundColor: active ? statusDetails.accent : "#D7D9DD",
+                              }}
+                            />
+                            <Text
+                              style={{
+                                marginTop: 6,
+                                color: active ? "#242E42" : "#A0A4AB",
+                                fontSize: 10,
+                                fontFamily: active ? "RobotoBold" : "RobotoRegular",
+                              }}
+                            >
+                              {step.label}
+                            </Text>
+                          </View>
+                          {!isLast ? (
+                            <View
+                              style={{
+                                flex: 1,
+                                height: 3,
+                                marginHorizontal: 6,
+                                marginBottom: 18,
+                                borderRadius: 999,
+                                backgroundColor:
+                                  bookingStage === "finished" || index < progressIndex
+                                    ? statusDetails.accent
+                                    : "#E6E8EC",
+                              }}
+                            />
+                          ) : null}
+                        </React.Fragment>
+                      );
+                    })}
+                  </View>
+                </View>
+              </View>
+            )}
+
             <View style={tw`flex-row gap-x-4 my-8`}>
               <View style={tw`flex-col items-center`}>
                 <Entypo name="location-pin" size={28} color="#F44336" />
@@ -216,12 +441,12 @@ export const DriverBookingSheet = ({
                       const pickup = data?.pickup_location || '';
                       if (!pickup || pickup.trim() === '') return "Pickup location";
                       const lowerPickup = pickup.toLowerCase();
-                      // Only filter out clear placeholders
-                      if (lowerPickup.includes('select') || 
+                      if (lowerPickup.includes('select') ||
                           (lowerPickup.includes('current location') && lowerPickup.includes('accuracy'))) {
                         return "Pickup location";
                       }
-                      return pickup;
+                      const formatted = formatAddressForDisplay(pickup);
+                      return formatted.primary ? formatted.full : pickup;
                     })()}
                   </Text>
                 </View>
@@ -247,12 +472,12 @@ export const DriverBookingSheet = ({
                       const dropoff = data?.dropoff_location || '';
                       if (!dropoff || dropoff.trim() === '') return "Drop-off location";
                       const lowerDropoff = dropoff.toLowerCase();
-                      // Only filter out clear placeholders
                       if (lowerDropoff.includes('select') || 
                           (lowerDropoff.includes('current location') && lowerDropoff.includes('accuracy'))) {
                         return "Drop-off location";
                       }
-                      return dropoff;
+                      const formatted = formatAddressForDisplay(dropoff);
+                      return formatted.primary ? formatted.full : dropoff;
                     })()}
                   </Text>
                 </View>
@@ -276,7 +501,7 @@ export const DriverBookingSheet = ({
               </Text>
             </View>
             {/* Passenger Details Section - Show when driver is viewing a booking request */}
-            {isDriver && !accepted && (
+            {isDriver && !hasAssignedDriver && !isCancelled && !isCompleted && (
               <View style={tw`bg-[#F5F5F5] rounded-[12px] p-4 mx-1.5 my-3`}>
                 <Text
                   style={tw.style(`text-base text-[#5A5A5A] mb-3`, {
@@ -308,7 +533,7 @@ export const DriverBookingSheet = ({
                           fontFamily: "RobotoRegular",
                         })}
                       >
-                        {(data as any).phone}
+                        {formatPhoneForDisplay((data as any).phone)}
                       </Text>
                     )}
                   </View>
@@ -316,7 +541,7 @@ export const DriverBookingSheet = ({
               </View>
             )}
             {/* Driver Information Section - Show when driver has accepted */}
-            {accepted && data?.driver_id && (
+            {hasAssignedDriver && (data?.driver_id || data?.driver_name) && (
               <View style={tw`bg-[#F5F5F5] rounded-[12px] p-4 mx-1.5 my-3`}>
                 <Text
                   style={tw.style(`text-base text-[#5A5A5A] mb-3`, {
@@ -346,7 +571,7 @@ export const DriverBookingSheet = ({
                           fontFamily: "RobotoRegular",
                         })}
                       >
-                        {data?.driver_phone}
+                        {formatPhoneForDisplay(data.driver_phone)}
                       </Text>
                     )}
                     <View style={tw`flex-row items-center gap-x-2 mt-1`}>
@@ -458,9 +683,15 @@ export const DriverBookingSheet = ({
                 {data?.payment_method}
               </Text>
             </View>
-            <View style={tw.style(`flex-col gap-y-4`, accepted && `mt-12`)}>
+            <View
+              style={tw.style(
+                `flex-col gap-y-4`,
+                hasAssignedDriver && `mt-12`,
+                { paddingBottom: Math.max(insets.bottom + 8, 14) }
+              )}
+            >
               {/* Accept Ride button - only for drivers viewing unaccepted bookings */}
-              {!accepted && isDriver && (
+              {!hasAssignedDriver && isDriver && !isCancelled && !isCompleted && (
                 <TouchableOpacity
                   onPress={() => action(data?.booking_id as string, setAccept)}
                   style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
@@ -480,15 +711,35 @@ export const DriverBookingSheet = ({
               )}
 
               {/* Accepted booking actions */}
-              {accepted && isBookingValid(
+              {hasAssignedDriver && !isCancelled && !isCompleted && isBookingValid(
                 data?.booking_date as string,
                 data?.booking_time as string
               ) && (
                 <>
-                  {/* Complete Ride button - only for drivers */}
-                  {isDriver && (
+                  {/* Start Ride button - only for drivers when ride not yet started */}
+                  {isDriver && !isInProgressOrStarted && (
                     <TouchableOpacity
-                      onPress={() => BookingAction(data?.booking_id as string)}
+                      onPress={() => BookingAction(data?.booking_id as string, "start")}
+                      style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
+                    >
+                      {ride ? (
+                        <ActivityIndicator color="white" />
+                      ) : (
+                        <Text
+                          style={tw.style(`text-base text-white uppercase`, {
+                            fontFamily: "RobotoBold",
+                          })}
+                        >
+                          Start Ride
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Complete Ride button - only for drivers when ride is in progress */}
+                  {isDriver && isInProgressOrStarted && (
+                    <TouchableOpacity
+                      onPress={() => BookingAction(data?.booking_id as string, "complete")}
                       style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
                     >
                       {ride ? (
@@ -508,7 +759,7 @@ export const DriverBookingSheet = ({
                   {/* Start Ride button - only for passengers when ride hasn't started */}
                   {!isDriver && !data?.is_started && (
                     <TouchableOpacity
-                      onPress={() => BookingAction(data?.booking_id as string)}
+                      onPress={() => BookingAction(data?.booking_id as string, "start")}
                       style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
                     >
                       {ride ? (
@@ -525,10 +776,10 @@ export const DriverBookingSheet = ({
                     </TouchableOpacity>
                   )}
 
-                  {/* Cancel button - only for drivers when accepted */}
-                  {isDriver && cancel && (
+                  {/* Cancel button - only for drivers when accepted and not cancelled */}
+                  {isDriver && cancel && !isCancelled && !isInProgressOrStarted && (
                     <TouchableOpacity
-                      onPress={() => cancel(data?.booking_id as string, setReject)}
+                      onPress={handleCancelPress}
                       style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-red-400 rounded-[8px]`}
                     >
                       {reject ? (
@@ -547,10 +798,10 @@ export const DriverBookingSheet = ({
                 </>
               )}
 
-              {/* Cancel button for passengers to cancel their booking */}
-              {!isDriver && cancel && (
+              {/* Cancel button for passengers to cancel their booking - hide when cancelled */}
+              {!isDriver && cancel && !isCancelled && !isInProgressOrStarted && (
                 <TouchableOpacity
-                  onPress={() => cancel(data?.booking_id as string, setReject)}
+                  onPress={handleCancelPress}
                   style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-red-400 rounded-[8px]`}
                 >
                   {reject ? (

@@ -1,16 +1,16 @@
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import {
+  Dimensions,
   Image,
   Modal,
-  Pressable,
   StatusBar,
   Text,
-  TouchableOpacity,
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
 import { Path, Svg } from "react-native-svg";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 
 import { AntDesign } from "@expo/vector-icons";
 import { WINDOW_WIDTH } from "@/constants/Metrics";
@@ -23,15 +23,19 @@ interface Props {
 
 const EmergencyModal = ({ bottomSheetRef }: Props) => {
   const [show, setShow] = useState(false);
-  // const [empty, setEmpty] = useState(false);
+  const screenHeight = Dimensions.get("window").height;
+  const sheetHeight = useMemo(
+    () => Math.max(screenHeight * 0.3, Math.min(screenHeight * 0.5, screenHeight * 0.9)),
+    [screenHeight]
+  );
 
   return (
     <>
       {/* <Portal> */}
       <BottomSheet
-        height="50%"
+        height={sheetHeight}
         ref={bottomSheetRef}
-        disableKeyboardHandling={true}
+        disableKeyboardHandling={false}
         style={tw`gap-y-4 pb-5 px-5 rounded-t-[40px] bg-white`}
         backdropMaskColor={tw.color(`bg-base-error bg-opacity-50`)}
         customDragHandleComponent={() => (

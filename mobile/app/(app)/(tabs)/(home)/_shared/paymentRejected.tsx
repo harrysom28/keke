@@ -10,6 +10,7 @@ import {
 
 import { AntDesign } from "@expo/vector-icons";
 import React from "react";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import tw from "@/lib/tailwind";
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
 }
 
 const PaymentRejected = ({ onClose }: Props) => {
+  const insets = useCombinedSafeInsets();
   return (
     <Modal visible={true} transparent style={tw`flex-1`} onRequestClose={onClose}>
       <StatusBar barStyle="light-content" backgroundColor="#1919194D" />
@@ -30,8 +32,8 @@ const PaymentRejected = ({ onClose }: Props) => {
           <TouchableOpacity
             onPress={onClose}
             style={tw.style(`absolute top-0 right-0 z-50`, {
-              paddingTop: (StatusBar.currentHeight || 0) + 12,
-              paddingRight: 12,
+              paddingTop: insets.top + 12,
+              paddingRight: 12 + insets.right,
             })}
             activeOpacity={0.7}
           >

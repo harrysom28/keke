@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import Constants from 'expo-constants';
+import { getUniqueId } from 'react-native-device-info';
 import { getApiUrlWithOverride } from './apiUrlOverride';
 import AppStore from '@/store';
 import { updateRefreshToken, updateToken } from '@/store/AuthSlice';
@@ -39,8 +40,9 @@ if (__DEV__) {
 }
 
 /**
- * Create axios instance with proper headers for Sucuri CloudProxy compatibility
+ * Create axios instance with proper headers for Sucuri CloudProxy and ngrok compatibility
  */
+const isNgrokUrl = API_BASE_URL.includes('ngrok');
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -55,6 +57,8 @@ const apiClient: AxiosInstance = axios.create({
     'X-API-Version': '1.0',
     // Cache control to prevent caching issues
     'Cache-Control': 'no-cache',
+    // Skip ngrok free-tier browser warning so API requests get through (not the HTML interstitial)
+    ...(isNgrokUrl ? { 'ngrok-skip-browser-warning': 'true' } : {}),
   },
   // Follow redirects normally (Laravel handles redirects correctly)
   maxRedirects: 5,
@@ -74,6 +78,15 @@ apiClient.interceptors.request.use(
       }
     } catch {
       // ignore
+    }
+
+    // FormData: let the client set Content-Type (multipart/form-data with boundary)
+    // so file uploads (e.g. user/profile/upload-image) work correctly
+    if (config.data && typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      const headers = config.headers as Record<string, unknown>;
+      if (headers && 'Content-Type' in headers) {
+        delete headers['Content-Type'];
+      }
     }
 
     // Ensure we're using the correct API URL (check for production domain)
@@ -144,21 +157,134 @@ apiClient.interceptors.response.use(
        originalRequest?.url?.includes('booking/active-ride') ||
        originalRequest?.url?.includes('maps/places/autocomplete') ||
        originalRequest?.url?.includes('schedule/latest/booking') ||
-       originalRequest?.url?.includes('locations/drivers-passengers'));
+       originalRequest?.url?.includes('locations/drivers-passengers') ||
+       originalRequest?.url?.includes('notifications/unread-count'));
     
+    // 404 on driver/availability = driver profile not found (user needs to complete registration)
+    const isDriverProfileNotFound =
+      status === 404 && originalRequest?.url?.includes('driver/availability');
+    
+    // Public config endpoint can be absent on some environments; app falls back to app.json
+    const isPublicConfigNotFound =
+      status === 404 && originalRequest?.url?.includes('config/public');
+
     // Define which errors should be silently handled
-    const isExpectedError = 
-      isExpected401 || 
+    const isExpectedError =
+      isExpected401 ||
       isRetryableTokenError || // Don't log token errors that will be retried
-      status === 429; // Rate limits are expected, handled gracefully
-    
+      status === 429 || // Rate limits are expected, handled gracefully
+      isDriverProfileNotFound ||
+      isPublicConfigNotFound;
+
     // Only log unexpected errors in development
     if (__DEV__ && !isExpectedError) {
-      console.error('📥 Response Error:', error.response?.status, error.config?.url);
-      
+      const url = error.config?.url ?? 'unknown';
+      const status = error.response?.status;
+
+      // No response = network error (server unreachable, connection refused, etc.)
+      if (error.response == null) {
+        const now = Date.now();
+        const throttleMs = 10000;
+        const lastLog = (apiClient as any).__lastNetworkErrorLog ?? 0;
+        const code = (error as any).code;
+        const msg = error.message || 'Network Error';
+        const isTimeout = code === 'ECONNABORTED';
+        const isErrNetwork =
+          code === 'ERR_NETWORK' ||
+          String(msg).includes('ERR_NETWORK') ||
+          String(msg).toLowerCase() === 'network error';
+        const isNonCritical =
+          typeof url === 'string' &&
+          (url.includes('nearby-count') ||
+            url.includes('special/offers') ||
+            url.includes('notifications/unread-count'));
+
+        if (isNonCritical && (isTimeout || isErrNetwork)) {
+          if (now - lastLog >= throttleMs) {
+            (apiClient as any).__lastNetworkErrorLog = now;
+            if (__DEV__) {
+              console.warn(
+                `📥 ${isTimeout ? 'Timeout' : 'Network'} – ${url} (non-critical; tunnel or backend may be unreachable)`
+              );
+            }
+          }
+        } else if (now - lastLog >= throttleMs) {
+          (apiClient as any).__lastNetworkErrorLog = now;
+          const ngrokLines = isNgrokUrl
+            ? [
+                '📡 Using ngrok: no HTTP response usually means the tunnel is down, Mac slept, ngrok agent stopped, or forward port ≠ backend port.',
+                '→ Keep `ngrok http 8000` running; `Forwarding` URL must match mobile/.env (restart Metro after edits).',
+                '→ iOS Simulator: EXPO_PUBLIC_API_URL=http://127.0.0.1:8000 avoids ngrok entirely.',
+              ]
+            : [
+                '→ Backend may be stopped or unreachable.',
+                '1. Is the API server running? (npm run dev in backend/)',
+                '2. URL: Simulator http://localhost:8000  Android http://10.0.2.2:8000',
+                '3. Physical device? Set PHYSICAL_DEVICE_API_URL to your computer IP',
+              ];
+          const lines = [
+            `📥 Network Error: ${msg}${code ? ` (${code})` : ''} – ${url}`,
+            ...ngrokLines,
+            `Current base URL: ${API_BASE_URL}`,
+          ];
+          if (isNgrokUrl && __DEV__) {
+            console.warn(lines.join('\n'));
+          } else {
+            console.error(lines.join('\n'));
+          }
+        }
+      } else {
+        const baseFromConfig =
+          typeof error.config?.baseURL === 'string' ? error.config.baseURL : API_BASE_URL;
+        const rawData = error.response?.data;
+        const dataStr =
+          typeof rawData === 'string'
+            ? rawData
+            : rawData != null
+              ? JSON.stringify(rawData)
+              : '';
+        const requestUsesNgrok =
+          isNgrokUrl ||
+          baseFromConfig.includes('ngrok') ||
+          (typeof error.config?.url === 'string' && error.config.url.includes('ngrok'));
+        const ngrokBodySuggestsTunnelIssue =
+          dataStr.includes('ERR_NGROK') ||
+          dataStr.includes('is offline') ||
+          (dataStr.includes('Tunnel') && dataStr.includes('not found'));
+
+        // 400 on driver/availability = expected when driver not yet verified (show as warn, not error)
+        if (status === 400 && typeof url === 'string' && url.includes('driver/availability')) {
+          if (__DEV__) console.warn('📥 Response 400 driver/availability (driver may need to be verified to go online)');
+        } else if (status === 404 && typeof url === 'string' && url.includes('config/public')) {
+          // Not a fatal error; hook falls back to bundled config
+          if (__DEV__) console.warn('📥 Response 404 config/public (using fallback public config)');
+        } else if (
+          status === 404 &&
+          requestUsesNgrok &&
+          typeof url === 'string' &&
+          !url.includes('config/public')
+        ) {
+          // Relative `url` never contains "ngrok"; use baseURL / API_BASE_URL (fixed above).
+          if (__DEV__) {
+            const detail = ngrokBodySuggestsTunnelIssue
+              ? ' (ngrok error page in response body)'
+              : '';
+            console.warn(
+              `📡 HTTP 404 via ngrok${detail} — the app is not reaching your Express API. Typical causes: ngrok not running, tunnel URL changed, or ngrok points at the wrong port.\n` +
+                '→ Run: ngrok http 8000 (must match backend port; your server log shows which port).\n' +
+                '→ Copy the current https://….ngrok-free.app into mobile/.env as EXPO_PUBLIC_API_URL and EXPO_PUBLIC_PHYSICAL_DEVICE_API_URL (origin only, no /api). Restart Metro.\n' +
+                '→ iOS Simulator without ngrok: EXPO_PUBLIC_API_URL=http://127.0.0.1:8000\n' +
+                `   Base: ${baseFromConfig} | Path: ${url}`
+            );
+          }
+        } else {
+          console.error('📥 Response Error:', status, url);
+        }
+      }
+
       // Check if it's a Sucuri redirect (307 or HTML response)
-      if (error.response?.status === 307 || 
-          (error.response?.headers?.['content-type']?.includes('text/html') && 
+      if (error.response?.status === 307 ||
+          (error.response?.headers?.['content-type']?.includes('text/html') &&
            typeof error.response?.data === 'string' && error.response.data.includes('sucuri'))) {
         console.error('🚨 SUCURI FIREWALL DETECTED - API request blocked');
         console.error('   This usually means:');
@@ -203,13 +329,18 @@ apiClient.interceptors.response.use(
                 return null;
               }
 
-              // REFRESH_TOKEN already includes full URL from constants
-              const resp = await axios.post(REFRESH_TOKEN, { refresh_token: refreshToken }, {
-                headers: {
-                  'Accept': 'application/json',
-                  'Content-Type': 'application/json',
-                },
-              });
+              const deviceId = await getUniqueId().catch(() => 'legacy');
+
+              const resp = await axios.post(
+                REFRESH_TOKEN,
+                { refresh_token: refreshToken, device_id: deviceId },
+                {
+                  headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                  },
+                }
+              );
 
               const newToken = resp?.data?.authorisation?.token || resp?.data?.data?.authorisation?.token || null;
               const newRefreshToken = resp?.data?.authorisation?.refresh_token || resp?.data?.data?.authorisation?.refresh_token;

@@ -1,8 +1,12 @@
 import {
   ActivityIndicator,
+  Dimensions,
   FlatList,
   ImageBackground,
+  Modal,
+  Platform,
   RefreshControl,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -10,21 +14,19 @@ import {
   View,
 } from "react-native";
 import { AntDesign, Ionicons } from "@expo/vector-icons";
-import BottomSheet, {
-  BottomSheetBackdrop,
-  BottomSheetBackdropProps,
-  BottomSheetView,
-} from "@gorhom/bottom-sheet";
 import React, {
-  useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
 } from "react";
 import Svg, { ClipPath, Defs, G, Mask, Path, Rect } from "react-native-svg";
 
 import { AppContext } from "@/app/context";
+import {
+  markAllIncomingAsRead,
+  markIncomingAsRead,
+  removeIncomingNotification,
+} from "@/store/AppSlice";
 import EmptyData from "@/components/emptyData";
 import {
   GET_NOTIFICATIONS,
@@ -32,12 +34,14 @@ import {
   MARK_ALL_NOTIFICATIONS_READ,
   DELETE_NOTIFICATION,
 } from "@/constants";
-import { Portal } from "@gorhom/portal";
 import apiClient from "@/utils/apiClient";
 import { router } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import { useIsFocused } from "@react-navigation/native";
+import { useFocusRefresh } from "@/hooks/useFocusRefresh";
+import { useDispatch, useSelector } from "react-redux";
 
 interface NotificationItem {
   notification_id: string;
@@ -56,6 +60,27 @@ interface LProps {
   onMarkAsRead: (id: string) => void;
   onDelete: (id: string) => void;
 }
+
+const styles = StyleSheet.create({
+  modalRoot: {
+    flex: 1,
+    width: "100%",
+  },
+  modalSheetAnchor: {
+    flex: 1,
+    width: "100%",
+    justifyContent: "flex-end",
+  },
+  /** Bottom card: intrinsic height only (avoid marginTop:'auto' — can collapse content on iOS). */
+  sheetShell: {
+    width: "100%",
+    alignSelf: "stretch",
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: "hidden",
+  },
+});
 
 const ListItem = ({ item, showModal, onMarkAsRead, onDelete }: LProps) => {
   const getNotificationIcon = (type: string) => {
@@ -260,16 +285,43 @@ const ListItem = ({ item, showModal, onMarkAsRead, onDelete }: LProps) => {
 
 interface ICurrent extends NotificationItem {}
 
+const EMPTY_INCOMING_NOTIFICATIONS: NotificationItem[] = [];
+
 const SharedNotificationsScreen = () => {
-  const bottomSheetRef = useRef<BottomSheet>(null);
+  const insets = useCombinedSafeInsets();
+  const windowHeight = Dimensions.get("window").height;
+  const [modalVisible, setModalVisible] = useState(false);
   const [current, setCurrent] = useState<ICurrent | null>(null);
   const { apiConfig, getCurrentUser } = useContext(AppContext);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [data, setData] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const dispatch = useDispatch();
+  const incomingNotifications = useSelector(
+    (s: { App: { incomingNotifications?: NotificationItem[] } }) =>
+      s?.App?.incomingNotifications ?? EMPTY_INCOMING_NOTIFICATIONS
+  );
 
   let isFocused = useIsFocused();
+  const refreshOnFocus = useFocusRefresh(20_000);
+
+  // TASK 5: Merge incoming (from push) with fetched - no screen refresh needed
+  const displayData = React.useMemo(() => {
+    const seen = new Set(data.map((n) => n.notification_id));
+    const incoming = (incomingNotifications || []).filter(
+      (n) => !seen.has(n.notification_id)
+    );
+    return [...incoming, ...data];
+  }, [data, incomingNotifications]);
+
+  const displayUnreadCount = React.useMemo(() => {
+    const fromApi = data.filter((n) => !n.is_read).length;
+    const fromIncoming = (incomingNotifications || []).filter(
+      (n) => !n.is_read
+    ).length;
+    return fromApi + fromIncoming;
+  }, [data, incomingNotifications]);
 
   const fetchNotifications = async () => {
     try {
@@ -295,11 +347,11 @@ const SharedNotificationsScreen = () => {
   };
 
   useEffect(() => {
-    if (isFocused) {
+    refreshOnFocus(() => {
       setLoading(true);
       fetchNotifications().finally(() => setLoading(false));
-    }
-  }, [isFocused]);
+    });
+  }, [isFocused, refreshOnFocus]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -308,6 +360,11 @@ const SharedNotificationsScreen = () => {
   };
 
   const handleMarkAsRead = async (id: string) => {
+    const isIncoming = String(id).startsWith("push-");
+    if (isIncoming) {
+      dispatch(markIncomingAsRead(id));
+      return;
+    }
     try {
       await apiClient.patch(`${MARK_NOTIFICATION_READ}${id}/read`);
       setData((prev) =>
@@ -336,6 +393,7 @@ const SharedNotificationsScreen = () => {
       await apiClient.patch(MARK_ALL_NOTIFICATIONS_READ);
       setData((prev) => prev.map((item) => ({ ...item, is_read: true })));
       setUnreadCount(0);
+      dispatch(markAllIncomingAsRead());
       showMessage({
         type: "success",
         message: "All notifications marked as read",
@@ -352,6 +410,11 @@ const SharedNotificationsScreen = () => {
   };
 
   const handleDelete = async (id: string) => {
+    const isIncoming = String(id).startsWith("push-");
+    if (isIncoming) {
+      dispatch(removeIncomingNotification(id));
+      return;
+    }
     try {
       await apiClient.delete(`${DELETE_NOTIFICATION}${id}`);
       setData((prev) => prev.filter((item) => item.notification_id !== id));
@@ -372,27 +435,11 @@ const SharedNotificationsScreen = () => {
 
   const showModal = (item: NotificationItem) => {
     setCurrent(item);
-    bottomSheetRef?.current?.expand();
-    // Auto-mark as read when opened
+    setModalVisible(true);
     if (!item.is_read) {
       handleMarkAsRead(item.notification_id);
     }
   };
-
-  const renderBackdrop = useCallback(
-    (props: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop
-        {...props}
-        disappearsOnIndex={-1}
-        appearsOnIndex={0}
-        style={[
-          { backgroundColor: "#1919194D" },
-          StyleSheet.absoluteFillObject,
-        ]}
-      />
-    ),
-    []
-  );
 
   return (
     <>
@@ -402,8 +449,11 @@ const SharedNotificationsScreen = () => {
       >
         <StatusBar barStyle="light-content" />
         <View
-          style={tw.style(`flex-row items-end px-6 h-32 bg-base-green py-5`, {
-            paddingTop: StatusBar.currentHeight,
+          style={tw.style(`flex-row items-end bg-base-green pb-5`, {
+            paddingTop: insets.top + 12,
+            paddingLeft: 24 + insets.left,
+            paddingRight: 24 + insets.right,
+            minHeight: 112,
           })}
         >
           <View style={tw`flex-row justify-between items-center w-full`}>
@@ -420,7 +470,7 @@ const SharedNotificationsScreen = () => {
             >
               Notifications
             </Text>
-            {unreadCount > 0 && (
+            {displayUnreadCount > 0 && (
               <TouchableOpacity
                 onPress={handleMarkAllAsRead}
                 style={tw`bg-white/20 px-3 py-1 rounded-full`}
@@ -437,14 +487,14 @@ const SharedNotificationsScreen = () => {
           </View>
         </View>
 
-        {unreadCount > 0 && (
+        {displayUnreadCount > 0 && (
           <View style={tw`bg-base-green/10 px-6 py-2`}>
             <Text
               style={tw.style(`text-sm text-base-green text-center`, {
                 fontFamily: "RobotoMedium",
               })}
             >
-              {unreadCount} unread notification{unreadCount !== 1 ? "s" : ""}
+              {displayUnreadCount} unread notification{displayUnreadCount !== 1 ? "s" : ""}
             </Text>
           </View>
         )}
@@ -466,7 +516,7 @@ const SharedNotificationsScreen = () => {
           </View>
         ) : (
           <FlatList
-            data={data}
+            data={displayData}
             keyExtractor={(item) => item.notification_id}
             renderItem={({ item }) => (
               <ListItem
@@ -488,86 +538,117 @@ const SharedNotificationsScreen = () => {
         )}
       </ImageBackground>
 
-      <Portal>
-        <BottomSheet
-          index={-1}
-          snapPoints={["50%"]}
-          ref={bottomSheetRef}
-          backdropComponent={renderBackdrop}
-          handleComponent={() => (
-            <BottomSheetView
-              style={tw.style(
-                `flex-row items-center bg-[#F6F6F6] w-[99%] py-3 rounded-t-[16px]`,
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="slide"
+        presentationStyle={Platform.OS === "ios" ? "overFullScreen" : undefined}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        {/*
+          iOS: use overFullScreen for transparent Modal. Sheet is anchored with
+          justifyContent: 'flex-end' so height follows content (not full-screen white).
+        */}
+        <View style={styles.modalRoot}>
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => setModalVisible(false)}
+            style={[StyleSheet.absoluteFillObject, { backgroundColor: "rgba(25,25,25,0.30)" }]}
+          />
+          <View pointerEvents="box-none" style={styles.modalSheetAnchor}>
+            <View
+              style={[
+                styles.sheetShell,
                 {
-                  shadowColor: "#000",
-                  shadowOffset: {
-                    width: 0,
-                    height: 3,
-                  },
-                  shadowOpacity: 0.25,
-                  shadowRadius: 2.84,
-                  elevation: 5,
-                }
-              )}
+                  paddingBottom: insets.bottom + 16,
+                  maxHeight: windowHeight * 0.92,
+                },
+              ]}
             >
+            <View style={tw`items-center pt-3 pb-1`}>
+              <View style={tw`w-10 h-1 bg-[#CCCCCC] rounded-full`} />
+            </View>
+
+            <View style={tw`flex-row items-center px-6 py-3 border-b border-[#F0F0F0]`}>
               <Text
-                style={tw.style(
-                  `basis-[85%] pl-10 text-center text-[17px] text-[#242E42]`,
-                  {
-                    fontFamily: "RobotoBold",
-                  }
-                )}
+                style={tw.style(`flex-1 text-[17px] text-[#242E42]`, {
+                  fontFamily: "RobotoBold",
+                })}
+                numberOfLines={2}
               >
                 {current?.title || "Notification"}
               </Text>
               <TouchableOpacity
-                onPress={() => bottomSheetRef?.current?.close()}
-                style={tw`h-[39px] basis-[39px] flex-col items-center justify-center bg-black p-1 rounded-full`}
+                onPress={() => setModalVisible(false)}
+                style={tw`h-[36px] w-[36px] items-center justify-center bg-black rounded-full ml-3`}
               >
-                <AntDesign name="close" size={24} color="white" />
+                <AntDesign name="close" size={20} color="white" />
               </TouchableOpacity>
-            </BottomSheetView>
-          )}
-          style={tw`px-4 pt-4 rounded-t-[40px]`}
-          enablePanDownToClose
-        >
-          <BottomSheetView style={tw`mt-6 px-4 pb-8`}>
-            <Text
-              style={tw.style(`text-base text-[#242E42] leading-6`, {
-                fontFamily: "RobotoRegular",
-              })}
-            >
-              {current?.message || ""}
-            </Text>
-            {current?.created_at && (
-              <Text
-                style={tw.style(`text-xs text-[#B8B8B8] mt-4`, {
-                  fontFamily: "RobotoRegular",
-                })}
-              >
-                {new Date(current.created_at).toLocaleString()}
-              </Text>
-            )}
-            {current?.related_ride_id && (
-              <TouchableOpacity
-                onPress={() => {
-                  bottomSheetRef?.current?.close();
-                  router.push("/rides");
-                }}
-                style={tw`bg-base-green py-3 rounded-lg mt-4`}
-              >
+            </View>
+
+            <View style={tw`px-6 pt-4`}>
+              {current?.message && current.message.length > 900 ? (
+                <ScrollView
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                  bounces={false}
+                  showsVerticalScrollIndicator
+                  style={{ maxHeight: Math.min(windowHeight * 0.45, 320) }}
+                  contentContainerStyle={{ flexGrow: 0, paddingBottom: 4 }}
+                >
+                  <Text
+                    style={tw.style(`text-base text-[#242E42] leading-6`, {
+                      fontFamily: "RobotoRegular",
+                    })}
+                  >
+                    {current.message}
+                  </Text>
+                </ScrollView>
+              ) : (
                 <Text
-                  style={tw.style(`text-center text-white`, {
-                    fontFamily: "RobotoMedium",
+                  style={tw.style(`text-base text-[#242E42] leading-6`, {
+                    fontFamily: "RobotoRegular",
                   })}
                 >
-                  View Ride Details
+                  {current?.message || ""}
                 </Text>
-              </TouchableOpacity>
-            )}
-          </BottomSheetView>
-        </BottomSheet>
-      </Portal>
+              )}
+
+              {current?.created_at && (
+                <Text
+                  style={tw.style(`text-xs text-[#B8B8B8] mt-4`, {
+                    fontFamily: "RobotoRegular",
+                  })}
+                >
+                  {new Date(current.created_at).toLocaleString()}
+                </Text>
+              )}
+
+              {current?.related_ride_id && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setModalVisible(false);
+                    router.push({
+                      pathname: "/(app)/ride-details",
+                      params: { rideId: String(current.related_ride_id) },
+                    });
+                  }}
+                  style={tw`bg-base-green py-3 rounded-lg mt-4`}
+                >
+                  <Text
+                    style={tw.style(`text-center text-white`, {
+                      fontFamily: "RobotoMedium",
+                    })}
+                  >
+                    View Ride Details
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 };

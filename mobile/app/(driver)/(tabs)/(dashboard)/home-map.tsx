@@ -9,22 +9,37 @@ import {
   DRIVER_PENDING_RIDE,
   LOCATION_UPDATE,
 } from "@/constants";
-import { FontAwesome6, MaterialCommunityIcons } from "@expo/vector-icons";
-import { Image, StatusBar, Text, TouchableOpacity, View } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
-import { LIGHT_MAP_STYLE } from "@/constants/mapStyle";
-import { Platform } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  ActivityIndicator,
+  Image,
+  Platform,
+  StatusBar,
+  Text,
+  TouchableOpacity,
+  Vibration,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import { BOLT_MAP_STYLE } from "@/constants/mapStyle";
 import UserLocationMarker from "@/components/map/UserLocationMarker";
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { debounce } from "@/utils/debounce";
-import Svg, { Path } from "react-native-svg";
 import { useDispatch, useSelector } from "react-redux";
 
 import { AppContext } from "@/app/context";
 import { AuthState } from "@/store/AuthSlice";
 import { BottomSheetMethods } from "@devvie/bottom-sheet";
 import EmergencyModal from "@/app/(app)/(tabs)/(home)/_modals/emergencyModal";
-import MapDirections from "@/components/activeRide/mapDirections";
+import { useDriverRoute } from "@/hooks/useRoute";
 import NewRide from "./_modals/newRide";
 import PayChangeSheet from "./_modals/payChange";
 import { Portal } from "@gorhom/portal";
@@ -38,8 +53,9 @@ import tw from "@/lib/tailwind";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
+import Svg, { Path } from "react-native-svg";
 
-const mapDelta = { latitudeDelta: 0.007, longitudeDelta: 0.007 };
+const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
 interface ILocation {
   name: string;
@@ -53,7 +69,8 @@ interface IPosition {
 }
 
 export default function HomeScreen() {
-  const { subscription } = useSelector(AppDetailsState);
+  const insets = useSafeAreaInsets();
+  const { subscription, unread_count } = useSelector(AppDetailsState);
   const { getCurrentUser, apiConfig, notificationEvent } =
     useContext(AppContext);
   const isFocused = useIsFocused();
@@ -65,6 +82,7 @@ export default function HomeScreen() {
   const newRideSheetRef = useRef<BottomSheetMethods>(null);
   const payChangeSheetRef = useRef<BottomSheetMethods>(null);
   const [ride, setRide] = useState<Partial<TDriverActiveRide>>({});
+  const [offerDeadlineMs, setOfferDeadlineMs] = useState<number | null>(null);
   const [nearby, setNearby] = useState<
     {
       location: {
@@ -75,46 +93,82 @@ export default function HomeScreen() {
     }[]
   >([]);
 
-  // Only use actual GPS location - don't show map until we have real coordinates
-  const hasValidLocation = location.latitude !== 0 && 
-                          location.longitude !== 0 && 
-                          !isNaN(location.latitude) && 
-                          !isNaN(location.longitude) &&
-                          location.accuracy !== undefined &&
-                          location.accuracy < 200; // Only use if accuracy is reasonable (< 200m)
-
-  const mapRegion = hasValidLocation ? {
-    latitude: location.latitude,
-    longitude: location.longitude,
-    ...mapDelta,
-  } : null; // Don't set region until we have valid GPS
-
   const mapRef = useRef<MapView>(null);
   const { location, address } = useCurrentLocation({ isFocused });
   const [mapReady, setMapReady] = useState(false);
 
+  // Only use actual GPS location - don't show map until we have real coordinates
+  // Guard: location can be undefined before the hook provides it or before GPS is ready
+  const hasValidLocation = location != null &&
+                          location.latitude !== 0 &&
+                          location.longitude !== 0 &&
+                          !isNaN(location.latitude) &&
+                          !isNaN(location.longitude) &&
+                          location.accuracy != null &&
+                          location.accuracy < 200; // Only use if accuracy is reasonable (< 200m)
+
+  const mapRegion = hasValidLocation && location
+    ? {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        ...mapDelta,
+      }
+    : null; // Used only as initialRegion fallback
+
   // Center map on actual GPS location when it becomes available
   useEffect(() => {
-    if (hasValidLocation && mapRef.current) {
+    if (hasValidLocation && location && mapRef.current) {
       console.log("🗺️ Driver map: Centering on GPS location:", {
         latitude: location.latitude,
         longitude: location.longitude,
         accuracy: `${location.accuracy?.toFixed(0)}m`,
       });
-      
+
       mapRef.current.animateToRegion({
         latitude: location.latitude,
         longitude: location.longitude,
         ...mapDelta,
       }, 500);
     }
-  }, [hasValidLocation, location.latitude, location.longitude, location.accuracy]);
+  }, [hasValidLocation, location?.latitude, location?.longitude, location?.accuracy]);
   const [maps, setMaps] = useState({
     origin: { latitude: 0, longitude: 0 },
     destination: { latitude: 0, longitude: 0 },
   });
-  
-  // Key to force MapDirections refresh when route is cleared
+
+  const hasRoute =
+    maps.origin.latitude !== 0 &&
+    maps.origin.longitude !== 0 &&
+    maps.destination.latitude !== 0 &&
+    maps.destination.longitude !== 0 &&
+    Object.keys(ride).length > 0 &&
+    ride?.status !== "cancelled" &&
+    ride?.status !== "completed";
+  const driverCoord =
+    hasValidLocation && location
+      ? { latitude: location.latitude, longitude: location.longitude }
+      : undefined;
+  const { routeCoords, loading: routeLoading } = useDriverRoute(
+    driverCoord,
+    hasRoute ? maps.destination : undefined,
+    { enabled: hasRoute }
+  );
+  const routeFittedRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      routeCoords.length > 0 &&
+      mapRef.current &&
+      !routeFittedRef.current
+    ) {
+      routeFittedRef.current = true;
+      mapRef.current.fitToCoordinates(routeCoords, {
+        edgePadding: { top: 100, right: 60, bottom: 200, left: 60 },
+        animated: true,
+      });
+    }
+  }, [routeCoords]);
+
   const [routeKey, setRouteKey] = useState(0);
 
   const animateToMapDirections = (item: Partial<TDriverActiveRide>) => {
@@ -140,15 +194,66 @@ export default function HomeScreen() {
       onMapReady();
       getCurrentUser();
     }
-  }, [isFocused, location.latitude]);
+  }, [isFocused]);
+
+  const driverPusherChannel = useMemo(() => {
+    const id = user?.profile?.driver_id;
+    return id ? `private-driver-${id}` : "";
+  }, [user?.profile?.driver_id]);
+
+  const handlePusherRideRequest = useCallback((raw: Record<string, unknown>) => {
+    const rider = raw.rider as { name?: string; rating?: number } | undefined;
+    const pickup = raw.pickup as { address?: string; lat?: number; lng?: number } | undefined;
+    const dropoff = raw.dropoff as { address?: string; lat?: number; lng?: number } | undefined;
+    const rideIdStr = String(raw.ride_id ?? "");
+    const expiresSec = Number(raw.offer_expires_in ?? 20);
+    const fare = raw.fare;
+
+    Vibration.vibrate([0, 400, 200, 400]);
+
+    const mapped: Partial<TDriverActiveRide> = {
+      ride_id: rideIdStr,
+      status: "requested",
+      accepted_by_driver: false,
+      is_ride_started: false,
+      drop_off_completed: false,
+      cost: String(Math.round(Number(fare) || 0)),
+      passenger: {
+        passenger_id: "",
+        passenger_email: "",
+        passenger_name: rider?.name ?? "Passenger",
+        passenger_image: "",
+        passenger_phone_number: "",
+      },
+      origin: {
+        lat: Number(pickup?.lat) || 0,
+        long: Number(pickup?.lng) || 0,
+        name: pickup?.address ?? "",
+      },
+      destination: {
+        lat: Number(dropoff?.lat) || 0,
+        long: Number(dropoff?.lng) || 0,
+        name: dropoff?.address ?? "",
+      },
+      payment_type:
+        String(raw.payment_method || "").toLowerCase() === "wallet"
+          ? "Wallet"
+          : "Cash",
+    };
+
+    setRide(mapped);
+    setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
+    newRideSheetRef.current?.open();
+  }, []);
 
   const getPendingRide = () => {
     axios
       .get(DRIVER_PENDING_RIDE, apiConfig)
       .then(({ data }) => {
-        console.log(data?.data, "pp");
-        if (data?.data?.length > 0) {
-          setRide(data?.data[0]);
+        const rides = data?.data?.rides ?? data?.rides ?? [];
+        if (Array.isArray(rides) && rides.length > 0) {
+          setOfferDeadlineMs(null);
+          setRide(rides[0]);
           newRideSheetRef.current?.open();
         } else {
           newRideSheetRef.current?.close();
@@ -172,6 +277,24 @@ export default function HomeScreen() {
     // .finally(() => setLoading(false));
   };
 
+  const handleOfferExpired = () => {
+    newRideSheetRef.current?.close();
+    setOfferDeadlineMs(null);
+    setRide((prev) => {
+      if (prev?.status === "requested" && !prev?.accepted_by_driver) {
+        return {};
+      }
+      return prev;
+    });
+    getPendingRide();
+  };
+
+  useEffect(() => {
+    if (ride?.accepted_by_driver) {
+      setOfferDeadlineMs(null);
+    }
+  }, [ride?.accepted_by_driver]);
+
   const getActiveRide = () => {
     axios
       .get(DRIVER_ACTIVE_RIDE, apiConfig)
@@ -189,7 +312,8 @@ export default function HomeScreen() {
               origin: { latitude: 0, longitude: 0 },
               destination: { latitude: 0, longitude: 0 },
             });
-            setRouteKey(prev => prev + 1); // Force MapDirections refresh
+            setRouteKey((prev) => prev + 1);
+            routeFittedRef.current = false;
             // Center map on user location when clearing route
             if (hasValidLocation && mapRef.current) {
               setTimeout(() => {
@@ -205,6 +329,7 @@ export default function HomeScreen() {
             return;
           }
           
+          setOfferDeadlineMs(null);
           setRide(rideData);
           animateToMapDirections(rideData);
           newRideSheetRef.current?.open();
@@ -273,11 +398,12 @@ export default function HomeScreen() {
   const onMapReady = () => {
     console.log('✅ Driver map ready');
     setMapReady(true);
-    if (location.latitude !== 0) {
+    if (!location) return;
+    if (location.latitude !== 0 && location.longitude !== 0) {
       if (maps.origin.latitude === 0) {
         mapRef.current?.animateToRegion({
-          latitude: location?.latitude,
-          longitude: location?.longitude,
+          latitude: location.latitude,
+          longitude: location.longitude,
           ...mapDelta,
         });
       } else {
@@ -344,19 +470,29 @@ export default function HomeScreen() {
       });
   };
 
+  // TASK 4: Driver foreground alerts - show toast + vibration for critical notifications
+  const DRIVER_ALERT_SUBTYPES = ["ride_requested", "ride_cancelled", "passenger_cancelled", "driver_cancelled"];
   useEffect(() => {
-    console.log(notificationEvent, "here");
+    if (!notificationEvent?.body) return;
+    const subType = notificationEvent?.data?.subType ?? notificationEvent?.data?.sub_type ?? "";
+    if (DRIVER_ALERT_SUBTYPES.includes(subType)) {
+      safeShowMessage({ message: notificationEvent.body, type: "info" });
+      Vibration.vibrate(300);
+    }
     getActiveRide();
   }, [notificationEvent]);
 
   const UpdateLocation = useCallback((location: {
-    name: string;
+    name?: string;
     lat: number;
     long: number;
   }) => {
-    console.log(location);
     axios
-      .post(LOCATION_UPDATE, { location }, apiConfig)
+      .patch(LOCATION_UPDATE, {
+        latitude: location.lat,
+        longitude: location.long,
+        address: location.name ?? '',
+      }, apiConfig)
       .then(() => getCurrentUser())
       .catch((err) => {
         console.log(err?.response?.data);
@@ -377,7 +513,7 @@ export default function HomeScreen() {
 
   // Debounced location update to prevent rate limiting
   const debouncedUpdateLocation = useMemo(
-    () => debounce((loc: { name: string; lat: number; long: number }) => {
+    () => debounce((loc: { name?: string; lat: number; long: number }) => {
       UpdateLocation(loc);
     }, 5000), // Update location at most once every 5 seconds
     [UpdateLocation]
@@ -397,7 +533,31 @@ export default function HomeScreen() {
   }, [location?.longitude, address?.formattedAddress, isFocused, debouncedUpdateLocation]);
 
   usePusherChannel({
-    channel: `private.passenger_cancelled`,
+    channel: driverPusherChannel || "private-driver-off",
+    visible: !!driverPusherChannel,
+    onSubscriptionSucceeded: () => {},
+    onEvent: (event) => {
+      const ev = event as { eventName?: string; name?: string; data?: unknown };
+      const name = ev.eventName ?? ev.name;
+      if (name !== "ride-request") {
+        return;
+      }
+      let payload: Record<string, unknown> = {};
+      if (typeof event.data === "string") {
+        try {
+          payload = JSON.parse(event.data) as Record<string, unknown>;
+        } catch {
+          payload = {};
+        }
+      } else if (event.data && typeof event.data === "object") {
+        payload = event.data as Record<string, unknown>;
+      }
+      handlePusherRideRequest(payload);
+    },
+  });
+
+  usePusherChannel({
+    channel: `private-passenger_cancelled`,
     visible: !subscription.passenger_cancelled,
     onSubscriptionSucceeded: () => {
       dispatch(setSubscriptionUtils({ passenger_cancelled: true }));
@@ -413,7 +573,8 @@ export default function HomeScreen() {
         origin: { latitude: 0, longitude: 0 },
         destination: { latitude: 0, longitude: 0 },
       });
-      setRouteKey(prev => prev + 1); // Force MapDirections refresh
+      setRouteKey((prev) => prev + 1);
+      routeFittedRef.current = false;
       setRide({});
       newRideSheetRef.current?.close();
       // Center map on user location
@@ -441,6 +602,8 @@ export default function HomeScreen() {
           bottomSheetRef={newRideSheetRef}
           isActive={ride?.accepted_by_driver as boolean}
           getActiveRide={getActiveRide}
+          offerDeadlineMs={offerDeadlineMs}
+          onOfferExpired={handleOfferExpired}
         />
       </Portal>
       <Portal>
@@ -448,42 +611,41 @@ export default function HomeScreen() {
       </Portal>
       <View style={{ flex: 1 }}>
         <StatusBar barStyle="dark-content" backgroundColor={"transparent"} />
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          region={mapRegion || undefined}
-          initialRegion={mapRegion || undefined}
-          style={tw`w-full h-full`}
-          mapType="standard"
-          onMapReady={onMapReady}
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          showsCompass={false}
-          showsScale={false}
-          showsBuildings={true}
-          showsTraffic={false}
-          showsIndoors={false}
-          showsPointsOfInterest={true}
-          toolbarEnabled={false}
-          pitchEnabled={false}
-          rotateEnabled={false}
-          scrollEnabled={true}
-          zoomEnabled={true}
-          minZoomLevel={10}
-          maxZoomLevel={20}
-          followsUserLocation={hasValidLocation && maps.origin.latitude === 0}
-          // Android-specific: Only apply minimal custom style when map is ready
-          {...Platform.select({
-            android: {
-              ...(mapReady && { customMapStyle: LIGHT_MAP_STYLE }),
-              zoomControlEnabled: false,
-              cacheEnabled: true,
-            },
-            ios: {
-              customMapStyle: LIGHT_MAP_STYLE,
-            },
-          })}
-        >
+        <View style={tw`w-full h-full`} renderToHardwareTextureAndroid>
+          <MapView
+            ref={mapRef}
+            provider={PROVIDER_GOOGLE}
+            initialRegion={mapRegion || undefined}
+            style={tw`w-full h-full`}
+            mapType="standard"
+            onMapReady={onMapReady}
+            showsUserLocation={false}
+            showsMyLocationButton={false}
+            showsCompass={false}
+            showsScale={false}
+            showsBuildings={true}
+            showsTraffic={false}
+            showsIndoors={false}
+            showsPointsOfInterest={true}
+            toolbarEnabled={false}
+            pitchEnabled={false}
+            rotateEnabled={false}
+            scrollEnabled={true}
+            zoomEnabled={true}
+            minZoomLevel={10}
+            maxZoomLevel={20}
+            followsUserLocation={hasValidLocation && maps.origin.latitude === 0}
+            {...Platform.select({
+              android: {
+                ...(mapReady && { customMapStyle: BOLT_MAP_STYLE }),
+                zoomControlEnabled: false,
+                cacheEnabled: true,
+              },
+              ios: {
+                customMapStyle: BOLT_MAP_STYLE,
+              },
+            })}
+          >
           {Array.isArray(nearby) && nearby.length > 0 && nearby.map((item, idx) => {
             // Handle different location formats from backend
             const lat = item?.location?.lat || item?.location?.latitude;
@@ -496,36 +658,15 @@ export default function HomeScreen() {
             
             return (
               <Marker
-                key={idx + 1}
+                key={`${lat}-${long}-${idx}`}
                 coordinate={{
                   latitude: typeof lat === 'string' ? parseFloat(lat) : lat,
                   longitude: typeof long === 'string' ? parseFloat(long) : long,
                 }}
                 anchor={{ x: 0.5, y: 0.5 }}
                 tracksViewChanges={false}
-              >
-                <View style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 20,
-                  backgroundColor: tw.color("base-green") || "#3C8F7C",
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 3,
-                  borderColor: 'white',
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.3,
-                  shadowRadius: 4,
-                  elevation: 5,
-                }}>
-                  <FontAwesome6
-                    name="person"
-                    size={20}
-                    color="white"
-                  />
-                </View>
-              </Marker>
+                image={require("@images/driver.png")}
+              />
             );
           })}
           
@@ -549,25 +690,67 @@ export default function HomeScreen() {
             </Marker>
           )}
           
-          {/* Only show route when driver has accepted a ride and ride is not cancelled/completed */}
-          <MapDirections
-            key={`route-${routeKey}-driver`}
-            check={
-              maps.origin.latitude !== 0 && 
-              maps.destination.latitude !== 0 && 
-              maps.origin.latitude !== maps.destination.latitude && 
-              Object.keys(ride).length > 0 &&
-              ride?.status !== 'cancelled' && 
-              ride?.status !== 'completed'
-            }
-            origin={maps.origin}
-            destination={maps.destination}
-          />
-        </MapView>
+          {/* Pickup and destination markers when on a ride */}
+          {hasRoute && maps.origin.latitude !== 0 && (
+            <Marker
+              coordinate={maps.origin}
+              pinColor="#3C8F7C"
+              tracksViewChanges={false}
+              zIndex={10}
+            />
+          )}
+          {hasRoute && maps.destination.latitude !== 0 && (
+            <Marker
+              coordinate={maps.destination}
+              pinColor="#e74c3c"
+              tracksViewChanges={false}
+              zIndex={10}
+            />
+          )}
+          {/* Uber-style route polyline (driver → destination), reroutes on deviation >80m */}
+          {hasRoute && routeCoords.length > 0 && (
+            <>
+              <Polyline
+                coordinates={routeCoords}
+                strokeWidth={7}
+                strokeColor="rgba(0,0,0,0.25)"
+                lineCap="round"
+                lineJoin="round"
+                zIndex={1}
+              />
+              <Polyline
+                coordinates={routeCoords}
+                strokeWidth={5}
+                strokeColor={tw.color("base-green") || "#3C8F7C"}
+                lineCap="round"
+                lineJoin="round"
+                zIndex={2}
+              />
+            </>
+          )}
+          </MapView>
+        </View>
+        {routeLoading && hasRoute && (
+          <View
+            style={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              marginLeft: -20,
+              marginTop: -20,
+              backgroundColor: "rgba(255,255,255,0.9)",
+              padding: 12,
+              borderRadius: 8,
+              pointerEvents: "none",
+            }}
+          >
+            <ActivityIndicator size="small" color={tw.color("base-green") || "#3C8F7C"} />
+          </View>
+        )}
 
         <View
           style={tw.style(`absolute top-0 right-0 left-0`, {
-            marginTop: StatusBar.currentHeight,
+            marginTop: insets.top,
           })}
         >
           <View
@@ -597,13 +780,41 @@ export default function HomeScreen() {
                 </Svg>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => router.push("/(app)/notifications")}
+                onPress={() => router.push("/(driver)/notifications")}
               >
-                <MaterialCommunityIcons
-                  name="bell-badge-outline"
-                  size={24}
-                  color="white"
-                />
+                <View style={{ position: "relative" }}>
+                  <MaterialCommunityIcons
+                    name="bell-badge-outline"
+                    size={24}
+                    color="white"
+                  />
+                  {unread_count > 0 ? (
+                    <View
+                      style={{
+                        position: "absolute",
+                        top: -4,
+                        right: -6,
+                        minWidth: 18,
+                        height: 18,
+                        borderRadius: 9,
+                        backgroundColor: "#FF3B30",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        paddingHorizontal: 4,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: "#FFFFFF",
+                          fontSize: 11,
+                          fontWeight: "700",
+                        }}
+                      >
+                        {unread_count > 9 ? "9+" : unread_count}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
               </TouchableOpacity>
             </View>
           </View>

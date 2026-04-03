@@ -1,20 +1,27 @@
 import Pusher from 'pusher';
 import logger from '../utils/logger.js';
 
-// Initialize Pusher (if configured)
+// Initialize Pusher (if configured). Supports PUSHER_APP_* and PUSHER_* env vars.
 let pusher = null;
 try {
   const pusherKey = process.env.PUSHER_KEY || process.env.PUSHER_APP_KEY;
-  const pusherCluster = process.env.PUSHER_CLUSTER || process.env.PUSHER_APP_CLUSTER || 'mt1';
-  
-  if (process.env.PUSHER_APP_ID && pusherKey && process.env.PUSHER_SECRET) {
-    pusher = new Pusher({
+  const pusherSecret = process.env.PUSHER_APP_SECRET || process.env.PUSHER_SECRET;
+  const pusherCluster = (process.env.PUSHER_CLUSTER || process.env.PUSHER_APP_CLUSTER || 'mt1').replace(/^["']|["']$/g, '').trim();
+  const useTLS = process.env.PUSHER_SCHEME !== 'http';
+  const pusherHost = process.env.PUSHER_HOST;
+  const pusherPort = process.env.PUSHER_PORT ? parseInt(process.env.PUSHER_PORT, 10) : undefined;
+
+  if (process.env.PUSHER_APP_ID && pusherKey && pusherSecret) {
+    const options = {
       appId: process.env.PUSHER_APP_ID,
       key: pusherKey,
-      secret: process.env.PUSHER_SECRET,
+      secret: pusherSecret,
       cluster: pusherCluster,
-      useTLS: true,
-    });
+      useTLS,
+    };
+    if (pusherHost) options.host = pusherHost;
+    if (pusherPort) options.port = pusherPort;
+    pusher = new Pusher(options);
     logger.info('Pusher service initialized successfully');
   } else {
     logger.warn('Pusher not configured - missing environment variables');
@@ -197,6 +204,24 @@ class PusherService {
       logger.info(`Pusher: Ride started event emitted for ride ${ride._id}`);
     } catch (error) {
       logger.error(`Failed to emit ride started via Pusher: ${error.message}`);
+    }
+  }
+
+  /**
+   * Emit a generic in-app notification to a user-specific channel.
+   */
+  emitNotification(userId, payload) {
+    if (!this.pusher || !userId) {
+      return false;
+    }
+
+    try {
+      this.pusher.trigger(`private-user-${userId.toString()}`, 'notification', payload);
+      logger.debug(`Pusher: Notification emitted for user ${userId}`);
+      return true;
+    } catch (error) {
+      logger.error(`Failed to emit notification via Pusher: ${error.message}`);
+      return false;
     }
   }
 }

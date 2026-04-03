@@ -1,6 +1,6 @@
 import "react-native-reanimated";
 
-import { BackHandler, StatusBar, StyleSheet, View } from "react-native";
+import { BackHandler, StyleSheet, View } from "react-native";
 import BottomSheet, {
   BottomSheetBackdrop,
   BottomSheetBackdropProps,
@@ -13,6 +13,7 @@ import { DriverInfoView } from "@/components/find-ride/driverInfo";
 import { TouchableOpacity } from "react-native-gesture-handler";
 import { setAppData } from "@/store/AppSlice";
 import tw from "@/lib/tailwind";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import { useDispatch } from "react-redux";
 import { useFocusEffect } from "expo-router";
 
@@ -21,6 +22,7 @@ interface Props {
 }
 
 const DriverSheet = ({ bottomSheetRef }: Props) => {
+  const insets = useCombinedSafeInsets();
   const dispatch = useDispatch();
   const [rideStatus, setRideStatus] = useState<boolean>(false);
   const [step, setStep] = useState<number>(1);
@@ -69,8 +71,8 @@ const DriverSheet = ({ bottomSheetRef }: Props) => {
         <TouchableOpacity
           onPress={() => handleBack()}
           style={tw.style(`absolute top-0 right-0 z-50`, {
-            paddingTop: (StatusBar.currentHeight || 0) + 4,
-            paddingRight: 12,
+            paddingTop: insets.top + 4,
+            paddingRight: 12 + insets.right,
           })}
           activeOpacity={0.7}
         >
@@ -80,7 +82,7 @@ const DriverSheet = ({ bottomSheetRef }: Props) => {
         </TouchableOpacity>
       </BottomSheetBackdrop>
     ),
-    [step]
+    [step, insets.top, insets.right]
   );
 
   return (

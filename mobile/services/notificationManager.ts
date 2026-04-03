@@ -1,0 +1,363 @@
+import AppStore from "@/store";
+import apiClient from "@/utils/apiClient";
+import messaging from "@react-native-firebase/messaging";
+import { Pusher, PusherEvent } from "@pusher/pusher-websocket-react-native";
+import { router } from "expo-router";
+
+export type NotificationPayload = {
+  id: string;
+  notification_id: string;
+  title: string;
+  message: string;
+  type: "push" | "alert" | "banner" | "inbox";
+  priority: "critical" | "high" | "normal" | "low";
+  screen?: string;
+  action_type?: "none" | "navigate" | "open_url" | "call_api";
+  action_payload?: any;
+  ride_id?: string;
+  duration_ms?: number;
+  image_url?: string;
+  delivered_at?: string;
+  event_key?: string;
+};
+
+export type NotificationHandler = (payload: NotificationPayload) => void;
+
+let alertHandler: NotificationHandler | null = null;
+let bannerHandler: NotificationHandler | null = null;
+let inboxHandler: NotificationHandler | null = null;
+
+let foregroundUnsubscribe: (() => void) | null = null;
+let backgroundOpenUnsubscribe: (() => void) | null = null;
+let firebaseInitialized = false;
+let pusherChannelName: string | null = null;
+
+const pusher = Pusher.getInstance();
+
+const parseActionPayload = (value: unknown) => {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === "object") {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return {};
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+};
+
+const toPriority = (value?: string): NotificationPayload["priority"] => {
+  if (
+    value === "critical" ||
+    value === "high" ||
+    value === "normal" ||
+    value === "low"
+  ) {
+    return value;
+  }
+  return "normal";
+};
+
+const toType = (value?: string): NotificationPayload["type"] => {
+  if (
+    value === "push" ||
+    value === "alert" ||
+    value === "banner" ||
+    value === "inbox"
+  ) {
+    return value;
+  }
+  return "push";
+};
+
+const getRoleHomePath = () => {
+  const role = AppStore.getState()?.Auth?.user?.profile?.role;
+  return role === "driver"
+    ? "/(driver)/(tabs)/(dashboard)/home"
+    : "/(app)/(tabs)/(home)/home";
+};
+
+const getWalletPath = () => {
+  const role = AppStore.getState()?.Auth?.user?.profile?.role;
+  return role === "driver"
+    ? "/(driver)/(tabs)/(profile)/wallet"
+    : "/(app)/(tabs)/(profile)/wallet";
+};
+
+const navigateToRoute = (path: string, rideId?: string) => {
+  if (rideId) {
+    router.push({ pathname: path as any, params: { rideId } });
+    return;
+  }
+  router.push(path as any);
+};
+
+export const registerAlertHandler = (handler: NotificationHandler): void => {
+  alertHandler = handler;
+};
+
+export const registerBannerHandler = (handler: NotificationHandler): void => {
+  bannerHandler = handler;
+};
+
+export const registerInboxHandler = (handler: NotificationHandler): void => {
+  inboxHandler = handler;
+};
+
+export const handle = (payload: NotificationPayload): void => {
+  if (payload.priority === "critical") {
+    alertHandler?.(payload);
+    return;
+  }
+
+  if (payload.type === "alert") {
+    alertHandler?.(payload);
+    return;
+  }
+
+  if (payload.type === "banner") {
+    bannerHandler?.(payload);
+    return;
+  }
+
+  inboxHandler?.(payload);
+};
+
+const parsePusherNotificationPayload = (
+  event: PusherEvent
+): NotificationPayload | null => {
+  const rawData = event.data;
+  const data =
+    typeof rawData === "string"
+      ? parseActionPayload(rawData)
+      : rawData && typeof rawData === "object"
+        ? rawData
+        : {};
+
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const payload = data as Record<string, any>;
+  return {
+    id: String(payload.id || payload.notification_id || ""),
+    notification_id: String(payload.notification_id || payload.id || ""),
+    title: String(payload.title || ""),
+    message: String(payload.message || payload.body || ""),
+    type: toType(payload.type),
+    priority: toPriority(payload.priority),
+    screen: payload.screen ? String(payload.screen) : undefined,
+    action_type: payload.action_type || "none",
+    action_payload: payload.action_payload || null,
+    ride_id: payload.ride_id ? String(payload.ride_id) : undefined,
+    duration_ms:
+      payload.duration_ms != null ? Number(payload.duration_ms) : undefined,
+    image_url: payload.image_url ? String(payload.image_url) : undefined,
+    delivered_at: payload.delivered_at
+      ? String(payload.delivered_at)
+      : new Date().toISOString(),
+    event_key: payload.event_key ? String(payload.event_key) : undefined,
+  };
+};
+
+export const initPusherListener = async (userId: string): Promise<void> => {
+  if (!userId) {
+    return;
+  }
+
+  const nextChannelName = `private-user-${userId}`;
+  if (pusherChannelName === nextChannelName) {
+    return;
+  }
+
+  if (pusherChannelName) {
+    try {
+      await pusher.unsubscribe({ channelName: pusherChannelName });
+    } catch {}
+  }
+
+  pusherChannelName = nextChannelName;
+
+  await pusher.subscribe({
+    channelName: nextChannelName,
+    onEvent: (event: PusherEvent) => {
+      if (event.eventName !== "notification") {
+        return;
+      }
+
+      const payload = parsePusherNotificationPayload(event);
+      if (!payload) {
+        return;
+      }
+
+      handle(payload);
+    },
+  });
+};
+
+export const mapFirebaseToPayload = (remoteMessage: any): NotificationPayload => {
+  const data = remoteMessage?.data || {};
+  const title =
+    remoteMessage?.notification?.title || data.title || "Notification";
+  const message =
+    remoteMessage?.notification?.body || data.message || data.body || "";
+  const rideId = data.ride_id || data.rideId || "";
+
+  return {
+    id: String(data.id || data.notification_id || rideId || Date.now()),
+    notification_id: String(data.notification_id || data.id || Date.now()),
+    title: String(title),
+    message: String(message),
+    type: toType(data.type),
+    priority: toPriority(data.priority),
+    screen: data.screen ? String(data.screen) : undefined,
+    action_type:
+      data.action_type === "navigate" ||
+      data.action_type === "open_url" ||
+      data.action_type === "call_api"
+        ? data.action_type
+        : "none",
+    action_payload: parseActionPayload(data.action_payload),
+    ride_id: rideId ? String(rideId) : undefined,
+    duration_ms:
+      data.duration_ms != null ? Number(data.duration_ms) : undefined,
+    image_url: data.image_url ? String(data.image_url) : undefined,
+    delivered_at: new Date().toISOString(),
+    event_key: data.subType || data.sub_type || undefined,
+  };
+};
+
+export const handleNavigation = (payload: NotificationPayload): void => {
+  if (payload.action_type !== "navigate") {
+    return;
+  }
+
+  const screen = payload.action_payload?.screen || payload.screen || "home";
+  const rideId =
+    payload.action_payload?.rideId ||
+    payload.action_payload?.ride_id ||
+    payload.ride_id;
+
+  if (screen === "ActiveRide" || screen === "ride") {
+    navigateToRoute(getRoleHomePath(), rideId);
+    return;
+  }
+
+  if (screen === "RideDetails") {
+    navigateToRoute("/(app)/ride-details", rideId);
+    return;
+  }
+
+  if (screen === "wallet") {
+    navigateToRoute(getWalletPath(), rideId);
+    return;
+  }
+
+  if (screen === "notifications") {
+    const role = AppStore.getState()?.Auth?.user?.profile?.role;
+    navigateToRoute(
+      role === "driver" ? "/(driver)/notifications" : "/(app)/notifications",
+      rideId
+    );
+    return;
+  }
+
+  if (screen === "home") {
+    navigateToRoute(getRoleHomePath(), rideId);
+    return;
+  }
+
+  if (typeof screen === "string" && screen.startsWith("/")) {
+    navigateToRoute(screen, rideId);
+    return;
+  }
+
+  navigateToRoute(getRoleHomePath(), rideId);
+};
+
+export const initFirebaseListeners = (): void => {
+  if (firebaseInitialized) {
+    return;
+  }
+  try {
+    foregroundUnsubscribe = messaging().onMessage(async (remoteMessage) => {
+      const payload = mapFirebaseToPayload(remoteMessage);
+      handle(payload);
+    });
+
+    backgroundOpenUnsubscribe = messaging().onNotificationOpenedApp(
+      (remoteMessage) => {
+        const payload = mapFirebaseToPayload(remoteMessage);
+        handleNavigation(payload);
+      }
+    );
+
+    messaging().setBackgroundMessageHandler(async (remoteMessage) => {
+      const payload = mapFirebaseToPayload(remoteMessage);
+      inboxHandler?.(payload);
+    });
+
+    messaging()
+      .getInitialNotification()
+      .then((remoteMessage) => {
+        if (!remoteMessage) {
+          return;
+        }
+        const payload = mapFirebaseToPayload(remoteMessage);
+        setTimeout(() => handleNavigation(payload), 1000);
+      })
+      .catch(() => {});
+
+    firebaseInitialized = true;
+  } catch (error) {
+    foregroundUnsubscribe = null;
+    backgroundOpenUnsubscribe = null;
+    firebaseInitialized = false;
+    console.log("Firebase messaging unavailable, skipping listeners", error);
+  }
+};
+
+export const registerFcmToken = async (): Promise<void> => {
+  try {
+    await messaging().requestPermission();
+    const token = await messaging().getToken();
+    if (!token) {
+      return;
+    }
+    await apiClient.post("notifications/fcm-token", { token });
+    console.log("FCM token registered successfully");
+  } catch (error) {
+    console.log("FCM token registration failed", error);
+  }
+};
+
+export const cleanupNotificationListeners = (): void => {
+  foregroundUnsubscribe?.();
+  backgroundOpenUnsubscribe?.();
+  foregroundUnsubscribe = null;
+  backgroundOpenUnsubscribe = null;
+  firebaseInitialized = false;
+};
+
+const notificationManager = {
+  registerAlertHandler,
+  registerBannerHandler,
+  registerInboxHandler,
+  handle,
+  initPusherListener,
+  initFirebaseListeners,
+  mapFirebaseToPayload,
+  handleNavigation,
+  registerFcmToken,
+  cleanupNotificationListeners,
+};
+
+export default notificationManager;

@@ -4,11 +4,11 @@ import {
   Modal,
   StatusBar,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
+import { TouchableOpacity } from "react-native-gesture-handler";
 
-import React from "react";
+import React, { memo } from "react";
 import tw from "@/lib/tailwind";
 
 interface Props {
@@ -129,4 +129,4 @@ const PaymentReceiptModal = ({ visible, back, feeback, cost }: Props) => {
   );
 };
 
-export default PaymentReceiptModal;
+export default memo(PaymentReceiptModal);

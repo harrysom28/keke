@@ -41,7 +41,7 @@ export const useThrottledLocationUpdate = () => {
     lastUpdateRef.current = now;
     
     try {
-      await apiClient.patch('/update/locations/drivers-passengers', {
+      await apiClient.patch('update/locations/drivers-passengers', {
         latitude: location.lat,
         longitude: location.long,
         address: address,

@@ -1,9 +1,7 @@
 import {
-  Animated,
   Image,
   Linking,
   Text,
-  TouchableOpacity,
   View,
   ActivityIndicator,
   StyleSheet,
@@ -11,11 +9,21 @@ import {
 } from "react-native";
 import { AntDesign, Entypo, Ionicons } from "@expo/vector-icons";
 import { Defs, Line, LinearGradient, Path, Stop, Svg } from "react-native-svg";
-import { useEffect, useRef, useMemo, useState } from "react";
+import { useMemo } from "react";
+import { router } from "expo-router";
+import Animated, {
+  useAnimatedStyle,
+  useDerivedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from "react-native-reanimated";
+import { TouchableOpacity } from "react-native-gesture-handler";
 
 import { TRide } from "@/types";
 import tw from "@/lib/tailwind";
 import { showMessage } from "react-native-flash-message";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 
 interface Props {
   action: () => void;
@@ -23,17 +31,27 @@ interface Props {
   cancel: () => void;
   chat: () => void;
   ride: {} | TRide;
+  /** When set (e.g. waiting for acceptance), overrides the default "Searching…" subtext */
+  waitingSubtitleOverride?: string;
+  /** Prefer this over `action` for the primary button (e.g. API reassign) */
+  onRequestNewDriver?: () => void;
+  /** Optional: previous flow — open search / change pickup */
+  onSearchAgain?: () => void;
 }
 
-export const WaitingView = ({ action, info, cancel, ride, chat }: Props) => {
+export const WaitingView = ({
+  action,
+  info,
+  cancel,
+  ride,
+  chat,
+  waitingSubtitleOverride,
+  onRequestNewDriver,
+  onSearchAgain,
+}: Props) => {
+  const insets = useCombinedSafeInsets();
   const data = ride as TRide;
-  
-  // Debug logging
-  if (__DEV__) {
-    console.log('🔍 WaitingView - ride data:', JSON.stringify(data, null, 2));
-    console.log('🔍 WaitingView - data keys:', data ? Object.keys(data) : 'no data');
-  }
-  
+
   // Ensure we have at least an object
   if (!data || typeof data !== 'object') {
     console.warn('⚠️ WaitingView: Invalid ride data, using empty object');
@@ -44,73 +62,23 @@ export const WaitingView = ({ action, info, cancel, ride, chat }: Props) => {
     ? Object.keys(data.driver).length > 0
     : false;
   const isAccepted = data?.accepted_by_driver || data?.acceptedByDriver || false;
-
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const [statusText, setStatusText] = useState<string>("Waiting for driver to accept");
-  const [statusSubtext, setStatusSubtext] = useState<string>("Searching for nearby drivers...");
-
-  useEffect(() => {
+  const pulseScale = useDerivedValue(() => {
     if (!isAccepted && !hasRideStarted) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.1,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    } else {
-      pulseAnim.setValue(1);
+      return withRepeat(
+        withSequence(
+          withTiming(1.1, { duration: 1000 }),
+          withTiming(1, { duration: 1000 })
+        ),
+        -1,
+        false
+      );
     }
+    return withTiming(1, { duration: 200 });
   }, [isAccepted, hasRideStarted]);
 
-  // Update status text only when values actually change
-  useEffect(() => {
-    let newStatusText: string;
-    if (hasRideStarted) {
-      newStatusText = "In Transit";
-    } else if (isAccepted) {
-      const time = formatTime(data?.arrival_time);
-      if (time === "0 min" || time === "0") {
-        newStatusText = "Arriving now";
-      } else {
-        newStatusText = `Arriving in ${time}`;
-      }
-    } else {
-      newStatusText = "Waiting for driver to accept";
-    }
-    
-    // Only update state if the value actually changed
-    setStatusText(prev => prev !== newStatusText ? newStatusText : prev);
-  }, [hasRideStarted, isAccepted, data?.arrival_time]);
-
-  // Update status subtext only when values actually change
-  useEffect(() => {
-    let newStatusSubtext: string;
-    if (hasRideStarted) {
-      newStatusSubtext = "Your ride is in progress";
-    } else if (isAccepted) {
-      const distance = data?.arrival_distance 
-        ? formatDistance(data.arrival_distance)
-        : (data?.distance ? `${data.distance.toFixed(1)} km` : "0 km");
-      if (distance === "0 km" || distance === "0") {
-        newStatusSubtext = "Driver is here";
-      } else {
-        newStatusSubtext = `${distance} away`;
-      }
-    } else {
-      newStatusSubtext = "Searching for nearby drivers...";
-    }
-    
-    // Only update state if the value actually changed
-    setStatusSubtext(prev => prev !== newStatusSubtext ? newStatusSubtext : prev);
-  }, [hasRideStarted, isAccepted, data?.arrival_distance, data?.distance]);
+  const pulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pulseScale.value }],
+  }));
 
   const formatCost = (cost: number | string | undefined) => {
     // Try multiple sources for cost
@@ -125,12 +93,8 @@ export const WaitingView = ({ action, info, cancel, ride, chat }: Props) => {
     if (!costValue) return "₦0";
     const num = typeof costValue === "string" ? parseFloat(costValue) : costValue;
     if (isNaN(num) || num === 0) return "₦0";
-    
-    // Backend returns fare in USD, convert to Naira (approximate rate: 1500 NGN = 1 USD)
-    // Values between 1-100 are typically USD, convert them
-    const USD_TO_NGN = 1500;
-    const finalAmount = (num >= 1 && num <= 100) ? Math.round(num * USD_TO_NGN) : Math.round(num);
-    return `₦${finalAmount.toLocaleString()}`;
+
+    return `₦${Math.round(num).toLocaleString()}`;
   };
 
   const formatDistance = (distance: string | number | undefined) => {
@@ -181,6 +145,29 @@ export const WaitingView = ({ action, info, cancel, ride, chat }: Props) => {
     return str;
   };
 
+  const statusText = useMemo(() => {
+    if (hasRideStarted) {
+      return "In Transit";
+    }
+    if (isAccepted) {
+      const time = formatTime(data?.arrival_time);
+      return time === "0 min" || time === "0" ? "Arriving now" : `Arriving in ${time}`;
+    }
+    return "Waiting for driver to accept";
+  }, [data?.arrival_time, hasRideStarted, isAccepted]);
+
+  const statusSubtext = useMemo(() => {
+    if (hasRideStarted) {
+      return "Your ride is in progress";
+    }
+    if (isAccepted) {
+      const distance = data?.arrival_distance
+        ? formatDistance(data.arrival_distance)
+        : (data?.distance ? `${data.distance.toFixed(1)} km` : "0 km");
+      return distance === "0 km" || distance === "0" ? "Driver is here" : `${distance} away`;
+    }
+    return waitingSubtitleOverride || "Searching for nearby drivers...";
+  }, [data?.arrival_distance, data?.distance, hasRideStarted, isAccepted, waitingSubtitleOverride]);
 
   // Always render something, even if data is missing
   return (
@@ -195,7 +182,7 @@ export const WaitingView = ({ action, info, cancel, ride, chat }: Props) => {
       {/* Status Header - Always show */}
       <View style={styles.statusHeader}>
         {!isAccepted && !hasRideStarted && (
-          <Animated.View style={[styles.loadingContainer, { transform: [{ scale: pulseAnim }] }]}>
+          <Animated.View style={[styles.loadingContainer, pulseStyle]}>
             <ActivityIndicator size="large" color={tw.color("base-green") || "#3C8F7C"} />
           </Animated.View>
         )}
@@ -323,6 +310,39 @@ export const WaitingView = ({ action, info, cancel, ride, chat }: Props) => {
         </TouchableOpacity>
       )}
 
+      {/* Anti-renegotiation banner - show when driver is en-route */}
+      {isAccepted && !hasRideStarted && (
+        <View style={styles.secureFareBanner}>
+          <View style={styles.secureFareHeader}>
+            <Ionicons name="lock-closed" size={18} color={tw.color("base-green") || "#3C8F7C"} />
+            <View style={tw`flex-1`}>
+              <Text style={styles.secureFareTitle}>Your fare is secured</Text>
+              <Text style={styles.secureFareText}>
+                {formatCost(data?.cost)} is held in your wallet. Do not pay cash or renegotiate with your driver.
+              </Text>
+            </View>
+          </View>
+          <View style={styles.secureFareFooter}>
+            <Text style={styles.secureFareSmall}>Pressured to pay differently?</Text>
+            <TouchableOpacity
+              onPress={() => {
+                const rideId = (data as any)?.ride_id || (data as any)?._id || "";
+                router.push({
+                  pathname: "/(app)/(tabs)/(profile)/contact",
+                  params: {
+                    ...(rideId ? { rideId } : {}),
+                    subject: "Driver requested off-app payment",
+                  } as any,
+                });
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.secureFareLink}>Report it →</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* Trip Details Card - Always show */}
       <View style={styles.tripCard}>
         <View style={styles.costRow}>
@@ -379,7 +399,12 @@ export const WaitingView = ({ action, info, cancel, ride, chat }: Props) => {
       )}
 
       {/* Action Buttons */}
-      <View style={styles.actionButtons}>
+      <View
+        style={[
+          styles.actionButtons,
+          { paddingBottom: Math.max(insets.bottom + 8, 16) },
+        ]}
+      >
         {/* Chat and Call buttons - show when driver is accepted */}
         {isAccepted && hasDriver && (
           <View style={styles.quickActions}>
@@ -481,14 +506,32 @@ export const WaitingView = ({ action, info, cancel, ride, chat }: Props) => {
         )}
 
         {!isAccepted && (
-          <TouchableOpacity
-            onPress={action}
-            style={styles.primaryButton}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="refresh-outline" size={18} color="white" style={{ marginRight: 6 }} />
-            <Text style={styles.primaryButtonText}>Request New Driver</Text>
-          </TouchableOpacity>
+          <>
+            <TouchableOpacity
+              onPress={onRequestNewDriver ?? action}
+              style={styles.primaryButton}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="refresh-outline" size={18} color="white" style={{ marginRight: 6 }} />
+              <Text style={styles.primaryButtonText}>Request New Driver</Text>
+            </TouchableOpacity>
+            {onSearchAgain ? (
+              <TouchableOpacity
+                onPress={onSearchAgain}
+                style={styles.secondaryLink}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.secondaryLinkText,
+                    { color: tw.color("base-green") || "#3C8F7C" },
+                  ]}
+                >
+                  Search pickup area again
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
         )}
 
         <TouchableOpacity
@@ -639,6 +682,49 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E5E7EB",
   },
+  secureFareBanner: {
+    backgroundColor: "#E8F5E9",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: tw.color("base-green") || "#3C8F7C",
+  },
+  secureFareHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  secureFareTitle: {
+    fontSize: 13,
+    fontFamily: "RobotoBold",
+    color: "#1A1A1A",
+    marginBottom: 2,
+  },
+  secureFareText: {
+    fontSize: 12,
+    fontFamily: "RobotoRegular",
+    color: "#666",
+    lineHeight: 16,
+  },
+  secureFareFooter: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  secureFareSmall: {
+    fontSize: 11,
+    fontFamily: "RobotoRegular",
+    color: "#8E8E93",
+  },
+  secureFareLink: {
+    fontSize: 11,
+    fontFamily: "RobotoMedium",
+    color: tw.color("base-green") || "#3C8F7C",
+  },
   costRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -732,5 +818,13 @@ const styles = StyleSheet.create({
     color: "#EF4444",
     fontFamily: "RobotoBold",
     textAlign: "center",
+  },
+  secondaryLink: {
+    alignItems: "center",
+    paddingVertical: 6,
+  },
+  secondaryLinkText: {
+    fontSize: 12,
+    fontFamily: "RobotoMedium",
   },
 });

@@ -5,10 +5,10 @@ import {
   setRideData,
   setRideUtils,
 } from "@/store/AppSlice";
-import { BackHandler, StatusBar, Dimensions, View } from "react-native";
+import { BackHandler, StatusBar, Dimensions, Platform, View } from "react-native";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { AntDesign } from "@expo/vector-icons";
-import React, { useCallback, useContext, useEffect, useState, useMemo } from "react";
+import React, { useCallback, useContext, useEffect, useState, useMemo, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
 import { AppContext } from "@/app/context";
@@ -34,14 +34,56 @@ import apiClient from "@/utils/apiClient";
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
   getActiveRide: () => void;
+  onSheetClose?: () => void;
+  initialDropoff?: {
+    name: string;
+    lat: number | null;
+    lng: number | null;
+  } | null;
 }
 
-const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
+const FindRideSheet = ({ bottomSheetRef, getActiveRide, onSheetClose, initialDropoff }: Props) => {
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
-  const [height, setHeight] = useState<number>(600); // Default to 600px
+  const screenHeight = Dimensions.get('window').height;
+  const [height, setHeight] = useState<number>(Math.round(screenHeight * 0.6));
   const [step, setStep] = useState<number>(1);
+  const contentHeightRef = useRef(0);
+  const criteriaSignatureRef = useRef("");
+  const rideData = ride?.data as any;
+  const pickupLat = rideData?.origin?.lat ?? rideData?.origin?.latitude ?? null;
+  const pickupLng = rideData?.origin?.long ?? rideData?.origin?.lng ?? rideData?.origin?.longitude ?? null;
+  const dropoffLat = rideData?.destination?.lat ?? rideData?.destination?.latitude ?? null;
+  const dropoffLng = rideData?.destination?.long ?? rideData?.destination?.lng ?? rideData?.destination?.longitude ?? null;
+  const vehicleTypeId = rideData?.vehicle_type_id ?? null;
+
+  const handleContentLayout = useCallback((event: any) => {
+    const measured = event?.nativeEvent?.layout?.height;
+    if (!measured || measured <= 50) return;
+
+    const capped = Math.max(200, Math.min(Math.round(measured + 48), Math.round(screenHeight * 0.92)));
+    if (Math.abs(capped - contentHeightRef.current) > 8) {
+      contentHeightRef.current = capped;
+      setHeight(capped);
+    }
+  }, [screenHeight]);
+
+  const handleSheetClosed = useCallback(() => {
+    contentHeightRef.current = 0;
+    setHeight(Math.round(screenHeight * 0.6));
+    setStep(1);
+    dispatch(setAppData({ isBooking: false }));
+    dispatch(
+      setRideData({
+        origin: {},
+        destination: {},
+        driver_id: "",
+      } as any)
+    );
+    dispatch(setRideUtils({ drivers: [] }));
+    onSheetClose?.();
+  }, [dispatch, onSheetClose, screenHeight]);
 
   const handleBack = useCallback(() => {
     console.log('🔙 handleBack called, current step:', step);
@@ -63,37 +105,31 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
       console.log('🔙 Closing modal from step 1');
       setStep(1);
       bottomSheetRef?.current?.close();
-
-      setTimeout(() => {
-        dispatch(
-          setAppData({
-            isBooking: false,
-            ride: { status: false, data: {} },
-          })
-        );
-      }, 600);
     }
-  }, [step, bottomSheetRef, dispatch]);
-
-  const modifyHeight = useCallback(() => {
-    if (ride.status) {
-      const screenHeight = Dimensions.get('window').height;
-      if ([1].includes(step)) {
-        setHeight(Math.round(screenHeight * 0.7)); // 70% of screen
-      } else if (step === 2) {
-        setHeight(Math.round(screenHeight * 0.65)); // 65% of screen - Vehicle selection
-      } else if (step === 3) {
-        setHeight(Math.round(screenHeight * 0.6)); // 60% of screen - Driver selection
-      } else {
-        // Fallback to default height
-        setHeight(Math.round(screenHeight * 0.75)); // 75% of screen
-      }
-    }
-  }, [step, ride.status]);
+  }, [step, bottomSheetRef]);
 
   useEffect(() => {
-    modifyHeight();
-  }, [step, ride.status]);
+    contentHeightRef.current = 0;
+    setHeight(Math.round(screenHeight * 0.6));
+  }, [step, ride.status, screenHeight]);
+
+  useEffect(() => {
+    const signature = [
+      pickupLat ?? "",
+      pickupLng ?? "",
+      dropoffLat ?? "",
+      dropoffLng ?? "",
+      vehicleTypeId ?? "",
+    ].join(":");
+
+    if (signature === criteriaSignatureRef.current) {
+      return;
+    }
+
+    criteriaSignatureRef.current = signature;
+    dispatch(setRideUtils({ drivers: [] }));
+    dispatch(setRideData({ driver_id: "" } as any));
+  }, [dispatch, dropoffLat, dropoffLng, pickupLat, pickupLng, vehicleTypeId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -121,7 +157,6 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
     
     try {
       // Transform frontend data structure to match backend validation
-      const rideData = ride?.data as any;
       const finalPaymentType = payment_type.length > 0 ? payment_type : (rideData?.payment_type || 'wallet');
       
       // Map payment type to backend format (lowercase)
@@ -219,6 +254,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
         vehicleTypeId: rideData?.vehicle_type_id || '',
         paymentMethod: paymentMethod,
         promoCode: rideData?.promo_code || null,
+        ...(rideData?.driver_id ? { driverId: rideData.driver_id } : {}),
       };
 
       // Add scheduledAt if provided
@@ -328,14 +364,16 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
   };
 
   const RenderView = useCallback(() => {
-    console.log('🎨 RenderView - screen:', step === 1 ? 'LOCATION' : step === 2 ? 'VEHICLE' : step === 3 ? 'DRIVER' : step, 
-                'rideId:', (ride?.data as any)?.ride_id, 
-                'hasData:', !!ride?.data && Object.keys(ride.data).length > 0);
-    
     switch (step) {
       case 1:
         // Location selection
-        return <LocationView action={() => setStep(2)} back={() => handleBack()} />;
+        return (
+          <LocationView
+            action={() => setStep(2)}
+            back={() => handleBack()}
+            initialDropoff={initialDropoff}
+          />
+        );
         
       case 2:
         // Vehicle selection with payment and promo
@@ -343,15 +381,15 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
           <SelectVehicleView
             onHeightChange={(measuredHeight) => {
               if (measuredHeight && measuredHeight > 0 && isFinite(measuredHeight)) {
-                // measuredHeight is already in pixels, use it directly
-                const heightValue = Math.round(measuredHeight);
-                const screenHeight = Dimensions.get('window').height;
+                // measuredHeight is already in pixels; add buffer so Request Ride button is fully visible
+                const heightValue = Math.round(measuredHeight) + 40;
                 // Clamp between 200px and 95% of screen to show all content
                 const clampedHeight = Math.max(200, Math.min(heightValue, Math.round(screenHeight * 0.95)));
+                contentHeightRef.current = clampedHeight;
                 setHeight(clampedHeight);
-                console.log('📐 Modal height updated:', { 
-                  measuredHeight, 
-                  clampedHeight, 
+                console.log('📐 Modal height updated:', {
+                  measuredHeight,
+                  clampedHeight,
                   screenHeight,
                   percentage: `${((clampedHeight / screenHeight) * 100).toFixed(1)}%`
                 });
@@ -414,14 +452,14 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
               dispatch(setRideData({ driver_id: driverId }));
               createRide(loading);
             }}
-            back={() => handleBack()}
+            onChangeLocation={() => setStep(1)}
             onHeightChange={(measuredHeight) => {
               if (measuredHeight && measuredHeight > 0 && isFinite(measuredHeight)) {
                 // measuredHeight is already in pixels, use it directly
                 const heightValue = Math.round(measuredHeight);
-                const screenHeight = Dimensions.get('window').height;
                 // Clamp between 200px and 95% of screen
                 const clampedHeight = Math.max(200, Math.min(heightValue, Math.round(screenHeight * 0.95)));
+                contentHeightRef.current = clampedHeight;
                 setHeight(clampedHeight);
                 console.log('📐 Driver modal height updated:', { 
                   measuredHeight, 
@@ -436,15 +474,12 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
         );
         
       default:
-        console.log('🎨 Default case - no ride data, returning null');
         return null;
     }
-  }, [step, handleBack, dispatch, bottomSheetRef, ride, getActiveRide]);
+  }, [step, handleBack, dispatch, bottomSheetRef, ride]);
 
   // Ensure height is always a valid number (pixels)
   const getValidHeight = (): number => {
-    console.log('🔍 getValidHeight called with:', height, 'type:', typeof height);
-    
     let heightValue: number;
     
     // Height should now always be a number, but handle edge cases
@@ -452,45 +487,29 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
       heightValue = height;
     } else {
       // Fallback if somehow it's not a number
-      console.warn('⚠️ Height is not a number, using fallback 600px');
       heightValue = 600;
     }
     
     // Validate the final value
     if (isNaN(heightValue) || !isFinite(heightValue) || heightValue <= 0) {
-      console.warn('⚠️ Invalid height value detected, using fallback 600px');
       heightValue = 600;
     }
     
     // Ensure it's a reasonable value (between 200px and screen height)
-    const screenHeight = Dimensions.get('window').height;
     heightValue = Math.max(200, Math.min(heightValue, screenHeight));
-    heightValue = Math.round(heightValue); // Round to integer
-    
-    console.log('✅ getValidHeight returning:', heightValue);
+    heightValue = Math.round(heightValue);
     return heightValue;
   };
 
   // Don't render the BottomSheet at all if there's no valid content
-  const content = useMemo(() => RenderView(), [step, handleBack, dispatch, bottomSheetRef, ride, getActiveRide]);
+  const content = useMemo(() => RenderView(), [step, handleBack, dispatch, bottomSheetRef, ride]);
   
   // If there's no content, don't render anything
-  if (!content) {
-    console.log('❌ No content to render, hiding BottomSheet');
-    return null;
-  }
+  if (!content) return null;
 
   const validHeight = getValidHeight();
-  console.log('🔍 Debug height values:', { 
-    originalHeight: height, 
-    validHeight, 
-    typeOfHeight: typeof height,
-    typeOfValidHeight: typeof validHeight 
-  });
 
-  // Extra safety check - if validHeight is still somehow invalid, use fallback
   if (!validHeight || validHeight <= 0 || isNaN(validHeight) || !isFinite(validHeight)) {
-    console.error('❌ CRITICAL: Invalid height detected, using fallback 600px');
     const fallbackHeight = 600;
     return (
       <BottomSheet
@@ -500,14 +519,18 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
         backdropMaskColor="#19191900"
         openDuration={1000}
         closeDuration={1000}
-        disableKeyboardHandling={true}
+        disableKeyboardHandling={false}
+        // Android: PanResponder on the sheet body steals/conflicts with TextInput & ScrollView touches
+        // on some devices (e.g. Samsung). Drag-to-close still works via the handle bar.
+        disableBodyPanning={Platform.OS === "android"}
         style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`, {
           position: 'relative',
         })}
         closeOnDragDown={true}
+        onClose={handleSheetClosed}
       >
         {/* X Button at top right edge of card */}
-        <View style={tw.style(`absolute -top-2 right-0 z-50`, {
+        <View style={tw.style(`absolute -top-1 right-1 z-50`, {
           paddingTop: 0,
           paddingRight: 0,
         })}>
@@ -519,12 +542,12 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
             <AntDesign name="close" size={20} color="white" />
           </TouchableOpacity>
         </View>
-        {content}
+        <View onLayout={handleContentLayout}>
+          {content}
+        </View>
       </BottomSheet>
     );
   }
-
-  console.log('✅ Rendering BottomSheet with height:', validHeight);
 
   return (
     <BottomSheet
@@ -534,14 +557,16 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
       backdropMaskColor="#19191900"
       openDuration={1000}
       closeDuration={1000}
-      disableKeyboardHandling={true}
+      disableKeyboardHandling={false}
+      disableBodyPanning={Platform.OS === "android"}
       style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`, {
         position: 'relative',
       })}
       closeOnDragDown={true}
+      onClose={handleSheetClosed}
     >
       {/* X Button at top right edge of card */}
-      <View style={tw.style(`absolute -top-2 right-0 z-50`, {
+      <View style={tw.style(`absolute -top-1 right-1 z-50`, {
         paddingTop: 0,
         paddingRight: 0,
       })}>
@@ -553,7 +578,9 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide }: Props) => {
           <AntDesign name="close" size={20} color="white" />
         </TouchableOpacity>
       </View>
-      {content}
+      <View onLayout={handleContentLayout}>
+        {content}
+      </View>
     </BottomSheet>
   );
 };

@@ -1,4 +1,6 @@
+import mongoose from 'mongoose';
 import logger from './logger.js';
+import * as Sentry from '@sentry/node';
 
 /**
  * Custom Error Classes
@@ -61,6 +63,37 @@ export class RateLimitError extends AppError {
  * Global error handler middleware
  */
 export const errorHandler = (err, req, res, next) => {
+  // Mongoose bad ObjectId
+  if (err.name === 'CastError') {
+    return res.status(400).json({
+      status: 'error',
+      message: `Invalid ${err.path}: ${err.value}`,
+    });
+  }
+
+  // Mongoose duplicate key
+  if (err.code === 11000) {
+    const field = Object.keys(err.keyValue || {})[0] || 'field';
+    return res.status(409).json({
+      status: 'error',
+      message: `${field} already exists`,
+    });
+  }
+
+  // Mongoose validation error (distinct from our AppError ValidationError)
+  if (err instanceof mongoose.Error.ValidationError) {
+    const messages = Object.values(err.errors).map((e) => e.message);
+    return res.status(400).json({
+      status: 'error',
+      message: messages.join(', '),
+    });
+  }
+
+  if (err.name === 'EscrowWalletError') {
+    err.statusCode = 402;
+    err.status = 'fail';
+    err.isOperational = true;
+  }
   err.statusCode = err.statusCode || 500;
   err.status = err.status || 'error';
 
@@ -104,9 +137,12 @@ const sendErrorProd = (err, res) => {
       message: err.message,
     };
 
-    // Include validation errors if present
     if (err.errors && Object.keys(err.errors).length > 0) {
       response.errors = err.errors;
+    }
+    if (err.statusCode === 402 && err.code) {
+      response.code = err.code;
+      if (err.data && Object.keys(err.data).length > 0) response.data = err.data;
     }
 
     res.status(err.statusCode).json(response);
@@ -133,11 +169,16 @@ export const asyncHandler = (fn) => {
  * Catch unhandled promise rejections
  */
 export const handleUnhandledRejection = () => {
-  process.on('unhandledRejection', (err) => {
-    logger.error('UNHANDLED REJECTION! 💥 Shutting down...');
-    logger.error(err.name, err.message);
-    // Close server gracefully
-    process.exit(1);
+  process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled rejection — server kept alive', { reason, promise });
+    // Sync errors still exit via uncaughtException; async rejections may be transient — do not kill the process.
+    if (process.env.SENTRY_DSN && process.env.NODE_ENV !== 'test') {
+      try {
+        Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
+      } catch (_) {
+        // Sentry optional
+      }
+    }
   });
 };
 
@@ -147,7 +188,7 @@ export const handleUnhandledRejection = () => {
 export const handleUncaughtException = () => {
   process.on('uncaughtException', (err) => {
     logger.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
-    logger.error(err.name, err.message);
+    logger.error(err.message || String(err));
     process.exit(1);
   });
 };

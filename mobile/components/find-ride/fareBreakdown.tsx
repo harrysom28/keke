@@ -20,7 +20,12 @@ interface FareBreakdownProps {
 }
 
 export const FareBreakdownModal = ({ visible, onClose, fare, distance, duration }: FareBreakdownProps) => {
-  const currency = fare.currency || '₦';
+  const currency = (() => {
+    const normalized = String(fare.currency || 'NGN').toUpperCase();
+    if (normalized === 'NGN') return '₦';
+    if (normalized === 'USD') return '₦';
+    return `${normalized} `;
+  })();
   const formatPrice = (amount: number | null | undefined): string => {
     if (amount === null || amount === undefined || isNaN(amount)) {
       return `${currency}0`;

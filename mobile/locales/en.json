@@ -1,0 +1,39 @@
+{
+  "tabs": {
+    "home": "Home",
+    "offers": "Offers",
+    "rides": "Rides",
+    "profile": "Profile"
+  },
+  "driver_tabs": {
+    "home": "Home",
+    "bookings": "Bookings",
+    "tasks": "Tasks",
+    "profile": "Profile"
+  },
+  "home": {
+    "welcome": "Welcome back",
+    "where_to": "Where to?"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "mark_all_read": "Mark all read",
+    "no_notifications": "No notifications yet"
+  },
+  "language": {
+    "title": "Language",
+    "subtitle": "Select your preferred language",
+    "note": "Note: Some features may not be available in all languages",
+    "saved": "Language preference saved",
+    "save_failed": "Failed to save language preference",
+    "names": {
+      "en": "English",
+      "fr": "French",
+      "es": "Spanish",
+      "ar": "Arabic",
+      "ha": "Hausa",
+      "ig": "Igbo",
+      "yo": "Yoruba"
+    }
+  }
+}

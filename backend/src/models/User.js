@@ -24,16 +24,12 @@ const userSchema = new mongoose.Schema(
       sparse: true,
       trim: true,
     },
+    // OTP-only: password never required. Optional for legacy/email recovery.
     password: {
       type: String,
-      required: function () {
-        // OTP-first signup creates a user before password is chosen.
-        // Only require password after registration is completed (or for non-OTP flows),
-        // and never require for Google auth.
-        return this.isRegCompleted === true && !this.googleId;
-      },
+      required: false,
       minlength: [6, 'Password must be at least 6 characters'],
-      select: false, // Don't return password by default
+      select: false,
     },
     profileImage: {
       type: String,
@@ -55,6 +51,22 @@ const userSchema = new mongoose.Schema(
     isRegCompleted: {
       type: Boolean,
       default: false,
+    },
+    // Progressive onboarding: rider_complete | driver_stage1..4 | driver_complete (null/undefined until set)
+    onboardingStage: {
+      type: String,
+      enum: [null, 'rider_complete', 'driver_stage1', 'driver_stage2', 'driver_stage3', 'driver_stage4', 'driver_complete'],
+      default: null,
+    },
+    // KYC status for drivers: pending | verified | rejected (null/undefined until set)
+    kycStatus: {
+      type: String,
+      enum: [null, 'pending', 'verified', 'rejected'],
+      default: null,
+    },
+    dateOfBirth: {
+      type: Date,
+      default: null,
     },
     isActive: {
       type: Boolean,
@@ -116,6 +128,10 @@ const userSchema = new mongoose.Schema(
     addresses: [
       {
         name: String,
+        normalisedLabel: {
+          type: String,
+          default: null,
+        },
         address: String,
         location: {
           type: {
@@ -131,6 +147,14 @@ const userSchema = new mongoose.Schema(
         isDefault: {
           type: Boolean,
           default: false,
+        },
+        lastUsed: {
+          type: Date,
+          default: Date.now,
+        },
+        useCount: {
+          type: Number,
+          default: 1,
         },
         createdAt: {
           type: Date,
@@ -155,6 +179,32 @@ const userSchema = new mongoose.Schema(
     topupBankName: {
       type: String,
       default: null,
+    },
+    // Paystack customer code (CUS_xxx) - links user to Paystack for DVA
+    paystackCustomerCode: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+    // Dedicated Virtual Account (DVA) - displayed on Wallet screen for bank transfer top-up
+    dvaAccountNumber: {
+      type: String,
+      default: null,
+    },
+    dvaBankName: {
+      type: String,
+      default: null,
+    },
+    dvaAccountName: {
+      type: String,
+      default: null,
+    },
+    // Wallet account number (KEKE + last 8 of user ID) - fallback when Paystack DVA not available
+    walletAccountNumber: {
+      type: String,
+      default: null,
+      unique: true,
+      sparse: true,
     },
     // Google OAuth
     googleId: {
@@ -207,10 +257,24 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    fcm_token: {
+      type: String,
+      default: null,
+    },
     // Soft delete
     deletedAt: {
       type: Date,
       default: null,
+    },
+    // Milestone rewards (e.g. free ride after 10 completed rides)
+    tenRideFreeClaimed: {
+      type: Boolean,
+      default: false,
+    },
+    // Referral rewards - how many times user has claimed (each claim = 1 tier)
+    referralRewardsClaimedCount: {
+      type: Number,
+      default: 0,
     },
   },
   {
@@ -226,8 +290,11 @@ userSchema.index({ phone: 1 }, { unique: true, sparse: true }); // Sparse index 
 userSchema.index({ role: 1 });
 userSchema.index({ isActive: 1 });
 userSchema.index({ referralCode: 1 });
+userSchema.index({ onboardingStage: 1 });
+userSchema.index({ kycStatus: 1 });
 userSchema.index({ 'currentLocation': '2dsphere' });
 userSchema.index({ 'addresses.location': '2dsphere' });
+userSchema.index({ _id: 1, 'addresses.normalisedLabel': 1 });
 
 // Virtual for user ID (for compatibility with mobile app)
 userSchema.virtual('user_id').get(function () {
@@ -241,7 +308,7 @@ userSchema.pre('validate', function (next) {
     this.invalidate('email_phone_number', 'Email or phone number is required');
   }
 
-  if (this.isRegCompleted && !this.name) {
+  if (this.isRegCompleted && !this.name && !this.onboardingStage) {
     this.invalidate('name', 'Name is required');
   }
 
@@ -267,6 +334,14 @@ userSchema.pre('save', async function (next) {
 
   const salt = await bcrypt.genSalt(12);
   this.password = await bcrypt.hash(this.password, salt);
+  next();
+});
+
+// Set walletAccountNumber before first save to avoid unique index conflict on null
+userSchema.pre('save', function (next) {
+  if (!this.walletAccountNumber && this._id) {
+    this.walletAccountNumber = 'KEKE' + this._id.toString().slice(-8).toUpperCase();
+  }
   next();
 });
 

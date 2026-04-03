@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   View,
   ScrollView,
-  Linking,
 } from "react-native";
 import { AntDesign } from "@expo/vector-icons";
 import { router } from "expo-router";
@@ -14,7 +13,7 @@ import tw from "@/lib/tailwind";
 
 const TermsScreen = () => {
   const handleContactSupport = () => {
-    Linking.openURL("mailto:support@keke.com?subject=Terms%20and%20Privacy%20Policy%20Inquiry");
+    router.push("/(app)/(tabs)/(profile)/contact");
   };
 
   return (

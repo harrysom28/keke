@@ -4,11 +4,16 @@ import logger from '../utils/logger.js';
 let client = null;
 
 /**
- * Create Redis client
+ * Create Redis client (does not connect — call ensureRedisConnected from server startup).
  */
 export const createRedisClient = () => {
   if (client) {
     return client;
+  }
+
+  if (!process.env.REDIS_HOST || process.env.REDIS_HOST === '') {
+    logger.info('Redis not configured, continuing without cache...');
+    return null;
   }
 
   const redisConfig = {
@@ -16,19 +21,29 @@ export const createRedisClient = () => {
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
   };
 
-  if (process.env.REDIS_PASSWORD) {
-    redisConfig.password = process.env.REDIS_PASSWORD;
-  }
+  const password = process.env.REDIS_PASSWORD;
+  const usePassword =
+    password &&
+    typeof password === 'string' &&
+    password.trim() !== '' &&
+    password.toLowerCase() !== 'null';
 
   try {
-    // Redis v4+ uses createClient with different API
-    client = redis.createClient({
+    const clientOptions = {
       socket: {
         host: redisConfig.host,
         port: redisConfig.port,
+        connectTimeout: 5000,
+        reconnectStrategy: (retries) => {
+          if (retries > 10) return new Error('Redis max retries reached');
+          return Math.min(retries * 100, 3000);
+        },
       },
-      password: redisConfig.password,
-    });
+    };
+    if (usePassword) {
+      clientOptions.password = password;
+    }
+    client = redis.createClient(clientOptions);
 
     client.on('connect', () => {
       logger.info('Redis client connected');
@@ -36,30 +51,13 @@ export const createRedisClient = () => {
 
     client.on('error', (err) => {
       logger.error(`Redis client error: ${err.message}`);
-      // Don't crash on Redis errors
     });
 
     client.on('end', () => {
       logger.warn('Redis client connection ended');
     });
-
-    // Connect to Redis (non-blocking)
-    if (process.env.NODE_ENV !== 'test') {
-      // Only try to connect if Redis host is explicitly configured
-      if (process.env.REDIS_HOST && process.env.REDIS_HOST !== '') {
-        client.connect().catch((err) => {
-          logger.error(`Failed to connect to Redis: ${err.message}`);
-          logger.info('Continuing without Redis cache...');
-          client = null; // Don't use Redis if connection fails
-        });
-      } else {
-        logger.info('Redis not configured, continuing without cache...');
-        client = null;
-      }
-    }
   } catch (error) {
     logger.error(`Redis client creation error: ${error.message}`);
-    logger.info('Continuing without Redis cache...');
     client = null;
   }
 
@@ -67,15 +65,43 @@ export const createRedisClient = () => {
 };
 
 /**
- * Get Redis client instance
+ * Connect Redis when REDIS_HOST is set. Call from server startup before accepting traffic.
+ * @returns {Promise<boolean>}
+ */
+export async function ensureRedisConnected() {
+  if (process.env.NODE_ENV === 'test') {
+    return false;
+  }
+  if (!process.env.REDIS_HOST || process.env.REDIS_HOST === '') {
+    return false;
+  }
+  const c = createRedisClient();
+  if (!c) {
+    return false;
+  }
+  try {
+    if (!c.isOpen) {
+      await c.connect();
+    }
+    logger.info('Redis ready');
+    return true;
+  } catch (err) {
+    logger.warn(`Redis connection failed: ${err.message}`);
+    try {
+      await c.quit().catch(() => {});
+    } catch (_) {}
+    client = null;
+    return false;
+  }
+}
+
+/**
+ * Raw Redis client for GEO, rate-limit sendCommand, OTP keys, etc.
+ * May be non-open until ensureRedisConnected() resolves.
  */
 export const getRedisClient = () => {
-  if (!client) {
-    return createRedisClient();
-  }
-  // Return null if client failed to connect
-  if (!client.isOpen && client.isReady === false) {
-    return null;
+  if (!client && process.env.REDIS_HOST) {
+    createRedisClient();
   }
   return client;
 };
@@ -85,7 +111,7 @@ export const getRedisClient = () => {
  */
 export const closeRedisConnection = async () => {
   if (client) {
-    await client.quit();
+    await client.quit().catch(() => {});
     client = null;
     logger.info('Redis connection closed');
   }
@@ -95,17 +121,10 @@ export const closeRedisConnection = async () => {
  * Cache helper functions
  */
 export const cache = {
-  /**
-   * Get value from cache
-   */
   get: async (key) => {
     try {
       const redisClient = getRedisClient();
-      if (!redisClient) {
-        return null;
-      }
-      // Redis v4+ uses isOpen or isReady
-      if (redisClient.isOpen === false && redisClient.isReady === false) {
+      if (!redisClient || !redisClient.isOpen) {
         return null;
       }
       const value = await redisClient.get(key);
@@ -116,16 +135,10 @@ export const cache = {
     }
   },
 
-  /**
-   * Set value in cache
-   */
   set: async (key, value, expirationInSeconds = 3600) => {
     try {
       const redisClient = getRedisClient();
-      if (!redisClient) {
-        return false;
-      }
-      if (redisClient.isOpen === false && redisClient.isReady === false) {
+      if (!redisClient || !redisClient.isOpen) {
         return false;
       }
       await redisClient.setEx(key, expirationInSeconds, JSON.stringify(value));
@@ -136,16 +149,10 @@ export const cache = {
     }
   },
 
-  /**
-   * Delete value from cache
-   */
   del: async (key) => {
     try {
       const redisClient = getRedisClient();
-      if (!redisClient) {
-        return false;
-      }
-      if (redisClient.isOpen === false && redisClient.isReady === false) {
+      if (!redisClient || !redisClient.isOpen) {
         return false;
       }
       await redisClient.del(key);
@@ -156,22 +163,17 @@ export const cache = {
     }
   },
 
-  /**
-   * Clear all cache with pattern
-   */
   clearPattern: async (pattern) => {
     try {
       const redisClient = getRedisClient();
-      if (!redisClient) {
+      if (!redisClient || !redisClient.isOpen) {
         return false;
       }
-      if (redisClient.isOpen === false && redisClient.isReady === false) {
-        return false;
+      const keys = [];
+      for await (const key of redisClient.scanIterator({ MATCH: pattern, COUNT: 100 })) {
+        keys.push(key);
       }
-      const keys = await redisClient.keys(pattern);
-      if (keys.length > 0) {
-        await redisClient.del(keys);
-      }
+      if (keys.length > 0) await redisClient.del(keys);
       return true;
     } catch (error) {
       logger.error(`Cache clear pattern error: ${error.message}`);

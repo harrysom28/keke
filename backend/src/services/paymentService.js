@@ -1,14 +1,47 @@
+import mongoose from 'mongoose';
 import Payment from '../models/Payment.js';
 import User from '../models/User.js';
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import logger from '../utils/logger.js';
 import Stripe from 'stripe';
+import { computeCommission } from './commissionService.js';
+import { creditRideEarning } from './walletService.js';
+import { settleRide as escrowSettleRide } from './escrowWalletService.js';
 
 // Initialize Stripe (if API key is provided)
 const stripe = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' })
   : null;
+
+/**
+ * Apply commission and credit driver wallet for a completed ride payment. Idempotent.
+ * @param {Object} ride - Ride doc (with driver id and vehicleType id)
+ */
+export async function applyRideEarningToWallet(ride) {
+  const driverId = ride.driver?._id || ride.driver;
+  if (!driverId) return;
+  if (ride.fare?.commissionAmount != null) return;
+
+  const grossFare = Number(ride.fare?.totalFare) || 0;
+  if (grossFare <= 0) return;
+
+  const vehicleTypeId = ride.vehicleType?._id || ride.vehicleType || null;
+  const { commissionAmount, driverNetAmount, platformRevenue, commissionRate } = await computeCommission(grossFare, {
+    vehicleTypeId: vehicleTypeId?.toString?.() || null,
+  });
+
+  ride.fare = ride.fare || {};
+  ride.fare.commissionRate = commissionRate;
+  ride.fare.commissionAmount = commissionAmount;
+  ride.fare.driverNetAmount = driverNetAmount;
+  ride.fare.platformRevenue = platformRevenue;
+  await ride.save();
+
+  const currency = (ride.fare.currency || 'NGN').toUpperCase();
+  await creditRideEarning(driverId, driverNetAmount, commissionAmount, ride._id, currency);
+  logger.info(`Ride earning applied: driver ${driverId}, net ${driverNetAmount}, commission ${commissionAmount}`);
+}
 
 /**
  * Process payment for a completed ride
@@ -37,31 +70,83 @@ export const processRidePayment = async (ride) => {
     let transactionId = null;
 
     switch (paymentMethod) {
-      case 'wallet':
-        // Process wallet payment
-        if (rider.balance < amount) {
-          throw new Error('Insufficient wallet balance');
+      case 'wallet': {
+        const isEscrow = ride.paymentStatus === 'held' || ride.paymentStatus === 'charged';
+        if (isEscrow) {
+          const driverDoc = await Driver.findById(ride.driver).select('user').lean();
+          const driverUserId = driverDoc?.user ?? null;
+          await escrowSettleRide(ride._id, ride.rider, driverUserId, amount);
+          ride.paymentStatus = 'completed';
+          const driverNetAmount = ride.fare?.driverNetAmount ?? Math.round(amount * 0.92);
+          const platformFee = ride.fare?.platformRevenue ?? amount - driverNetAmount;
+          ride.fare = ride.fare || {};
+          ride.fare.commissionAmount = platformFee;
+          ride.fare.driverNetAmount = driverNetAmount;
+          ride.fare.platformRevenue = platformFee;
+          await ride.save();
+
+          const driverId = ride.driver?._id || ride.driver;
+          if (driverId) {
+            await creditRideEarning(driverId, driverNetAmount, platformFee, ride._id, ride.fare.currency || 'NGN');
+          }
+
+          payment = await Payment.create({
+            user: ride.rider,
+            ride: ride._id,
+            amount,
+            currency: ride.fare.currency || 'NGN',
+            method: 'wallet',
+            status: 'completed',
+            transactionId: `WLT-${Date.now()}-${ride._id}`,
+            paidAt: new Date(),
+          });
+          transactionId = payment.transactionId;
+          logger.info(`Escrow wallet payment settled for ride ${ride._id}: ${amount}`);
+        } else {
+          // Atomic: create payment record and debit rider balance in a transaction
+          const session = await mongoose.startSession().catch(() => null);
+          const useSession = session != null;
+          if (useSession) session.startTransaction();
+          const opts = useSession ? { session } : {};
+          try {
+            const txnId = `WLT-${Date.now()}-${ride._id}`;
+            const created = await Payment.create(
+              [
+                {
+                  user: ride.rider,
+                  ride: ride._id,
+                  amount,
+                  currency: ride.fare.currency || 'NGN',
+                  method: 'wallet',
+                  status: 'completed',
+                  transactionId: txnId,
+                  paidAt: new Date(),
+                },
+              ],
+              opts
+            );
+            payment = Array.isArray(created) ? created[0] : created;
+            transactionId = payment.transactionId;
+
+            const updated = await User.findOneAndUpdate(
+              { _id: ride.rider, balance: { $gte: amount } },
+              { $inc: { balance: -amount } },
+              { new: true, ...opts }
+            );
+            if (!updated) {
+              throw new Error('Insufficient wallet balance or concurrent update');
+            }
+            if (useSession) await session.commitTransaction();
+            logger.info(`Wallet payment processed for ride ${ride._id}: ${amount}`);
+          } catch (err) {
+            if (useSession) await session.abortTransaction().catch(() => {});
+            throw err;
+          } finally {
+            if (session) session.endSession().catch(() => {});
+          }
         }
-
-        // Deduct from rider's wallet
-        rider.balance -= amount;
-        await rider.save();
-
-        // Create payment record
-        payment = await Payment.create({
-          user: ride.rider,
-          ride: ride._id,
-          amount,
-          currency: ride.fare.currency || 'USD',
-          method: 'wallet',
-          status: 'completed',
-          transactionId: `WLT-${Date.now()}-${ride._id}`,
-          paidAt: new Date(),
-        });
-
-        transactionId = payment.transactionId;
-        logger.info(`Wallet payment processed for ride ${ride._id}: ${amount}`);
         break;
+      }
 
       case 'card':
       case 'stripe':
@@ -84,7 +169,7 @@ export const processRidePayment = async (ride) => {
           // Create payment intent if not exists
           const paymentIntent = await stripe.paymentIntents.create({
             amount: Math.round(amount * 100), // Convert to cents
-            currency: (ride.fare.currency || 'usd').toLowerCase(),
+            currency: (ride.fare.currency || 'ngn').toLowerCase(),
             metadata: {
               userId: ride.rider.toString(),
               rideId: ride._id.toString(),
@@ -97,7 +182,7 @@ export const processRidePayment = async (ride) => {
             user: ride.rider,
             ride: ride._id,
             amount,
-            currency: ride.fare.currency || 'USD',
+            currency: ride.fare.currency || 'NGN',
             method: 'stripe',
             status: 'processing',
             stripePaymentIntentId: paymentIntent.id,
@@ -121,7 +206,7 @@ export const processRidePayment = async (ride) => {
           user: ride.rider,
           ride: ride._id,
           amount,
-          currency: ride.fare.currency || 'USD',
+          currency: ride.fare.currency || 'NGN',
           method: 'cash',
           status: 'completed',
           transactionId: `CASH-${Date.now()}-${ride._id}`,
@@ -138,7 +223,7 @@ export const processRidePayment = async (ride) => {
           user: ride.rider,
           ride: ride._id,
           amount,
-          currency: ride.fare.currency || 'USD',
+          currency: ride.fare.currency || 'NGN',
           method: 'bank_transfer',
           status: 'pending',
           transactionId: `BANK-${Date.now()}-${ride._id}`,
@@ -155,17 +240,13 @@ export const processRidePayment = async (ride) => {
         throw new Error(`Unsupported payment method: ${paymentMethod}`);
     }
 
-    // Update ride payment status
     if (payment && payment.status === 'completed') {
       ride.paymentStatus = 'completed';
       await ride.save();
-
-      // Update driver earnings
       if (driver) {
-        await driver.addEarnings(amount);
+        await applyRideEarningToWallet(ride);
         driver.totalRides += 1;
         await driver.save();
-        logger.info(`Driver earnings updated for driver ${driver._id}: +${amount}`);
       }
     }
 
@@ -212,18 +293,15 @@ export const confirmStripePayment = async (paymentIntentId) => {
     payment.paidAt = new Date();
     await payment.save();
 
-    // Update ride payment status
     if (payment.ride) {
-      const ride = await Ride.findById(payment.ride);
+      const ride = await Ride.findById(payment.ride).populate('driver');
       if (ride) {
         ride.paymentStatus = 'completed';
         await ride.save();
-
-        // Update driver earnings
         if (ride.driver) {
+          await applyRideEarningToWallet(ride);
           const driver = await Driver.findById(ride.driver);
           if (driver) {
-            await driver.addEarnings(payment.amount);
             driver.totalRides += 1;
             await driver.save();
           }
@@ -284,7 +362,7 @@ export const sendPaymentReceipt = async (ride, payment) => {
         surgeMultiplier: ride.fare.surgeMultiplier || 1,
         discountAmount: ride.discountAmount || 0,
         totalFare: ride.fare.totalFare,
-        currency: ride.fare.currency || 'USD',
+        currency: ride.fare.currency || 'NGN',
       },
       paymentMethod: ride.paymentMethod,
       distance: ride.distance?.value || 0,

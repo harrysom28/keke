@@ -87,10 +87,15 @@ const rideSchema = new mongoose.Schema(
         type: Number,
         required: true,
       },
+      riderServiceCharge: { type: Number, default: null },
       currency: {
         type: String,
-        default: 'USD',
+        default: 'NGN',
       },
+      commissionRate: Number,
+      commissionAmount: Number,
+      driverNetAmount: Number,
+      platformRevenue: Number,
     },
     distance: {
       value: Number, // in kilometers
@@ -118,7 +123,7 @@ const rideSchema = new mongoose.Schema(
     },
     paymentStatus: {
       type: String,
-      enum: ['pending', 'completed', 'failed', 'refunded'],
+      enum: ['pending', 'completed', 'failed', 'refunded', 'held', 'charged', 'settled', 'partial'],
       default: 'pending',
     },
     promoCode: {
@@ -157,6 +162,11 @@ const rideSchema = new mongoose.Schema(
       cancellationFee: {
         type: Number,
         default: 0,
+      },
+      cancellationScenario: {
+        type: String,
+        enum: ['beforeAccept', 'afterAccept', 'afterArrival', 'driverCancel'],
+        default: undefined,
       },
     },
     // Scheduled ride
@@ -224,6 +234,25 @@ const rideSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // Driver movement tracking (abuse guard: rider free cancel if driver not approaching)
+    driverLocationHistory: [
+      {
+        coords: { lat: Number, lng: Number },
+        distance: Number,
+        timestamp: Date,
+      },
+    ],
+    driverMovementFlag: { type: String, default: null },
+    /** Drivers who have already been notified (socket) for this ride — used to rotate to the next match */
+    notifiedDriverIds: {
+      type: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Driver',
+        },
+      ],
+      default: [],
+    },
   },
   {
     timestamps: true,
@@ -235,6 +264,8 @@ const rideSchema = new mongoose.Schema(
 // Indexes
 rideSchema.index({ rider: 1, createdAt: -1 });
 rideSchema.index({ driver: 1, createdAt: -1 });
+rideSchema.index({ rider: 1, status: 1 }); // findActiveRideForRider
+rideSchema.index({ driver: 1, status: 1 }); // findActiveRideForDriver
 rideSchema.index({ status: 1 });
 rideSchema.index({ 'pickupLocation': '2dsphere' });
 rideSchema.index({ 'dropoffLocation': '2dsphere' });
@@ -291,14 +322,19 @@ rideSchema.methods.completeRide = async function () {
 };
 
 // Cancel ride
-rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee = 0) {
+rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee = 0, cancellationScenario = null) {
   this.status = 'cancelled';
   this.cancellation = {
     cancelledBy,
     reason,
     cancelledAt: new Date(),
     cancellationFee: fee,
+    ...(cancellationScenario && { cancellationScenario }),
   };
+  if (cancellationScenario) {
+    this.paymentStatus =
+      cancellationScenario === 'beforeAccept' || cancellationScenario === 'driverCancel' ? 'refunded' : 'partial';
+  }
   this.statusHistory.push({
     status: 'cancelled',
     timestamp: new Date(),

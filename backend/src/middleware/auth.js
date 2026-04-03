@@ -1,29 +1,37 @@
 import { verifyAccessToken } from '../utils/jwt.js';
 import User from '../models/User.js';
+import { isBlacklisted } from '../services/tokenBlacklist.js';
 import { AuthenticationError, AuthorizationError, NotFoundError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
+
+/**
+ * Extract token from request (for use in logout, etc.)
+ */
+export const extractTokenFromRequest = (req) => {
+  if (req.headers.authorization?.startsWith('Bearer')) {
+    return req.headers.authorization.split(' ')[1];
+  }
+  if (req.headers.authorization) return req.headers.authorization;
+  if (req.headers['x-auth-token']) return req.headers['x-auth-token'];
+  return null;
+};
 
 /**
  * Protect routes - require authentication
  */
 export const protect = asyncHandler(async (req, res, next) => {
-  let token;
-
-  // Check for token in headers (Bearer token or direct token)
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    token = req.headers.authorization.split(' ')[1];
-  } else if (req.headers.authorization) {
-    // For compatibility with mobile app that might send token directly
-    token = req.headers.authorization;
-  } else if (req.headers['x-auth-token']) {
-    token = req.headers['x-auth-token'];
-  }
+  const token = extractTokenFromRequest(req);
 
   if (!token) {
     throw new AuthenticationError('Not authenticated. Please provide a valid token.');
   }
 
   try {
+    // Check if token was revoked (logout)
+    if (await isBlacklisted(token)) {
+      throw new AuthenticationError('Token has been revoked. Please login again.');
+    }
+
     // Verify token
     const decoded = verifyAccessToken(token);
 

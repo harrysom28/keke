@@ -38,8 +38,11 @@ import { Portal } from "@gorhom/portal";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
+import { useFocusRefresh } from "@/hooks/useFocusRefresh";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AuthState } from "@/store/AuthSlice";
 import { useSelector } from "react-redux";
+import { router } from "expo-router";
 
 function getRandomNumber() {
   return Math.floor(Math.random() * 4) + 1;
@@ -272,12 +275,43 @@ const List = [
   "Misuse: Misuse leads to cancellation and potential account suspension.",
 ];
 
+export interface MilestoneOffer {
+  available: boolean;
+  completed_rides: number;
+  target_rides: number;
+  reward_amount: number;
+  claimed: boolean;
+  rides_remaining: number;
+  can_claim: boolean;
+  message: string;
+}
+
+export interface ReferralOffer {
+  available: boolean;
+  enabled: boolean;
+  referral_code?: string;
+  reward_type: "cash" | "free_ride";
+  reward_amount: number;
+  successful_invites_required: number;
+  successful_invites: number;
+  claimed_count: number;
+  can_claim: boolean;
+  claimed: boolean;
+  message: string;
+  description?: string;
+}
+
 const OffersScreen = () => {
+  const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
+  const refreshOnFocus = useFocusRefresh(60_000);
   const { token } = useSelector(AuthState);
   const bottomSheetRef = useRef<BottomSheetMethods>(null);
   const [data, setData] = useState([]);
-  // const [show, setShow] = useState(false);
+  const [milestone, setMilestone] = useState<MilestoneOffer | null>(null);
+  const [referral, setReferral] = useState<ReferralOffer | null>(null);
+  const [claiming, setClaiming] = useState(false);
+  const [claimingReferral, setClaimingReferral] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [current, setCurrent] = useState<ICurrent>({
@@ -307,25 +341,58 @@ const OffersScreen = () => {
   //   []
   // );
 
-  const getOffers = () => {
-    // Only fetch offers if user is authenticated
+  const claimMilestone = () => {
+    if (!milestone?.can_claim || claiming) return;
+    setClaiming(true);
+    apiClient
+      .post("special/offers/milestone/claim")
+      .then(({ data: res }) => {
+        const msg = res?.data?.message || "₦1,000 added to your wallet!";
+        showMessage({ type: "success", message: msg });
+        setMilestone((m) => m ? { ...m, claimed: true, can_claim: false, message: "You've claimed your free ₦1,000 ride!" } : null);
+      })
+      .catch((err) => {
+        const msg = err?.response?.data?.message || err?.message || "Could not claim reward.";
+        showMessage({ type: "danger", message: msg });
+      })
+      .finally(() => setClaiming(false));
+  };
+
+  const claimReferral = () => {
+    if (!referral?.can_claim || claimingReferral) return;
+    setClaimingReferral(true);
+    apiClient
+      .post("special/offers/referral/claim")
+      .then(({ data: res }) => {
+        const msg = res?.data?.message || "Reward added to your wallet!";
+        showMessage({ type: "success", message: msg });
+        setReferral((r) => r ? { ...r, can_claim: false, claimed_count: (r.claimed_count || 0) + 1, claimed: true } : null);
+      })
+      .catch((err) => {
+        const msg = err?.response?.data?.message || err?.message || "Could not claim reward.";
+        showMessage({ type: "danger", message: msg });
+      })
+      .finally(() => setClaimingReferral(false));
+  };
+
+  const getOffers = (): Promise<void> => {
     if (!token) {
-      console.log("⚠️ Skipping offers fetch: No authentication token");
       setData([]);
-      return;
+      setMilestone(null);
+      setReferral(null);
+      return Promise.resolve();
     }
 
     setLoading(true);
-    apiClient
-      .get("special/offers")
-      .then(({ data }) => {
-        // Backend returns: { status: 'success', data: { offers: [...] } }
-        const offers = data?.data?.offers || data?.data || [];
-        
-        // Transform backend data to match frontend UI expectations
+    return Promise.all([
+      apiClient.get("special/offers"),
+      apiClient.get("special/offers/milestone"),
+      apiClient.get("special/offers/referral").catch(() => null),
+    ])
+      .then(([offersRes, milestoneRes, referralRes]) => {
+        const offers = offersRes?.data?.data?.offers ?? offersRes?.data?.data ?? [];
         const transformedData = (Array.isArray(offers) ? offers : []).map((offer: any) => ({
           ...offer,
-          // Map backend fields to frontend expected fields
           offer_title: offer.code || offer.offer_title || "Special Offer",
           offer_id: offer.promo_id || offer.code || offer.offer_id || "",
           description: offer.description || "No description available",
@@ -338,33 +405,38 @@ const OffersScreen = () => {
           valid_to: offer.valid_to,
           applicable_vehicle_types: offer.applicable_vehicle_types || [],
         }));
-        
         setData(transformedData);
-        console.log(`📍 Fetched ${transformedData.length} special offers`);
+        const d = milestoneRes?.data?.data;
+        if (d) setMilestone(d);
+        else setMilestone(null);
+        const refD = referralRes?.data?.data;
+        if (refD) setReferral(refD);
+        else setReferral(null);
+        if (d?.available && !d?.claimed && d?.rides_remaining >= 1 && d?.rides_remaining <= 3) {
+          showMessage({
+            type: "info",
+            message: d.rides_remaining === 1 ? "1 more ride to unlock your free ₦1,000!" : `${d.rides_remaining} more rides to unlock your free ₦1,000!`,
+            duration: 4000,
+          });
+        }
       })
       .catch((err) => {
-        // Only log/show errors if it's not a 401 (expected when not authenticated)
         if (err?.response?.status !== 401) {
-          console.log("⚠️ Error fetching offers:", err?.response?.data || err?.message);
-          if (err?.response?.data?.message) {
-            showMessage({
-              type: "danger",
-              message: err?.response?.data.message,
-            });
-          }
-        } else {
-          console.log("⚠️ Offers fetch skipped: Not authenticated");
+          const msg = err?.response?.data?.message;
+          if (msg) showMessage({ type: "danger", message: msg });
         }
         setData([]);
+        setMilestone(null);
+        setReferral(null);
       })
-      .finally(() => setLoading(false));
+      .finally(() => setLoading(false)) as Promise<void>;
   };
 
   useEffect(() => {
-    if (isFocused) {
+    refreshOnFocus(() => {
       getOffers();
-    }
-  }, [isFocused, token]);
+    });
+  }, [isFocused, token, refreshOnFocus]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -372,11 +444,16 @@ const OffersScreen = () => {
     setRefreshing(false);
   };
 
+  const progress = milestone?.target_rides
+    ? Math.min(1, (milestone.completed_rides ?? 0) / milestone.target_rides)
+    : 0;
+
+  const topInset = Math.max(insets.top, StatusBar.currentHeight ?? 0, 44);
   return (
     <ImageBackground
       style={tw.style(`bg-white`, {
         flex: 1,
-        paddingTop: StatusBar.currentHeight,
+        paddingTop: topInset + 12,
       })}
       source={require("@images/pattern-bg.png")}
     >
@@ -397,28 +474,149 @@ const OffersScreen = () => {
         <View style={tw`flex-1 justify-center items-center`}>
           <ActivityIndicator color={tw.color("base-green")} size="large" />
         </View>
-      ) : data.length === 0 ? (
-        <View style={tw`flex-1 justify-center items-center px-6`}>
-          <EmptyData />
-          <Text
-            style={tw.style(`text-base text-[#8F92A1] mt-4 text-center`, {
-              fontFamily: "RobotoRegular",
-            })}
-          >
-            No special offers available at the moment.
-          </Text>
-          <Text
-            style={tw.style(`text-sm text-[#8F92A1] mt-2 text-center`, {
-              fontFamily: "RobotoRegular",
-            })}
-          >
-            Check back later for new promotions!
-          </Text>
-        </View>
       ) : (
         <FlatList
           data={data}
+          keyExtractor={(item) => item?.offer_id ?? item?.code ?? String(Math.random())}
           contentContainerStyle={tw`flex-col gap-y-3 pb-16 px-6`}
+          ListHeaderComponent={
+            <>
+            {referral?.available && referral?.enabled ? (
+              <View style={tw`mb-4 mt-1`}>
+                <View
+                  style={tw.style(
+                    `rounded-2xl overflow-hidden px-4 py-4 border-2 bg-white border-[#3C8F7C]`
+                  )}
+                >
+                  <View style={tw`flex-row items-start gap-2 mb-2`}>
+                    <View style={tw`w-10 h-10 rounded-full bg-[#3C8F7C] items-center justify-center flex-shrink-0`}>
+                      <MaterialCommunityIcons name="account-multiple-plus-outline" size={22} color="white" />
+                    </View>
+                    <View style={tw`flex-1 min-w-0`}>
+                      <Text style={tw.style(`text-lg text-[#2A2A2A]`, { fontFamily: "RobotoBold" })}>
+                        Invite Friends – {referral.reward_type === "cash" ? `₦${referral.reward_amount} cash` : `₦${referral.reward_amount} free ride`}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={tw.style(`text-sm text-[#555] mb-3`, { fontFamily: "RobotoRegular" })}>
+                    {referral.message}
+                  </Text>
+                  <View style={tw`h-2 bg-gray-200 rounded-full overflow-hidden mb-2`}>
+                    <View
+                      style={[
+                        tw`h-full rounded-full`,
+                        { width: `${Math.min(100, ((referral.successful_invites || 0) / (referral.successful_invites_required || 1)) * 100)}%`, backgroundColor: "#3C8F7C" },
+                      ]}
+                    />
+                  </View>
+                  <Text style={tw.style(`text-xs text-[#8F92A1]`, { fontFamily: "RobotoRegular" })}>
+                    {referral.successful_invites} of {referral.successful_invites_required} successful invites (signup + first ride)
+                  </Text>
+                  {referral.can_claim ? (
+                    <TouchableOpacity
+                      onPress={claimReferral}
+                      disabled={claimingReferral}
+                      style={[tw`mt-3 py-3 rounded-xl items-center justify-center`, { backgroundColor: "#3C8F7C" }]}
+                    >
+                      {claimingReferral ? (
+                        <ActivityIndicator size="small" color="white" />
+                      ) : (
+                        <Text style={tw.style(`text-base text-white`, { fontFamily: "RobotoBold" })}>
+                          Claim reward
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      onPress={() => router.push("/(app)/(tabs)/(profile)/invite")}
+                      style={[tw`mt-3 py-3 rounded-xl items-center justify-center border-2`, { borderColor: "#3C8F7C" }]}
+                    >
+                      <Text style={tw.style(`text-base`, { fontFamily: "RobotoBold", color: "#3C8F7C" })}>
+                        Invite Friends
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ) : null}
+            {milestone?.available ? (
+              <View style={tw`mb-4 mt-1`}>
+                <View
+                  style={tw.style(
+                    `rounded-2xl overflow-hidden px-4 py-4 border-2`,
+                    milestone.claimed ? `bg-[#E8F5E9] border-[#3C8F7C]` : `bg-white border-[#3C8F7C]`
+                  )}
+                >
+                  <View style={tw`flex-row items-start justify-between gap-2 mb-2`}>
+                    <View style={tw`flex-row items-start gap-2 flex-1 min-w-0`}>
+                      <View style={tw`w-10 h-10 rounded-full bg-[#3C8F7C] items-center justify-center flex-shrink-0`}>
+                        <MaterialCommunityIcons name="gift-outline" size={22} color="white" />
+                      </View>
+                      <View style={tw`flex-1 min-w-0`}>
+                        <Text style={tw.style(`text-lg text-[#2A2A2A]`, { fontFamily: "RobotoBold" })}>
+                          Free ₦1,000 after 10 rides
+                        </Text>
+                      </View>
+                    </View>
+                    {milestone.claimed && (
+                      <View style={tw`bg-[#3C8F7C] px-2 py-1 rounded-full flex-shrink-0`}>
+                        <Text style={tw.style(`text-xs text-white`, { fontFamily: "RobotoBold" })}>Claimed</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={tw.style(`text-sm text-[#555] mb-3`, { fontFamily: "RobotoRegular" })}>
+                    {milestone.message}
+                  </Text>
+                  {!milestone.claimed && (
+                    <>
+                      <View style={tw`h-2 bg-gray-200 rounded-full overflow-hidden mb-2`}>
+                        <View
+                          style={[
+                            tw`h-full rounded-full`,
+                            { width: `${progress * 100}%`, backgroundColor: "#3C8F7C" },
+                          ]}
+                        />
+                      </View>
+                      <Text style={tw.style(`text-xs text-[#8F92A1]`, { fontFamily: "RobotoRegular" })}>
+                        {milestone.completed_rides} of {milestone.target_rides} rides completed
+                      </Text>
+                      {milestone.can_claim && (
+                        <TouchableOpacity
+                          onPress={claimMilestone}
+                          disabled={claiming}
+                          style={[tw`mt-3 py-3 rounded-xl items-center justify-center`, { backgroundColor: "#3C8F7C" }]}
+                        >
+                          {claiming ? (
+                            <ActivityIndicator size="small" color="white" />
+                          ) : (
+                            <Text style={tw.style(`text-base text-white`, { fontFamily: "RobotoBold" })}>
+                              Claim ₦1,000 now
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      )}
+                    </>
+                  )}
+                </View>
+              </View>
+            ) : null}
+            </>
+          }
+          ListEmptyComponent={
+            data.length === 0 &&
+            !(milestone?.available) &&
+            !(referral?.available && referral?.enabled) ? (
+              <View style={tw`items-center py-6`}>
+                <EmptyData />
+                <Text style={tw.style(`text-base text-[#8F92A1] mt-4 text-center`, { fontFamily: "RobotoRegular" })}>
+                  No offers at the moment.
+                </Text>
+                <Text style={tw.style(`text-sm text-[#8F92A1] mt-2 text-center`, { fontFamily: "RobotoRegular" })}>
+                  Check back later for new promotions!
+                </Text>
+              </View>
+            ) : null
+          }
           renderItem={({ item, index }) => (
             <ListItem item={item} index={index} showModal={showModal} />
           )}
@@ -437,7 +635,7 @@ const OffersScreen = () => {
           ref={bottomSheetRef}
           animationType="spring"
           backdropMaskColor="#1919190D"
-          disableKeyboardHandling={true}
+          disableKeyboardHandling={false}
           customDragHandleComponent={() => (
             <Svg
               style={tw`self-center mt-4`}

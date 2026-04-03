@@ -1,6 +1,27 @@
 import mongoose from 'mongoose';
 import logger from '../utils/logger.js';
 
+const maxPoolSize = parseInt(process.env.MONGO_POOL_SIZE || '10', 10);
+const minPoolSize = parseInt(process.env.MONGO_MIN_POOL_SIZE || '2', 10);
+
+function attachPoolMonitoring() {
+  try {
+    const mc = mongoose.connection.getClient?.();
+    if (mc?.on) {
+      mc.on('connectionPoolCreated', (event) => {
+        logger.info(
+          `Mongo pool created (maxPoolSize: ${event?.options?.maxPoolSize ?? maxPoolSize})`
+        );
+      });
+      mc.on('connectionCheckOutFailed', (event) => {
+        logger.warn(`Mongo connection checkout failed: ${event?.reason ?? 'unknown'}`);
+      });
+    }
+  } catch (e) {
+    logger.debug(`Mongo pool monitoring not attached: ${e.message}`);
+  }
+}
+
 /**
  * Connect to MongoDB database
  */
@@ -13,26 +34,35 @@ export const connectDB = async () => {
     }
 
     const conn = await mongoose.connect(mongoURI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
+      maxPoolSize,
+      minPoolSize,
+      serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || '5000', 10),
+      socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS || '45000', 10),
+      connectTimeoutMS: parseInt(process.env.MONGO_CONNECT_TIMEOUT_MS || '10000', 10),
+      heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_FREQUENCY_MS || '10000', 10),
     });
 
     logger.info(`MongoDB Connected: ${conn.connection.host}`);
 
-    // Handle connection events
+    attachPoolMonitoring();
+
+    if (process.env.MONGOOSE_DEBUG === 'true' && process.env.NODE_ENV !== 'production') {
+      mongoose.set('debug', (collectionName, method, ...parts) => {
+        const q = parts[0];
+        const snippet =
+          typeof q === 'object' && q !== null
+            ? JSON.stringify(q).slice(0, 400)
+            : String(q ?? '').slice(0, 200);
+        logger.debug(`Mongoose ${collectionName}.${method}`, { query: snippet });
+      });
+    }
+
     mongoose.connection.on('error', (err) => {
       logger.error(`MongoDB connection error: ${err}`);
     });
 
     mongoose.connection.on('disconnected', () => {
       logger.warn('MongoDB disconnected');
-    });
-
-    // Graceful shutdown
-    process.on('SIGINT', async () => {
-      await mongoose.connection.close();
-      logger.info('MongoDB connection closed through app termination');
-      process.exit(0);
     });
 
     return conn;

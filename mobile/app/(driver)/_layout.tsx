@@ -5,6 +5,7 @@ export default function AppLayout() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="dailyActivities" />
+      <Stack.Screen name="notifications" />
     </Stack>
   );
 }

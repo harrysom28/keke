@@ -2,14 +2,15 @@ import {
   Image,
   ImageBackground,
   Modal,
-  StatusBar,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
+import { TouchableOpacity } from "react-native-gesture-handler";
 
 import { AntDesign } from "@expo/vector-icons";
-import React from "react";
+import React, { memo, useEffect, useState } from "react";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import apiClient from "@/utils/apiClient";
 import tw from "@/lib/tailwind";
 
 interface Props {
@@ -28,6 +29,33 @@ const TripCompletedModal = ({
   cost,
 }: Props) => {
   const isPassenger = view === "passenger";
+  const insets = useCombinedSafeInsets();
+  const [milestoneMessage, setMilestoneMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible || !isPassenger) {
+      setMilestoneMessage(null);
+      return;
+    }
+    apiClient
+      .get("special/offers/milestone")
+      .then(({ data: res }) => {
+        const d = res?.data;
+        if (!d?.available || d?.claimed) return;
+        if (d?.can_claim) {
+          setMilestoneMessage("You've unlocked a free ₦1,000! Claim it in the Offers tab.");
+        } else if (d?.rides_remaining >= 1 && d?.rides_remaining <= 3) {
+          setMilestoneMessage(
+            d.rides_remaining === 1
+              ? "1 more ride to unlock your free ₦1,000!"
+              : `${d.rides_remaining} more rides to unlock your free ₦1,000!`
+          );
+        } else {
+          setMilestoneMessage(null);
+        }
+      })
+      .catch(() => setMilestoneMessage(null));
+  }, [visible, isPassenger]);
   return (
     <Modal visible={visible} transparent style={tw`flex-1`}>
       <ImageBackground
@@ -40,8 +68,8 @@ const TripCompletedModal = ({
           <TouchableOpacity
             onPress={onClose}
             style={tw.style(`absolute top-0 right-0 z-50`, {
-              paddingTop: (StatusBar.currentHeight || 0) + 12,
-              paddingRight: 12,
+              paddingTop: insets.top + 12,
+              paddingRight: 12 + insets.right,
             })}
             activeOpacity={0.7}
           >
@@ -90,6 +118,13 @@ const TripCompletedModal = ({
                   >
                     ₦ {cost}
                   </Text>
+                  <Text
+                    style={tw.style(`text-[12px] text-[#8E8E93] text-center mt-1`, {
+                      fontFamily: "RobotoRegular",
+                    })}
+                  >
+                    ₦{cost} settled automatically from your wallet. No cash exchanged.
+                  </Text>
                 </View>
                 <Text
                   style={tw.style(`text-base text-[#A0A0A0] text-center`, {
@@ -98,6 +133,13 @@ const TripCompletedModal = ({
                 >
                   This will take a few seconds
                 </Text>
+                {milestoneMessage ? (
+                  <View style={tw`mt-2 px-4 py-2 rounded-xl bg-[#E8F5E9] border border-[#3C8F7C]`}>
+                    <Text style={tw.style(`text-sm text-[#2A2A2A] text-center`, { fontFamily: "RobotoMedium" })}>
+                      🎁 {milestoneMessage}
+                    </Text>
+                  </View>
+                ) : null}
               </>
             ) : (
               <>
@@ -149,4 +191,4 @@ const TripCompletedModal = ({
   );
 };
 
-export default TripCompletedModal;
+export default memo(TripCompletedModal);

@@ -3,6 +3,7 @@ import {
   Image,
   ImageBackground,
   Modal,
+  Platform,
   ScrollView,
   StatusBar,
   Text,
@@ -10,11 +11,8 @@ import {
   View,
 } from "react-native";
 import { AntDesign, Feather, Ionicons } from "@expo/vector-icons";
-import { DELETE_EMERGENCY_CONTACT, GET_EMERGENCY_CONTACT } from "@/constants";
-import React, { useContext, useEffect, useState } from "react";
-
-import { AppContext } from "@/app/context";
-import axios from "axios";
+import React, { useEffect, useState } from "react";
+import apiClient from "@/utils/apiClient";
 import { router } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
@@ -26,61 +24,84 @@ interface LProps {
   remove: (id: string) => void;
 }
 
+// Format phone for display: 07080951858 → 0708 095 1858, +2347080951858 → +234 708 095 1858
+function formatPhoneDisplay(phone: string | undefined): string {
+  if (!phone) return "";
+  const digits = phone.replace(/\D/g, "");
+  if (digits.startsWith("234") && digits.length === 13) {
+    return `+234 ${digits.slice(3, 6)} ${digits.slice(6, 9)} ${digits.slice(9)}`;
+  }
+  if (digits.startsWith("0") && digits.length === 11) {
+    return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
+  }
+  if (digits.length === 10 && !digits.startsWith("0")) {
+    return `0${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+  }
+  return phone;
+}
+
 function ListItem({ item, edit, remove }: Readonly<LProps>) {
-  const verified = item?.status?.toLowerCase() === "verified";
+  const phone = item?.phone_number ?? item?.phone ?? "";
   return (
     <View
-      style={tw`flex-row justify-between items-center py-2 border-b border-[#EFEFEF]`}
-    >
-      <View style={tw`flex-row  items-center gap-x-2 basis-[45%]`}>
-        <Image
-          source={{
-            uri: item?.image,
-          }}
-          style={tw`h-[42px] w-[42px] border border-zinc-300 rounded-full`}
-        />
-
-        <Text
-          style={tw.style(`text-[15px] text-[#262628]`, {
-            fontFamily: "RobotoRegular",
-          })}
-        >
-          {item?.name}
-        </Text>
-      </View>
-      <View style={tw`basis-[35%]`}>
-        <Text
-          style={tw.style(`text-[15px] text-right text-base-green`, {
-            fontFamily: "RobotoRegular",
-          })}
-        >
-          +{item?.phone_number}
-        </Text>
-        <Text
-          style={tw.style(
-            `text-[12px] text-right`,
-            verified ? `text-base-green` : `text-[#F47960]`,
-            {
-              fontFamily: "RobotoRegular",
+      style={[
+        tw`flex-row justify-between items-center p-4 rounded-2xl bg-white`,
+        Platform.OS === "ios"
+          ? {
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.06,
+              shadowRadius: 8,
             }
+          : { elevation: 4 },
+      ]}
+    >
+      <View style={tw`flex-row items-center gap-x-3 flex-1 min-w-0`}>
+        <View style={tw`w-12 h-12 rounded-full bg-[#F5F5F5] items-center justify-center overflow-hidden`}>
+          {item?.image ? (
+            <Image
+              source={{ uri: item?.image }}
+              style={tw`w-12 h-12 rounded-full`}
+            />
+          ) : (
+            <Ionicons name="person" size={24} color="#999" />
           )}
-        >
-          {verified ? `Verified` : `Unverified`}
-        </Text>
+        </View>
+        <View style={tw`flex-1 min-w-0`}>
+          <Text
+            style={tw.style(`text-[16px] text-[#1a1a1a]`, {
+              fontFamily: "RobotoMedium",
+            })}
+            numberOfLines={1}
+          >
+            {item?.name}
+          </Text>
+          <Text
+            style={tw.style(`text-[14px] text-[#666]`, {
+              fontFamily: "RobotoRegular",
+            })}
+          >
+            {formatPhoneDisplay(phone)}
+          </Text>
+        </View>
       </View>
-      <View style={tw`flex-row gap-x-2 items-center justify-end basis-[20%]`}>
+      <View style={tw`flex-row gap-x-1 items-center ml-2`}>
         <TouchableOpacity
           onPress={() =>
             router.push({
-              pathname: "/(profile)/createEmergencyContact",
+              pathname: "createEmergencyContact",
               params: { type: "edit", person_id: item?.contact_id },
             })
           }
+          style={tw`p-2`}
         >
-          <Feather name="edit-3" size={24} color="black" />
+          <Feather name="edit-3" size={20} color="#3C8F7C" />
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => remove(item?.contact_id)}>
-          <Ionicons name="trash-outline" size={24} color="#F9111FF7" />
+        <TouchableOpacity
+          onPress={() => remove(item?.contact_id)}
+          style={tw`p-2`}
+        >
+          <Ionicons name="trash-outline" size={20} color="#F9111F" />
         </TouchableOpacity>
       </View>
     </View>
@@ -92,7 +113,6 @@ const SharedEmergencyList = () => {
   const [data, setData] = useState([]);
   const [Id, setId] = useState("");
 
-  const { apiConfig } = useContext(AppContext);
   let isFocused = useIsFocused();
   const [loading, setLoading] = useState({});
   const [dloading, setDLoading] = useState(false);
@@ -100,11 +120,16 @@ const SharedEmergencyList = () => {
   useEffect(() => {
     if (isFocused || (isFocused && show === false)) {
       setLoading(true);
-      axios
-        .get(GET_EMERGENCY_CONTACT, apiConfig)
+      apiClient
+        .get("emergency/contact")
         .then(({ data }) => {
-          // console.log(data?.data);
-          setData(Array.isArray(data?.data) ? data.data : []);
+          const contacts = data?.data?.emergency_contacts ?? data?.data;
+          const list = Array.isArray(contacts) ? contacts : [];
+          setData(list.map((c: any) => ({
+            ...c,
+            phone_number: c.phone_number ?? c.phone,
+            contact_id: c.contact_id ?? c._id,
+          })));
         })
         .catch((err) => {
           console.log(err?.response?.data);
@@ -121,8 +146,8 @@ const SharedEmergencyList = () => {
 
   const handleDelete = () => {
     setDLoading(true);
-    axios
-      .delete(DELETE_EMERGENCY_CONTACT + Id, apiConfig)
+      apiClient
+      .delete(`emergency/contact/delete/${Id}`)
       .then(({ data }) => {
         showMessage({
           type: "success",
@@ -155,16 +180,26 @@ const SharedEmergencyList = () => {
           <TouchableOpacity
             onPress={() =>
               router.push({
-                pathname: "/(profile)/createEmergencyContact",
+                pathname: "createEmergencyContact",
                 params: { type: "new", person_id: "" },
               })
             }
-            style={tw`bg-[#F9111F] p-4 absolute z-50 rounded-full bottom-4 right-4`}
+            style={[
+              tw`bg-base-error p-4 absolute z-50 rounded-full bottom-6 right-5`,
+              Platform.OS === "ios"
+                ? {
+                    shadowColor: "#F9111F",
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.35,
+                    shadowRadius: 8,
+                  }
+                : { elevation: 8 },
+            ]}
           >
-            <AntDesign name="plus" size={24} color="white" />
+            <AntDesign name="plus" size={26} color="white" />
           </TouchableOpacity>
         )}
-        <View style={tw.style(`bg-[#F9111F] mb-1 px-4 pt-14 pb-5`)}>
+        <View style={tw.style(`bg-base-error mb-1 px-4 pt-14 pb-5`)}>
           <View style={tw`flex-row items-center justify-between w-[80%]`}>
             <TouchableOpacity
               onPress={() => router.back()}
@@ -181,49 +216,83 @@ const SharedEmergencyList = () => {
             </Text>
           </View>
         </View>
-        {loading && <ActivityIndicator size="large" color="black" />}
+        {loading && (
+          <View style={tw`flex-1 justify-center items-center`}>
+            <ActivityIndicator size="large" color="#F9111F" />
+          </View>
+        )}
         {!loading ? (
           data.length === 0 ? (
-            <View
-              style={tw`flex-col items-center gap-y-4 pt-24 px-4 absolute top-[20%] left-6 right-6 h-[500px] bg-white rounded-[20px]`}
+            <ScrollView
+              contentContainerStyle={tw`flex-1 justify-center px-6 py-8`}
+              showsVerticalScrollIndicator={false}
             >
-              <Text
-                style={tw.style(`text-2xl text-center`, {
-                  fontFamily: "RobotoBold",
-                })}
+              <View
+                style={[
+                  tw`flex-col items-center px-6 py-10 rounded-3xl bg-white`,
+                  Platform.OS === "ios"
+                    ? {
+                        shadowColor: "#000",
+                        shadowOffset: { width: 0, height: 4 },
+                        shadowOpacity: 0.08,
+                        shadowRadius: 16,
+                      }
+                    : { elevation: 8 },
+                ]}
               >
-                No Emergency Contact Found
-              </Text>
-              <TouchableOpacity
-                onPress={() =>
-                  router.push({
-                    pathname: "/(profile)/createEmergencyContact",
-                    params: { type: "new", person_id: "" },
-                  })
-                }
-                style={tw.style(`flex-row gap-x-2 items-center mb-8`)}
-              >
+                <View
+                  style={tw`w-20 h-20 rounded-full bg-base-error/10 items-center justify-center mb-5`}
+                >
+                  <Ionicons
+                    name="person-add-outline"
+                    size={40}
+                    color="#F9111F"
+                  />
+                </View>
                 <Text
-                  style={tw.style(`text-base text-base-error `, {
+                  style={tw.style(`text-xl text-[#1a1a1a] text-center mb-2`, {
                     fontFamily: "RobotoBold",
                   })}
                 >
-                  Setup Emergency Contact
+                  No Emergency Contact Yet
                 </Text>
-                <Feather
-                  name="arrow-right"
-                  size={16}
-                  color={tw.color("text-base-error")}
+                <Text
+                  style={tw.style(
+                    `text-[15px] text-[#666] text-center mb-8 leading-5`,
+                    { fontFamily: "RobotoRegular" }
+                  )}
+                >
+                  Add a trusted contact to notify quickly in case of emergency during rides
+                </Text>
+                <TouchableOpacity
+                  onPress={() =>
+                    router.push({
+                      pathname: "createEmergencyContact",
+                      params: { type: "new", person_id: "" },
+                    })
+                  }
+                  style={tw`flex-row items-center justify-center gap-2 bg-base-error py-4 px-8 rounded-xl w-full`}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="plus" size={20} color="white" />
+                  <Text
+                    style={tw.style(`text-base text-white`, {
+                      fontFamily: "RobotoBold",
+                    })}
+                  >
+                    Add Emergency Contact
+                  </Text>
+                </TouchableOpacity>
+                <Image
+                  source={require("@/assets/images/emergency-not-found.png")}
+                  style={tw`mt-8 w-44 h-32`}
+                  resizeMode="contain"
                 />
-              </TouchableOpacity>
-              <Image
-                source={require("@/assets/images/emergency-not-found.png")}
-                style={tw`self-center`}
-              />
-            </View>
+              </View>
+            </ScrollView>
           ) : (
             <ScrollView
-              contentContainerStyle={tw`flex-col gap-y-6 pt-4 pb-20 px-2`}
+              contentContainerStyle={tw`flex-col gap-y-4 pt-4 pb-24 px-4`}
             >
               {Array.isArray(data) && data.map((item, idx) => (
                 <ListItem
@@ -254,19 +323,19 @@ const SharedEmergencyList = () => {
           style={tw`flex-1 relative flex-col justify-center px-3.5 bg-[#1919194D]`}
         >
           <View
-            style={tw`flex-col justify-center items-center p-7 gap-y-5 h-[380px] bg-white rounded-[12px]`}
+            style={tw`flex-col justify-center items-center p-7 gap-y-5 min-h-[320px] bg-white rounded-2xl mx-4`}
           >
             <Text
-              style={tw.style(`text-2xl text-black text-center`, {
+              style={tw.style(`text-xl text-[#1a1a1a] text-center`, {
                 fontFamily: "RobotoBold",
               })}
             >
-              Are you sure you want to delete contact
+              Are you sure you want to delete this contact?
             </Text>
 
             <TouchableOpacity
               onPress={handleDelete}
-              style={tw`self-start w-full mt-5 py-3.5 bg-[#F9111F] rounded-[8px]`}
+              style={tw`w-full mt-4 py-3.5 bg-base-error rounded-xl`}
             >
               {dloading ? (
                 <ActivityIndicator color="white" />
@@ -282,7 +351,7 @@ const SharedEmergencyList = () => {
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setShow(false)}
-              style={tw`self-start w-full -mt-2 py-3.5 border border-base-green rounded-[8px]`}
+              style={tw`w-full py-3.5 border border-base-green rounded-xl`}
             >
               <Text
                 style={tw.style(`text-base text-center text-base-green`, {

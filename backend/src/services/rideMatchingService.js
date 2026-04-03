@@ -244,10 +244,18 @@ class RideMatchingService {
       const rideVehicleTypeId = ride.vehicleType?._id?.toString() || ride.vehicleType?.toString();
       logger.info(`Ride vehicle type ID: ${rideVehicleTypeId}`);
 
-      // Filter out excluded driver and match vehicle type
+      const excludeSet = new Set();
+      if (excludedDriverId) {
+        excludeSet.add(excludedDriverId.toString());
+      }
+      const notified = ride.notifiedDriverIds || [];
+      for (const id of notified) {
+        if (id) excludeSet.add(id.toString());
+      }
+
+      // Filter out excluded driver(s) and match vehicle type
       const availableDrivers = nearbyDrivers.filter((driver) => {
-        // Check if driver should be excluded
-        const isExcluded = excludedDriverId && driver._id.toString() === excludedDriverId.toString();
+        const isExcluded = excludeSet.has(driver._id.toString());
         
         // Get driver vehicle type ID
         const driverVehicleTypeId = driver.vehicleDetails?.vehicleType?._id?.toString() || 

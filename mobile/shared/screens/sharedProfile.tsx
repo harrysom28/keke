@@ -28,8 +28,9 @@ import BottomSheet, {
   BottomSheetView,
 } from "@gorhom/bottom-sheet";
 import { ClipPath, Defs, G, Mask, Path, Rect, Svg } from "react-native-svg";
-import { DRIVER_EARNINGS, WITHDRAWAL, INITIATE_PAYMENT } from "@/constants";
-import { Linking } from "react-native";
+import { DRIVER_EARNINGS, WITHDRAWAL, INITIATE_WALLET_TOPUP } from "@/constants";
+import apiClient from "@/utils/apiClient";
+import { PaymentWebViewModal } from "@/components/PaymentWebViewModal";
 import React, {
   useCallback,
   useContext,
@@ -47,6 +48,8 @@ import { getErrorMessage } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusRefresh } from "@/hooks/useFocusRefresh";
 
 interface PRProps {
   show: boolean;
@@ -114,12 +117,25 @@ interface TProps {
   exclude?: boolean;
 }
 
+/** Format account number with spaces for readability (e.g. 9329273487 → 9329 2734 87) */
+function formatAccountNumber(value: string | number | undefined): string {
+  if (value == null) return "";
+  const s = String(value).replace(/\s/g, "");
+  if (s.length <= 4) return s;
+  const chunks: string[] = [];
+  for (let i = 0; i < s.length; i += 4) {
+    chunks.push(s.slice(i, i + 4));
+  }
+  return chunks.join(" ");
+}
+
 const TapItem = ({ text, action, exclude = false }: TProps) => {
   return (
     <TouchableOpacity
       onPress={action}
+      activeOpacity={0.7}
       style={tw.style(
-        `flex-row items-center justify-between py-3.5`,
+        `flex-row items-center justify-between py-4 min-h-[52px]`,
         !exclude && `border-b border-[#EFEFF4]`
       )}
     >
@@ -140,27 +156,168 @@ interface Props {
 }
 
 const SharedProfileScreen = ({ type }: Props) => {
+  const insets = useSafeAreaInsets();
   const { apiConfig, getCurrentUser } = useContext(AppContext);
   const dispatch = useDispatch();
   let isFocused = useIsFocused();
+  const refreshProfileOnFocus = useFocusRefresh(120_000);
   // Removed bottomSheetRef - using Modal state instead
   const [modal, setModal] = useState(false);
   const [amount, setAmount] = useState("");
   const [wloading, setWloading] = useState(false);
-  const [withdrawDetails, setWithdrawDetails] = useState({});
+  const [withdrawDetails, setWithdrawDetails] = useState<{
+    driver_bank_name?: string;
+    driver_account_number?: string;
+  }>({});
   const { user } = useSelector(AuthState);
   const [displayType, setDisplayType] = useState<"withdraw" | "topup">("topup");
   const [topupMethod, setTopupMethod] = useState<"dva" | "card">("dva");
   const [cardAmount, setCardAmount] = useState("");
   const [cardLoading, setCardLoading] = useState(false);
+  const [pendingPaymentUrl, setPendingPaymentUrl] = useState<string | null>(null);
+  const [pendingTopupReference, setPendingTopupReference] = useState<string | null>(null);
+  const [paymentWebViewUrl, setPaymentWebViewUrl] = useState<string | null>(null);
+  const [paymentWebViewRef, setPaymentWebViewRef] = useState<string | null>(null);
+  const topupAmountRef = useRef<TextInput>(null);
+  const initialBalanceRef = useRef<string | undefined>(undefined);
   const [topupDetails, setTopupDetails] = useState<{
     topup_bank_name?: string;
     topup_account_name?: string;
     topup_account_number?: string;
+    topup_reference?: string;
   }>({});
+  const [showPaymentReceived, setShowPaymentReceived] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [bottomSheetError, setBottomSheetError] = useState(false);
   const isDriver = type === "driver";
+  const profileData = (user?.profile || {}) as Record<string, any>;
+  const formattedWalletBalance = (() => {
+    const raw = user?.profile?.balance ?? 0;
+    const num = typeof raw === "number" ? raw : parseFloat(String(raw));
+    if (!Number.isFinite(num)) return "0";
+    // Naira amounts should be whole numbers; round to remove float artifacts.
+    return Math.round(num).toLocaleString();
+  })();
+  const transferAccountNumber =
+    topupDetails?.topup_account_number ??
+    profileData.topup_account_number ??
+    profileData.account_number ??
+    profileData.accountNumber ??
+    profileData.bank_account?.account_number ??
+    "";
+  const transferBankName =
+    topupDetails?.topup_bank_name ??
+    profileData.topup_bank_name ??
+    profileData.bank_name ??
+    profileData.bankName ??
+    profileData.bank_account?.bank_name ??
+    "";
+  const transferAccountName =
+    topupDetails?.topup_account_name ??
+    profileData.topup_account_name ??
+    profileData.account_name ??
+    profileData.accountName ??
+    profileData.bank_account?.account_name ??
+    "";
+  const transferReference =
+    topupDetails?.topup_reference ??
+    profileData.topup_reference ??
+    "";
+
+  const closeModalWithBlur = () => {
+    topupAmountRef.current?.blur();
+    Keyboard.dismiss();
+    setModal(false);
+  };
+
+  useEffect(() => {
+    if (initialBalanceRef.current != null && user?.profile?.balance !== undefined) {
+      const initial = parseFloat(initialBalanceRef.current) || 0;
+      const current = parseFloat(String(user.profile.balance)) || 0;
+      if (current > initial && initialBalanceRef.current !== String(user.profile.balance)) {
+        console.log("✅ Balance updated! Old:", initialBalanceRef.current, "New:", user.profile.balance);
+        safeShowMessage({
+          type: "success",
+          message: `Payment successful! Balance updated to ₦${current.toLocaleString()}`,
+          duration: 4000,
+        });
+        initialBalanceRef.current = undefined;
+      }
+    }
+  }, [user?.profile?.balance]);
+
+  const handleCardTopup = async () => {
+    const amount = parseFloat(cardAmount);
+    if (isNaN(amount) || amount <= 0) {
+      safeShowMessage({
+        type: "warning",
+        message: "Please enter a valid amount",
+      });
+      return;
+    }
+    if (amount < 100) {
+      safeShowMessage({
+        type: "warning",
+        message: "Minimum top-up amount is ₦100",
+      });
+      return;
+    }
+    setCardLoading(true);
+    try {
+      const { data } = await axios.post(
+        INITIATE_WALLET_TOPUP,
+        { amount, type: "topup" },
+        apiConfig
+      );
+
+      console.log("Payment response:", data);
+
+      if (data?.data?.payment_url) {
+        const paymentUrl = data.data.payment_url;
+        const reference = data.data.reference || null;
+        setCardAmount("");
+        setCardLoading(false);
+        setPendingPaymentUrl(paymentUrl);
+        setPendingTopupReference(reference);
+        closeModalWithBlur();
+      } else {
+        safeShowMessage({
+          type: "danger",
+          message: data?.message || "Payment initialization failed",
+        });
+        setCardLoading(false);
+      }
+    } catch (err: any) {
+      console.log("Payment initialization error:", err?.response?.data);
+      const status = err?.response?.status || err?.status;
+      if (status === 401) {
+        console.log("Authentication error (401) - token refresh should handle this");
+        setCardLoading(false);
+        return;
+      }
+      const errorMessage = getErrorMessage(err);
+      safeShowMessage({
+        type: "danger",
+        message: errorMessage,
+      });
+      setCardLoading(false);
+    }
+  };
+
+  const handleModalDismiss = () => {
+    if (pendingPaymentUrl) {
+      const url = pendingPaymentUrl;
+      const ref = pendingTopupReference;
+      setPendingPaymentUrl(null);
+      setPendingTopupReference(null);
+      console.log("📱 Modal dismissed, opening payment in WebView:", url);
+      initialBalanceRef.current = user?.profile?.balance;
+      setTimeout(() => {
+        setPaymentWebViewUrl(url);
+        setPaymentWebViewRef(ref);
+      }, 300);
+    }
+  };
 
   // Track if bottom sheet failed to render (due to reanimated issue)
   useEffect(() => {
@@ -206,32 +363,32 @@ const SharedProfileScreen = ({ type }: Props) => {
   }, [isFocused]);
 
   useEffect(() => {
-    if (isFocused) {
+    refreshProfileOnFocus(() => {
       // Refresh user data to get updated balance when screen is focused
       getCurrentUser();
-      
+
       if (type === "driver") {
-        axios
-          .get(DRIVER_EARNINGS, apiConfig)
+        apiClient
+          .get("driver/earnings")
           .then(({ data }) => {
             setWithdrawDetails(data?.data);
           })
           .catch((err) => {
-            console.log('Driver earnings error:', err?.response?.data);
+            console.log("Driver earnings error:", err?.response?.data);
             const status = err?.response?.status || err?.status;
-            
+
             // Silently handle 401 errors - token refresh should happen automatically via API client
             if (status === 401) {
-              console.log('Authentication error (401) - token refresh should handle this');
+              console.log("Authentication error (401) - token refresh should handle this");
               return;
             }
-            
+
             // Silently handle 404 errors (driver profile not found, etc.)
             if (status === 404) {
-              console.log('Resource not found (404) - silently handling');
+              console.log("Resource not found (404) - silently handling");
               return;
             }
-            
+
             // Use centralized error handler to extract safe string message
             const errorMessage = getErrorMessage(err);
             safeShowMessage({
@@ -240,8 +397,8 @@ const SharedProfileScreen = ({ type }: Props) => {
             });
           });
       }
-    }
-  }, [isFocused]);
+    });
+  }, [isFocused, type, refreshProfileOnFocus]);
 
   // Topup details are already available in user profile from Redux (fetched via getCurrentUser)
   // No need for a separate API call - the backend doesn't have a GET /api/user/profile/topup endpoint
@@ -249,46 +406,39 @@ const SharedProfileScreen = ({ type }: Props) => {
   useEffect(() => {
     // Sync topup details from Redux user profile when modal opens for topup
     if (displayType === "topup" && !isDriver && user?.profile) {
-      // Update topupDetails from user profile if available
-      if (user.profile.topup_bank_name || user.profile.topup_account_name || user.profile.topup_account_number) {
+      const profile = user.profile as Record<string, unknown>;
+      if (profile.topup_bank_name || profile.topup_account_name || profile.topup_account_number || profile.topup_reference) {
         setTopupDetails({
-          topup_bank_name: user.profile.topup_bank_name,
-          topup_account_name: user.profile.topup_account_name,
-          topup_account_number: user.profile.topup_account_number,
+          topup_bank_name: profile.topup_bank_name as string,
+          topup_account_name: profile.topup_account_name as string,
+          topup_account_number: profile.topup_account_number as string,
+          topup_reference: profile.topup_reference as string,
         });
       }
     }
   }, [displayType, isDriver, user?.profile]);
 
   const handleWithdraw = () => {
+    const numAmount = parseFloat(String(amount).replace(/,/g, ""));
+    if (!numAmount || numAmount <= 0) {
+      safeShowMessage({ type: "danger", message: "Enter a valid amount" });
+      return;
+    }
     setWloading(true);
-    axios
-      .post(WITHDRAWAL, { amount }, apiConfig)
+    apiClient
+      .post("user/balance/withdraw", { amount: numAmount })
       .then(({ data }) => {
-        // console.log(data);
         setAmount("");
-                    setModal(false);
-        safeShowMessage({
-          type: "success",
-          message: `${data?.message}`,
-        });
+        setModal(false);
+        safeShowMessage({ type: "success", message: data?.message ?? "Withdrawal submitted" });
+        // Refresh earnings so balance and withdraw details are up to date
+        if (type === "driver") {
+          apiClient.get("driver/earnings").then(({ data: res }) => setWithdrawDetails(res?.data)).catch(() => {});
+        }
       })
       .catch((err) => {
-        console.log('Withdrawal error:', err?.response?.data);
-        const status = err?.response?.status || err?.status;
-        
-        // Silently handle 401 errors - token refresh should happen automatically via API client
-        if (status === 401) {
-          console.log('Authentication error (401) - token refresh should handle this');
-          return;
-        }
-        
-        // Use centralized error handler to extract safe string message
         const errorMessage = getErrorMessage(err);
-        safeShowMessage({
-          type: "danger",
-          message: errorMessage,
-        });
+        safeShowMessage({ type: "danger", message: errorMessage });
       })
       .finally(() => setWloading(false));
   };
@@ -296,29 +446,39 @@ const SharedProfileScreen = ({ type }: Props) => {
 
   return (
     <>
-      <PaymentReceived show={modal} onClose={() => setModal(false)} />
+      <PaymentReceived
+        show={showPaymentReceived}
+        onClose={() => {
+          setShowPaymentReceived(false);
+          getCurrentUser();
+        }}
+      />
       <ImageBackground
-        style={tw.style(`bg-white`, {
-          flex: 1,
-        })}
+        style={tw`flex-1 bg-[#F7FAF7]`}
         source={require("@images/pattern-bg.png")}
+        imageStyle={tw`opacity-[0.06]`}
       >
         <StatusBar barStyle="light-content" />
         <View
-          style={tw`bg-[#3C8F7CE6] h-[115px] flex-col items-center justify-end py-5`}
+          style={[
+            tw`bg-[#3C8F7C] pb-5 px-4`,
+            { paddingTop: insets.top + 16 },
+          ]}
         >
           <Text
-            style={tw.style(`text-center text-white text-2xl`, {
-              fontFamily: "RobotoBold",
-            })}
+            style={tw.style(`text-center text-white text-xl`, { fontFamily: "RobotoBold" })}
           >
             User Profile
           </Text>
         </View>
 
-        <ScrollView 
-          style={tw`flex-1 px-4`} 
-          contentContainerStyle={tw`pb-8`}
+        <ScrollView
+          style={tw`flex-1`}
+          contentContainerStyle={[
+            tw`px-4 flex-grow`,
+            { paddingBottom: 40 + Math.max(insets.bottom, 0) },
+          ]}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -334,69 +494,96 @@ const SharedProfileScreen = ({ type }: Props) => {
             />
           }
         >
-          <View style={tw`flex-row items-center justify-between my-3.5`}>
-            <View style={tw`flex-row items-center gap-x-2.5`}>
-              {user?.profile?.image ? (
-                <Image
-                  source={{ uri: user.profile.image }}
-                  style={tw`w-[56px] h-[56px] rounded-full`}
-                />
-              ) : (
-                <View style={tw`w-[56px] h-[56px] rounded-full bg-gray-200`} />
-              )}
-              <View>
-                <Text style={tw.style(`text-lg`, { fontFamily: "RobotoBold" })}>
-                  Hello{" "}
-                  {user && user?.profile?.name
-                    ? user?.profile?.name.split(" ")[0]
-                    : ""}
-                  ,
+          {/* Wallet card: greeting, balance, and top-up bank details */}
+          <View style={tw`-mt-2 overflow-hidden rounded-2xl border border-base-green/15 bg-white shadow-sm shadow-black/5`}>
+            {/* Balance row */}
+            <View style={tw`flex-row items-center justify-between px-4 pt-4 pb-3`}>
+              <View style={tw`flex-row items-center gap-x-3`}>
+                {user?.profile?.image && String(user.profile.image).trim() ? (
+                  <Image
+                    source={{ uri: String(user.profile.image).trim() }}
+                    style={tw`w-12 h-12 rounded-full`}
+                  />
+                ) : (
+                  <View style={tw`w-12 h-12 rounded-full bg-gray-200`} />
+                )}
+                <View>
+                  <Text style={tw.style(`text-base text-[#166534]`, { fontFamily: "RobotoBold" })}>
+                    Hello {user?.profile?.name ? user.profile.name.split(" ")[0] : ""},
+                  </Text>
+                  <Text style={tw.style(`text-xs text-[#6B7280]`, { fontFamily: "RobotoRegular" })}>
+                    Available balance
+                  </Text>
+                </View>
+              </View>
+              <View style={tw`items-end`}>
+                <Text style={tw.style(`text-2xl text-[#166534]`, { fontFamily: "RobotoBold" })}>
+                  ₦{formattedWalletBalance}
                 </Text>
-                <Text
-                  style={tw.style(`text-sm text-[#8F92A1]`, {
-                    fontFamily: "RobotoRegular",
-                  })}
-                >
-                  Your available balance
-                </Text>
+                {isDriver ? (
+                  <TouchableOpacity onPress={() => router.push("/(driver)/dailyActivities")}>
+                    <Text style={tw.style(`text-xs text-base-green underline`, { fontFamily: "RobotoMedium" })}>
+                      View Details
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             </View>
-            <View>
-              <Text
-                style={tw.style(`text-2xl text-right`, {
-                  fontFamily: "RobotoBold",
-                })}
-              >
-                ₦{user?.profile?.balance}
-              </Text>
-              <TouchableOpacity
-                onPress={() => router.push("/dailyActivities")}
-                style={{ display: isDriver ? "flex" : "none" }}
-              >
-                <Text
-                  style={tw.style(
-                    `text-sm text-base-green text-right underline`,
-                    {
-                      fontFamily: "RobotoBlack",
-                    }
-                  )}
-                >
-                  View Details
+
+            {(transferAccountNumber || profileData.wallet_account_number || transferReference) ? (
+              <View style={tw`border-t border-[#E5E7EB] bg-[#FAFFFA] px-4 py-3.5`}>
+                <Text style={tw.style(`text-[11px] text-[#6B7280] uppercase tracking-wider mb-2`, { fontFamily: "RobotoMedium" })}>
+                  Account number
                 </Text>
-              </TouchableOpacity>
-            </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    const acct =
+                      transferAccountNumber ||
+                      profileData.wallet_account_number ||
+                      transferReference;
+                    if (acct) {
+                      await Clipboard.setStringAsync(String(acct));
+                      safeShowMessage({ type: "info", message: "Account number copied!" });
+                    }
+                  }}
+                  style={tw`flex-row items-center justify-between`}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={tw.style(`text-lg text-[#166534] tracking-[2px]`, { fontFamily: "RobotoBold" })}
+                  >
+                    {formatAccountNumber(
+                      (transferAccountNumber ||
+                        profileData.wallet_account_number ||
+                        transferReference) as string | number | undefined
+                    )}
+                  </Text>
+                  <View style={tw`p-2 rounded-lg bg-base-green/10`}>
+                    <Feather name="copy" size={18} color="#166534" />
+                  </View>
+                </TouchableOpacity>
+                {transferBankName ? (
+                  <Text style={tw.style(`text-xs text-[#6B7280] mt-2`, { fontFamily: "RobotoRegular" })}>
+                    {String(transferBankName ?? "")}
+                    {transferAccountName
+                      ? ` · ${String(transferAccountName)}`
+                      : ""}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
           </View>
 
-          <View style={tw`py-4 flex-row bg-base-green rounded-[20px]`}>
+          <View style={tw`mt-3 py-3 flex-row bg-base-green rounded-xl`}>
             {isDriver && (
               <TouchableOpacity
                 onPress={() => {
                   setDisplayType("withdraw");
                   setModal(true);
                 }}
-                style={tw`flex-col items-center w-[33.33%]`}
+                style={tw`flex-col items-center justify-center w-[33.33%] gap-y-1.5`}
               >
-                <Svg width={37} height={37} viewBox="0 0 37 37" fill="none">
+                <Svg width={28} height={28} viewBox="0 0 37 37" fill="none">
                   <Path
                     d="M24.5488 4.53638L30.5974 10.585L24.5488 16.6336"
                     stroke="white"
@@ -427,11 +614,7 @@ const SharedProfileScreen = ({ type }: Props) => {
                   />
                 </Svg>
 
-                <Text
-                  style={tw.style(`text-white text-sm text-center`, {
-                    fontFamily: "RobotoMedium",
-                  })}
-                >
+                <Text style={tw.style(`text-white text-xs text-center`, { fontFamily: "RobotoMedium" })}>
                   Withdraw
                 </Text>
               </TouchableOpacity>
@@ -451,13 +634,13 @@ const SharedProfileScreen = ({ type }: Props) => {
                 }
               }}
               style={tw.style(
-                `flex-col items-center border-white`,
+                `flex-col items-center justify-center border-white gap-y-1.5`,
                 isDriver
-                  ? "w-[33.33%] border-l-2 border-r-2"
-                  : "w-[50%] border-r-2"
+                  ? "w-[33.33%] border-l border-r border-white/40"
+                  : "w-[50%] border-r border-white/40"
               )}
             >
-              <Svg width="37" height="37" viewBox="0 0 37 37" fill="none">
+              <Svg width={28} height={28} viewBox="0 0 37 37" fill="none">
                 <G clip-path="url(#clip0_271_25478)">
                   <Path
                     d="M29.1366 7.1709H7.58853C5.3963 7.1709 3.61914 8.94805 3.61914 11.1403V25.8837C3.61914 28.076 5.3963 29.8531 7.58853 29.8531H29.1366C31.3289 29.8531 33.106 28.076 33.106 25.8837V11.1403C33.106 8.94805 31.3289 7.1709 29.1366 7.1709Z"
@@ -524,11 +707,7 @@ const SharedProfileScreen = ({ type }: Props) => {
                 </Defs>
               </Svg>
 
-              <Text
-                style={tw.style(`text-white text-sm text-center`, {
-                  fontFamily: "RobotoMedium",
-                })}
-              >
+              <Text style={tw.style(`text-white text-xs text-center`, { fontFamily: "RobotoMedium" })}>
                 Top Up
               </Text>
             </TouchableOpacity>
@@ -540,11 +719,11 @@ const SharedProfileScreen = ({ type }: Props) => {
                 router.push(route);
               }}
               style={tw.style(
-                `flex-col items-center`,
+                `flex-col items-center justify-center gap-y-1.5`,
                 isDriver ? "w-[33.33%]" : "w-[50%]"
               )}
             >
-              <Svg width="37" height="37" viewBox="0 0 37 37" fill="none">
+              <Svg width={28} height={28} viewBox="0 0 37 37" fill="none">
                 <Path
                   d="M18.6406 12.4634V19.268L24.6892 21.5363"
                   stroke="white"
@@ -571,20 +750,19 @@ const SharedProfileScreen = ({ type }: Props) => {
                 />
               </Svg>
 
-              <Text
-                style={tw.style(`text-white text-sm text-center`, {
-                  fontFamily: "RobotoMedium",
-                })}
-              >
+              <Text style={tw.style(`text-white text-xs text-center`, { fontFamily: "RobotoMedium" })}>
                 Wallet
               </Text>
             </TouchableOpacity>
           </View>
 
-          <View style={tw`my-2`}>
+          <View style={tw`mt-6 rounded-2xl bg-white border border-[#E5E7EB] overflow-hidden px-4`}>
+            <Text style={tw.style(`text-xs text-[#6B7280] uppercase tracking-wider pt-4 pb-2`, { fontFamily: "RobotoMedium" })}>
+              Account
+            </Text>
             <TapItem
               text="Account Settings"
-              action={() => router.push(`/(profile)/account`)}
+              action={() => router.push(isDriver ? "/(driver)/(tabs)/(profile)/account" : "/(app)/(tabs)/(profile)/account")}
             />
             <TapItem 
               text="Language" 
@@ -598,16 +776,22 @@ const SharedProfileScreen = ({ type }: Props) => {
             />
             <TapItem
               text="Invite a Friend"
-              action={() => router.push(`/(profile)/invite`)}
+              action={() => router.push(isDriver ? "/(driver)/(tabs)/(profile)/invite" : "/(app)/(tabs)/(profile)/invite")}
             />
             <TapItem
               text="Emergency Contact"
-              action={() => router.push(`/(profile)/emergency`)}
+              action={() =>
+                router.push(
+                  isDriver
+                    ? "/(driver)/(tabs)/(profile)/emergency"
+                    : "/(app)/(tabs)/(profile)/emergency"
+                )
+              }
               exclude
             />
-          </View>
-
-          <View style={tw`my-2`}>
+            <Text style={tw.style(`text-xs text-[#6B7280] uppercase tracking-wider pt-5 pb-2`, { fontFamily: "RobotoMedium" })}>
+              Support & legal
+            </Text>
             <TapItem 
               text="Clear cache" 
               action={() => {
@@ -683,15 +867,16 @@ const SharedProfileScreen = ({ type }: Props) => {
         visible={modal}
         transparent={true}
         animationType="slide"
-        onRequestClose={() => setModal(false)}
+        onRequestClose={closeModalWithBlur}
+        onDismiss={handleModalDismiss}
       >
-        <Pressable
-          style={tw`flex-1 bg-black/50 justify-end`}
-          onPress={() => setModal(false)}
-        >
+        <View style={tw`flex-1`}>
           <Pressable
-            style={tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8 max-h-[55%]`}
-            onPress={(e) => e.stopPropagation()}
+            style={tw`flex-1 bg-black/50`}
+            onPress={closeModalWithBlur}
+          />
+          <View
+            style={[tw`absolute bottom-0 left-0 right-0 bg-white rounded-t-[40px] px-4 pt-6 pb-8`, { maxHeight: '60%' }]}
           >
             <View
               style={tw.style(
@@ -709,7 +894,7 @@ const SharedProfileScreen = ({ type }: Props) => {
                 {displayType === "withdraw" ? "Withdrawal" : "Top Up"}
               </Text>
               <TouchableOpacity
-                onPress={() => setModal(false)}
+                onPress={closeModalWithBlur}
                 style={tw`h-[34px] w-[34px] flex-col items-center justify-center bg-black p-1 rounded-full`}
               >
                 <AntDesign name="close" size={20} color="white" />
@@ -770,7 +955,9 @@ const SharedProfileScreen = ({ type }: Props) => {
           )}
           <ScrollView
             style={tw.style(displayType === "withdraw" ? `mt-5` : `mt-8`)}
-            showsVerticalScrollIndicator={false}
+            contentContainerStyle={tw.style(`pb-6`)}
+            showsVerticalScrollIndicator={true}
+            keyboardShouldPersistTaps="handled"
           >
             {displayType === "withdraw" ? (
               <>
@@ -877,6 +1064,19 @@ const SharedProfileScreen = ({ type }: Props) => {
                 {/* DVA (Bank Transfer) Option */}
                 {topupMethod === "dva" && (
                   <>
+                    {!transferAccountNumber && !transferBankName ? (
+                      <View style={tw`mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200`}>
+                        <Text style={tw.style(`text-sm text-amber-800`, { fontFamily: "RobotoMedium" })}>
+                          Bank transfer details are not configured yet. Please contact support to enable this feature.
+                        </Text>
+                      </View>
+                    ) : (
+                      <>
+                    <Text
+                      style={tw.style(`text-[13px] text-[#6B7280] mb-3`, { fontFamily: "RobotoRegular" })}
+                    >
+                      Transfer to the account below and use the reference when making the transfer so we can match your payment.
+                    </Text>
                     <View
                       style={tw`flex-row items-center justify-between py-3.5 border-b border-[#EFEFF4]`}
                     >
@@ -892,7 +1092,7 @@ const SharedProfileScreen = ({ type }: Props) => {
                           fontFamily: "RobotoRegular",
                         })}
                       >
-                        {topupDetails?.topup_bank_name || user?.profile?.topup_bank_name || "N/A"}
+                        {transferBankName || "N/A"}
                       </Text>
                     </View>
                     <View
@@ -910,7 +1110,7 @@ const SharedProfileScreen = ({ type }: Props) => {
                           fontFamily: "RobotoRegular",
                         })}
                       >
-                        {topupDetails?.topup_account_name || user?.profile?.topup_account_name || "N/A"}
+                        {transferAccountName || "N/A"}
                       </Text>
                     </View>
                     <View
@@ -926,9 +1126,8 @@ const SharedProfileScreen = ({ type }: Props) => {
                       <TouchableOpacity
                         style={tw`flex-row items-center gap-x-2`}
                         onPress={async () => {
-                          const accountNumber = topupDetails?.topup_account_number || user?.profile?.topup_account_number;
-                          if (accountNumber && accountNumber !== "N/A") {
-                            await Clipboard.setStringAsync(accountNumber);
+                          if (transferAccountNumber) {
+                            await Clipboard.setStringAsync(String(transferAccountNumber));
                             safeShowMessage({ type: "info", message: "Copied!" });
                           }
                         }}
@@ -938,13 +1137,47 @@ const SharedProfileScreen = ({ type }: Props) => {
                             fontFamily: "RobotoRegular",
                           })}
                         >
-                          {topupDetails?.topup_account_number || user?.profile?.topup_account_number || "N/A"}
+                          {transferAccountNumber || "N/A"}
                         </Text>
-                        {(topupDetails?.topup_account_number || user?.profile?.topup_account_number) && (
+                        {transferAccountNumber ? (
                           <Feather name="copy" size={18} color="black" />
+                        ) : null}
+                      </TouchableOpacity>
+                    </View>
+                    <View
+                      style={tw`flex-row items-center justify-between py-3.5 border-b border-[#EFEFF4]`}
+                    >
+                      <Text
+                        style={tw.style(`text-[17px] text-black`, {
+                          fontFamily: "RobotoRegular",
+                        })}
+                      >
+                        Reference (use when transferring)
+                      </Text>
+                      <TouchableOpacity
+                        style={tw`flex-row items-center gap-x-2`}
+                        onPress={async () => {
+                          const ref = transferReference != null ? String(transferReference) : "";
+                          if (ref) {
+                            await Clipboard.setStringAsync(ref);
+                            safeShowMessage({ type: "info", message: "Copied!" });
+                          }
+                        }}
+                      >
+                        <Text
+                          style={tw.style(`text-[17px] text-base-green font-semibold`, {
+                            fontFamily: "RobotoBold",
+                          })}
+                        >
+                          {String(transferReference || "N/A")}
+                        </Text>
+                        {!!transferReference && (
+                          <Feather name="copy" size={18} color="#22c55e" />
                         )}
                       </TouchableOpacity>
                     </View>
+                      </>
+                    )}
                   </>
                 )}
 
@@ -960,6 +1193,7 @@ const SharedProfileScreen = ({ type }: Props) => {
                         Enter Amount
                       </Text>
                       <TextInput
+                        ref={topupAmountRef}
                         style={tw.style(
                           `text-base px-4 py-2 text-black border border-[#B8B8B8] rounded-[8px]`,
                           {
@@ -976,62 +1210,7 @@ const SharedProfileScreen = ({ type }: Props) => {
 
                     <Pressable
                       disabled={cardAmount.length === 0 || cardLoading}
-                      onPress={async () => {
-                        const amount = parseFloat(cardAmount);
-                        if (isNaN(amount) || amount <= 0) {
-                          safeShowMessage({
-                            type: "warning",
-                            message: "Please enter a valid amount",
-                          });
-                          return;
-                        }
-
-                        setCardLoading(true);
-                        try {
-                          const { data } = await axios.post(
-                            INITIATE_PAYMENT,
-                            { amount },
-                            apiConfig
-                          );
-
-                          if (data?.data?.payment_url) {
-                            const canOpen = await Linking.canOpenURL(
-                              data.data.payment_url
-                            );
-                            if (canOpen) {
-                              await Linking.openURL(data.data.payment_url);
-                            } else {
-                              safeShowMessage({
-                                type: "danger",
-                                message: "Could not open payment page",
-                              });
-                            }
-                          } else {
-                            safeShowMessage({
-                              type: "danger",
-                              message: data?.message || "Payment initialization failed",
-                            });
-                          }
-                        } catch (err: any) {
-                          console.log('Payment initialization error:', err?.response?.data);
-                          const status = err?.response?.status || err?.status;
-                          
-                          // Silently handle 401 errors - token refresh should happen automatically via API client
-                          if (status === 401) {
-                            console.log('Authentication error (401) - token refresh should handle this');
-                            return;
-                          }
-                          
-                          // Use centralized error handler to extract safe string message
-                          const errorMessage = getErrorMessage(err);
-                          safeShowMessage({
-                            type: "danger",
-                            message: errorMessage,
-                          });
-                        } finally {
-                          setCardLoading(false);
-                        }
-                      }}
+                      onPress={handleCardTopup}
                       style={tw.style(
                         `bg-base-green py-3.5 rounded-lg mt-4`,
                         (cardAmount.length === 0 || cardLoading) && "opacity-50"
@@ -1054,9 +1233,22 @@ const SharedProfileScreen = ({ type }: Props) => {
               </>
             )}
           </ScrollView>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
+
+      <PaymentWebViewModal
+        visible={!!paymentWebViewUrl}
+        onClose={() => {
+          setPaymentWebViewUrl(null);
+          setPaymentWebViewRef(null);
+        }}
+        paymentUrl={paymentWebViewUrl ?? ""}
+        referenceFromInit={paymentWebViewRef}
+        initialBalance={user?.profile?.balance}
+        getCurrentUser={getCurrentUser}
+        showMessage={safeShowMessage}
+      />
     </>
   );
 };

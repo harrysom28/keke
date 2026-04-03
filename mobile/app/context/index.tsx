@@ -12,15 +12,15 @@ import { useDispatch, useSelector } from "react-redux";
 
 import { Pusher } from "@pusher/pusher-websocket-react-native";
 import apiClient from "@/utils/apiClient";
-import { resetSubscription } from "@/store/AppSlice";
+import { AppDetailsState, resetSubscription } from "@/store/AppSlice";
 import { router } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import { getErrorMessage } from "@/utils/errorHandler";
-import useNotification from "@/hooks/useNotification";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import AppStore from "@/store";
 import { pusherManager } from "@/utils/pusherManager";
+import { clearRecentPlacesCache } from "@/utils/recentPlacesCache";
 
 interface IContext {
   currentUser: {
@@ -32,6 +32,10 @@ interface IContext {
   LogoutUser: (loading: React.Dispatch<React.SetStateAction<boolean>>) => void;
   DeleteUser: (loading: React.Dispatch<React.SetStateAction<boolean>>) => void;
   pusher: Pusher;
+  /** True only after pusher.init() and pusher.connect() have completed. Guard subscribe calls with this to avoid native crash. */
+  pusherReady: boolean;
+  /** True after user-role hydration either succeeds or fails for the current token */
+  roleLoaded: boolean;
   notificationEvent: TRemoteNotification;
 }
 
@@ -43,6 +47,8 @@ export const AppContext = createContext<IContext>({
   LogoutUser: () => {},
   DeleteUser: () => {},
   pusher: Pusher.getInstance(),
+  pusherReady: false,
+  roleLoaded: false,
   notificationEvent: {
     title: "",
     body: "",
@@ -58,13 +64,15 @@ export default function GlobalContext({
     profile: {},
   });
   const { token } = useSelector(AuthState);
+  const { latest_notification } = useSelector(AppDetailsState);
   
   // Fetch public configuration from backend (Pusher keys, etc.)
   const { config: publicConfig } = usePublicConfig();
 
   const pusher = Pusher.getInstance();
-  const { notificationEvent } = useNotification();
   const pusherInitializedRef = useRef(false);
+  const [pusherReady, setPusherReady] = useState(false);
+  const [roleLoaded, setRoleLoaded] = useState(false);
 
   const apiConfig = {
     headers: {
@@ -161,12 +169,14 @@ export default function GlobalContext({
           pusherManager.initialize(pusher);
           try {
             await pusher.connect();
+            setPusherReady(true);
           } catch (err: any) {
             // Suppress quota errors
             if (err?.code !== 4004) {
               const errorMsg = getErrorMessage(err, 'Pusher connect error');
               console.log("pusher-connect-error: ", errorMsg);
             }
+            setPusherReady(false);
           }
         })
         .catch((err: any) => {
@@ -176,12 +186,14 @@ export default function GlobalContext({
             console.log("pusher-error: ", errorMsg);
           }
           pusherInitializedRef.current = false; // Reset on error so it can retry
+          setPusherReady(false);
         });
     }
 
     // Cleanup on unmount or when token is removed
     return () => {
       if (pusherInitializedRef.current && !token) {
+        setPusherReady(false);
         try {
           pusher.disconnect();
         } catch (err) {
@@ -204,9 +216,11 @@ export default function GlobalContext({
     // Only fetch user if authenticated
     if (!token) {
       console.log("⚠️ Skipping getCurrentUser: No authentication token");
+      setRoleLoaded(false);
       return;
     }
 
+    setRoleLoaded(false);
     apiClient
       // Use relative path so apiClient baseURL + interceptors behave correctly
       .get("auth/user/me")
@@ -220,6 +234,7 @@ export default function GlobalContext({
           dispatch(updateUser(payload));
           setCurrentUser(payload);
         }
+        setRoleLoaded(true);
       })
       .catch((err) => {
         // Suppress all errors during initialization to prevent app crashes
@@ -238,14 +253,17 @@ export default function GlobalContext({
           // Don't show error messages during app initialization to prevent crashes
           // Errors will be handled by individual screens when they load
         }
+        setRoleLoaded(true);
       });
   };
 
   const clearCache = () => {
     if (pusherInitializedRef.current) {
+      setPusherReady(false);
       pusher.disconnect();
       pusherInitializedRef.current = false;
     }
+    clearRecentPlacesCache();
     dispatch(resetSubscription());
     dispatch(
       setAuthData({
@@ -257,6 +275,7 @@ export default function GlobalContext({
     dispatch(updateUser({ profile: {} }));
     setCurrentUser({ profile: {} });
     dispatch(updateToken(null));
+    setRoleLoaded(false);
     router.navigate("/");
   };
 
@@ -333,6 +352,26 @@ export default function GlobalContext({
     }
   }, [token]);
 
+  const notificationEvent = React.useMemo<TRemoteNotification>(
+    () => ({
+      title: latest_notification?.title || "",
+      body: latest_notification?.message || "",
+      data: {
+        subType: latest_notification?.event_key,
+        screen: latest_notification?.screen,
+        rideId: latest_notification?.ride_id || undefined,
+        priority:
+          latest_notification?.priority === "critical" ||
+          latest_notification?.priority === "high" ||
+          latest_notification?.priority === "low"
+            ? latest_notification.priority
+            : "high",
+        type: "notification",
+      },
+    }),
+    [latest_notification]
+  );
+
   const global = React.useMemo(
     () => ({
       currentUser,
@@ -342,6 +381,8 @@ export default function GlobalContext({
       LogoutUser,
       DeleteUser,
       pusher,
+      pusherReady,
+      roleLoaded,
       notificationEvent,
     }),
     [
@@ -352,6 +393,8 @@ export default function GlobalContext({
       LogoutUser,
       DeleteUser,
       pusher,
+      pusherReady,
+      roleLoaded,
       notificationEvent,
     ]
   );

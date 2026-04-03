@@ -10,9 +10,10 @@ router.use(protect);
 
 // Scheduled bookings routes
 router.get('/list-bookings', scheduleController.getScheduledBookings);
+router.get('/show/:id/booking', validationRules.mongoId, validate, scheduleController.getScheduledBookingById);
 router.get('/latest/booking', scheduleController.getLatestScheduledBooking);
 router.post('/accept/booking', validationRules.acceptScheduledBooking, validate, scheduleController.acceptScheduledBooking);
-router.post('/cancel/booking', scheduleController.cancelScheduledBooking);
+router.post('/cancel/booking', validationRules.cancelScheduledBooking, validate, scheduleController.cancelScheduledBooking);
 router.get('/closest/booking', scheduleController.getClosestScheduledBooking);
 
 export default router;

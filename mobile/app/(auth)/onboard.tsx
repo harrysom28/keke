@@ -16,6 +16,7 @@ import { AntDesign } from "@expo/vector-icons";
 import GestureRecognizer from "react-native-swipe-gestures";
 import tw from "@/lib/tailwind";
 import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -39,6 +40,7 @@ const Pages = [
 
 const Onboard = () => {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [index, setIndex] = useState(0);
 
   const slideAnim = useRef(new Animated.Value(0)).current;
@@ -207,7 +209,7 @@ const Onboard = () => {
         <View
           style={tw.style(
             `flex-col justify-between px-11 absolute bottom-6 left-0 right-0`,
-            { height: verticalScale(120) }
+            { height: verticalScale(120), bottom: Math.max(insets.bottom + 6, 16) }
           )}
         >
           <View style={tw`self-center flex-row items-center gap-x-[32px]`}>

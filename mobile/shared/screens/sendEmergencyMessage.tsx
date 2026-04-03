@@ -1,7 +1,6 @@
 import {
   ActivityIndicator,
   ImageBackground,
-  StatusBar,
   Text,
   TouchableOpacity,
   View,
@@ -20,8 +19,10 @@ import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import { useSelector } from "react-redux";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 
 const SendEmergencyMessage = () => {
+  const insets = useCombinedSafeInsets();
   const { ride } = useSelector(AppDetailsState);
   const { apiConfig } = useContext(AppContext);
   const [data, setData] = useState([]);
@@ -102,7 +103,8 @@ const SendEmergencyMessage = () => {
     <ImageBackground
       style={tw.style(`px-6 bg-white`, {
         flex: 1,
-        paddingTop: StatusBar.currentHeight,
+        paddingTop: insets.top + 8,
+        paddingBottom: insets.bottom,
       })}
       source={require("@images/pattern-bg.png")}
     >

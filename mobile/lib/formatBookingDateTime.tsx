@@ -1,3 +1,19 @@
+/** Derive local booking_date (YYYY-MM-DD) and booking_time (HH:mm) from scheduled_at for consistent display and isBookingValid. */
+export function getLocalBookingDateAndTime(scheduledAt: string | Date | undefined | null): { booking_date: string; booking_time: string } {
+  if (!scheduledAt) return { booking_date: "", booking_time: "" };
+  const d = new Date(scheduledAt);
+  if (isNaN(d.getTime())) return { booking_date: "", booking_time: "" };
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return {
+    booking_date: `${y}-${m}-${day}`,
+    booking_time: `${h}:${min}`,
+  };
+}
+
 // Function to format the date
 export function formatBookingDate(dateString: string | undefined | null): string {
   if (!dateString || typeof dateString !== 'string') {

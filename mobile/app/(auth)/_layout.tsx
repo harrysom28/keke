@@ -13,6 +13,8 @@ export default function AuthLayout() {
       <Stack.Screen name="forgotpassword" />
       <Stack.Screen name="driverinfo" />
       <Stack.Screen name="authenticate-google" />
+      <Stack.Screen name="terms" />
+      <Stack.Screen name="account-recovery" />
     </Stack>
   );
 }

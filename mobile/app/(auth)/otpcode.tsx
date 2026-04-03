@@ -10,12 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import {
-  CONFIRM_OTP,
-  FORGOT_PASSWORD_CONFIRM_OTP,
-  RESEND_OTP,
-} from "@/constants";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Svg, { Circle, Path } from "react-native-svg";
 import {
   WINDOW_WIDTH,
@@ -24,24 +19,34 @@ import {
 } from "@/constants/Metrics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
-import { AuthState } from "@/store/AuthSlice";
+import { AuthState, updateRegistration, updateToken, updateRefreshToken, updateUser } from "@/store/AuthSlice";
 import { OtpInput } from "react-native-otp-entry";
-import axios from "axios";
+import apiClient from "@/utils/apiClient";
+import { getUniqueId } from "react-native-device-info";
+import { requestUserNotificationPermission } from "@/utils/notifications";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
-import { useSelector } from "react-redux";
+import { formatPhoneForDisplay } from "@/utils/phoneFormat";
+import { useDispatch, useSelector } from "react-redux";
 
-type ITarget = "SIGNUP" | "FORGOT-PASSWORD";
+type ITarget = "SIGNUP" | "FORGOT-PASSWORD" | "LOGIN";
 
-export const OTP_TARGET: Array<ITarget> = ["SIGNUP", "FORGOT-PASSWORD"];
+export const OTP_TARGET: Array<ITarget> = ["SIGNUP", "FORGOT-PASSWORD", "LOGIN"];
 
 const OtpCode = () => {
   const router = useRouter();
-  const item = useLocalSearchParams();
+  const dispatch = useDispatch();
+  const item = useLocalSearchParams<{ email_phone_number?: string; target?: string }>();
   const { registration } = useSelector(AuthState);
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
   const [resend, setResend] = useState(false);
+
+  useEffect(() => {
+    if (item?.email_phone_number) {
+      dispatch(updateRegistration({ ...registration, email_phone_number: item.email_phone_number }));
+    }
+  }, [item?.email_phone_number]);
 
   const handleConfirm = (text: string = otp) => {
     switch (item?.target) {
@@ -49,13 +54,18 @@ const OtpCode = () => {
         return validateSignupPin(text);
       case OTP_TARGET[1]:
         return validateForgotPasswordPin(text);
+      case OTP_TARGET[2]:
+        return validateLoginOtp(text);
     }
   };
 
   const validateForgotPasswordPin = (text: string) => {
     setLoading(true);
-    axios
-      .post(FORGOT_PASSWORD_CONFIRM_OTP, { otp: text })
+    apiClient
+      .post("forgot/password/confirm-otp", {
+        email_phone_number: item?.email_phone_number,
+        otp: text,
+      })
       .then(({ data }) => {
         console.log(data);
         showMessage({
@@ -63,9 +73,10 @@ const OtpCode = () => {
           message: data.message,
         });
 
+        const resetToken = data?.data?.reset_token;
         router.push({
           pathname: `/setpassword`,
-          params: { otp: text },
+          params: resetToken ? { reset_token: resetToken } : { otp: text },
         });
       })
       .catch((err) => {
@@ -80,10 +91,49 @@ const OtpCode = () => {
       .finally(() => setLoading(false));
   };
 
+  const validateLoginOtp = async (text: string) => {
+    setLoading(true);
+    const device_id = await getUniqueId().catch(() => "mobile");
+    const device_token = await requestUserNotificationPermission();
+    apiClient
+      .post("auth/user/login-with-otp", {
+        email_phone_number: item?.email_phone_number,
+        otp: text,
+        device_id,
+        device_token,
+      })
+      .then(({ data }) => {
+        showMessage({ type: "success", message: data.message });
+        dispatch(updateToken(data?.authorisation?.token));
+        dispatch(updateRefreshToken(data?.authorisation?.refresh_token || null));
+        if (data?.data?.user) {
+          dispatch(updateUser({ profile: data.data.user }));
+        }
+        if (data?.data?.needs_onboarding) {
+          const role = data?.data?.user?.role;
+          if (role === "driver") {
+            router.replace("/driverinfo");
+          } else {
+            router.replace({ pathname: "/authenticate", params: { fromLogin: "1" } });
+          }
+        } else {
+          router.replace("/");
+        }
+      })
+      .catch((err) => {
+        if (err?.response?.data?.message) {
+          showMessage({ type: "danger", message: err.response.data.message });
+        } else {
+          showMessage({ type: "danger", message: "Login failed" });
+        }
+      })
+      .finally(() => setLoading(false));
+  };
+
   const validateSignupPin = (text: string) => {
     setLoading(true);
-    axios
-      .post(CONFIRM_OTP, { otp: text, email_phone_number: item?.email_phone_number })
+    apiClient
+      .post("auth/user/confirm-otp", { otp: text, email_phone_number: item?.email_phone_number })
       .then(({ data }) => {
         console.log(data);
         showMessage({
@@ -111,14 +161,24 @@ const OtpCode = () => {
   const resendOtp = () => {
     setResend(true);
 
-    // Determine role based on registration type: "1" = passenger, "2" = driver
-    const role = registration?.type === "2" ? "driver" : "passenger";
+    const isForgotPassword = item?.target === OTP_TARGET[1];
+    const isLogin = item?.target === OTP_TARGET[2];
+    const path = isForgotPassword
+      ? "forgot/password"
+      : isLogin
+        ? "auth/user/request-login-otp"
+        : "auth/user/resend-otp";
+    const body = isForgotPassword
+      ? { email_phone_number: item?.email_phone_number }
+      : isLogin
+        ? { email_phone_number: item?.email_phone_number }
+        : {
+            email_phone_number: item?.email_phone_number,
+            role: registration?.type === "2" ? "driver" : "passenger",
+          };
 
-    axios
-      .post(RESEND_OTP, { 
-        email_phone_number: item?.email_phone_number,
-        role: role, // Include role for user creation if needed
-      })
+    apiClient
+      .post(path, body)
       .then(({ data }) => {
         console.log("Resend OTP success:", data);
         showMessage({ 
@@ -214,7 +274,9 @@ const OtpCode = () => {
               fontFamily: "RobotoBold",
             })}
           >
-            {item?.text}
+            {item?.email_phone_number && !String(item.email_phone_number).includes("@")
+              ? `Code sent to ${formatPhoneForDisplay(String(item.email_phone_number))}`
+              : item?.text}
           </Text>
           <OtpInput
             numberOfDigits={6}

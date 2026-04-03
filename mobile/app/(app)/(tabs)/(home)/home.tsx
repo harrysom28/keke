@@ -28,13 +28,9 @@ import {
   setRideUtils,
   setSubscriptionUtils,
 } from "@/store/AppSlice";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
-import POIMarkers from "@/components/map/POIMarkers";
-import UserLocationMarker from "@/components/map/UserLocationMarker";
-import VehicleMarker from "@/components/map/VehicleMarker";
-import { LIGHT_MAP_STYLE } from "@/constants/mapStyle";
-import { Platform } from "react-native";
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import MapView from "react-native-maps";
+import { HomeMap } from "@/components/map/HomeMap";
+import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useThrottledLocationUpdate } from "@/hooks/useThrottledLocationUpdate";
 import Svg, { Path } from "react-native-svg";
 import { TBooking, TRide } from "@/types";
@@ -42,6 +38,7 @@ import {
   formatBookingDate,
   formatBookingTime,
 } from "@/lib/formatBookingDateTime";
+import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
 import { useDispatch, useSelector } from "react-redux";
 import apiClient from "@/utils/apiClient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -54,8 +51,6 @@ import { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { DriverBookingSheet } from "@/components/driver/bookingSheet";
 import EmergencyModal from "./_modals/emergencyModal";
 import FindRideSheet from "./_modals/findRide";
-import MapDirections from "@/components/activeRide/mapDirections";
-import DriverTracking, { DriverETA } from "@/components/activeRide/driverTracking";
 import PaymentReceiptModal from "@/shared/modal/paymentReceipt";
 import { Portal } from "@gorhom/portal";
 import TripCompletedModal from "@/shared/modal/tripCompleted";
@@ -68,10 +63,19 @@ import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useIsFocused } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import usePusherChannel from "@/hooks/usePusherChannel";
+import { useRoute } from "@/hooks/useRoute";
+import { haversineKm } from "@/utils/haversine";
+import { useFocusRefresh } from "@/hooks/useFocusRefresh";
+import { invalidateRecentPlacesCache } from "@/utils/recentPlacesCache";
+
+// Max distance (km) for fitting map to route; beyond this we center on pickup to avoid continental zoom
+const MAX_FIT_DISTANCE_KM = 150;
 
 // Map zoom level - adjusted for better street-level detail visibility
 // 0.012-0.015 shows good balance of detail and area coverage (like screenshot)
+// Slightly wider home zoom for a calmer default view
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
 interface ILocation {
@@ -100,13 +104,29 @@ export type IARide = {
         driver_name: string;
         driver_image: string;
       };
+      status?: string;
     };
   };
 };
+// Must match _customTab: pt-2.5 (10) + icon (52) + gap (4) + label (~14) + paddingBottom (8) = 88
+const TAB_BAR_CONTENT_HEIGHT = 88;
+const TAB_BAR_HEIGHT = TAB_BAR_CONTENT_HEIGHT; // alias for compatibility
+
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
-  const params = useLocalSearchParams();
-  const { isBooking, subscription, ride: reduxRide } = useSelector(AppDetailsState);
+  const refreshActiveRideOnFocus = useFocusRefresh(15_000);
+  const refreshActiveBookingOnFocus = useFocusRefresh(30_000);
+  const refreshLocationsOnFocus = useFocusRefresh(60_000);
+  const refreshCurrentUserOnFocus = useFocusRefresh(120_000);
+  const params = useLocalSearchParams<{
+    openBookRide?: string;
+    openFindRide?: string;
+    rebook_dropoff_name?: string;
+    rebook_dropoff_lat?: string;
+    rebook_dropoff_lng?: string;
+  }>();
+  const { isBooking, requestOpenBookRide, subscription, ride: reduxRide, unread_count } = useSelector(AppDetailsState);
   const { user, token } = useSelector(AuthState);
   const { getCurrentUser, apiConfig, notificationEvent } =
     useContext(AppContext);
@@ -117,9 +137,14 @@ export default function HomeScreen() {
   const bookRideSheetRef = useRef<BottomSheetMethods>(null);
   const activeRideSheetRef = useRef<BottomSheetMethods>(null);
   const bookingViewSheetRef = useRef<BottomSheetMethods>(null);
-  const mapRef = useRef<MapView>(null);
-  const { location, address, loading: locationLoading } = useCurrentLocation({ isFocused });
-  const [mapReady, setMapReady] = useState(false);
+  const mapRef = useRef<MapView | import("@/components/map/MapboxMap").MapboxMapRef | null>(null);
+  const milestoneToastShownRef = useRef(false);
+  /** Dedupe heavy UI (sheet open, map fit, trigger) when active-ride polls return the same logical state */
+  const lastActiveRideUiKeyRef = useRef<string>("");
+  const locationRef = useRef({ latitude: 0, longitude: 0 });
+  const { location, address, loading: locationLoading, locationError, getLocation: refreshLocation } = useCurrentLocation({ isFocused });
+
+  locationRef.current = { latitude: location.latitude, longitude: location.longitude };
   const [booking, setBooking] = useState<Partial<TBooking>>({});
   const [viewbooking, setViewbooking] = useState<Partial<TBooking>>({});
   const [loading, setLoading] = useState(false);
@@ -128,6 +153,7 @@ export default function HomeScreen() {
   const [tripCompleted, setTripCompleted] = useState(false);
   const [trigger, setTrigger] = useState(0);
   const [dismissedBookingId, setDismissedBookingId] = useState<string | null>(null);
+  const [bookRideOpenVersion, setBookRideOpenVersion] = useState(0);
   const [nearby, setNearby] = useState<
     {
       location: {
@@ -143,14 +169,67 @@ export default function HomeScreen() {
     data: { waiting: {} },
   });
   const [driverLocation, setDriverLocation] = useState<{ lat: number; long: number; eta: number | null; distance: number | null } | null>(null);
+  /** When true, open Book Ride sheet as soon as ref is available (handles ref timing) */
+  const [pendingOpenBookRide, setPendingOpenBookRide] = useState(false);
+  const [initialDropoff, setInitialDropoff] = useState<{
+    name: string;
+    lat: number | null;
+    lng: number | null;
+  } | null>(null);
 
   const [maps, setMaps] = useState({
     origin: { latitude: 0, longitude: 0 },
     destination: { latitude: 0, longitude: 0 },
   });
-  
-  // Key to force MapDirections refresh when route is cleared
+
+  const hasPickupAndDest =
+    maps.origin.latitude !== 0 &&
+    maps.origin.longitude !== 0 &&
+    maps.destination.latitude !== 0 &&
+    maps.destination.longitude !== 0 &&
+    maps.destination.latitude !== 1 &&
+    maps.destination.longitude !== 1;
+  const { routeCoords, eta, distance, loading: routeLoading, durationSeconds: routeDurationSecondsFromHook } = useRoute(
+    hasPickupAndDest ? maps.origin : undefined,
+    hasPickupAndDest ? maps.destination : undefined,
+    { enabled: hasPickupAndDest }
+  );
+
+  useEffect(() => {
+    // Clear first: stale duration can remain for one frame after maps reset (useRoute clears result in useEffect).
+    if (!hasPickupAndDest) {
+      setRouteDurationSeconds(null);
+      setRouteArriveBy(null);
+      return;
+    }
+    if (routeDurationSecondsFromHook > 0) {
+      setRouteDurationSeconds(routeDurationSecondsFromHook);
+      const arrive = new Date(Date.now() + routeDurationSecondsFromHook * 1000);
+      setRouteArriveBy(arrive.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    }
+  }, [routeDurationSecondsFromHook, hasPickupAndDest]);
+
   const [routeKey, setRouteKey] = useState(0);
+  const [routeDurationSeconds, setRouteDurationSeconds] = useState<number | null>(null);
+  const [routeArriveBy, setRouteArriveBy] = useState<string | null>(null);
+  const prevIsBookingRef = useRef(isBooking);
+
+  // When booking sheet is closed and there's no active ride, clear the route line
+  useEffect(() => {
+    const hadBooking = prevIsBookingRef.current;
+    prevIsBookingRef.current = isBooking;
+    if (hadBooking && !isBooking) {
+      const waiting = (reduxRide?.data as any)?.waiting || ride?.data?.waiting;
+      const hasActiveRide = temp?.ride_id || (waiting as any)?._id || (waiting as any)?.ride_id;
+      if (!hasActiveRide && (maps.origin.latitude !== 0 || maps.destination.latitude !== 0)) {
+        setMaps({ origin: { latitude: 0, longitude: 0 }, destination: { latitude: 0, longitude: 0 } });
+        setRouteDurationSeconds(null);
+        setRouteArriveBy(null);
+        setRouteKey((k) => k + 1);
+        dispatch(setRideData({ waiting: {}, origin: {}, destination: {} } as any));
+      }
+    }
+  }, [isBooking]);
 
   // Use location if we have valid coordinates (be more lenient with accuracy)
   const hasValidLocation = location.latitude !== 0 && 
@@ -158,10 +237,6 @@ export default function HomeScreen() {
                           !isNaN(location.latitude) && 
                           !isNaN(location.longitude);
   
-  // Check if location has good accuracy (for centering preference)
-  const hasGoodAccuracy = hasValidLocation && 
-                          (location.accuracy === undefined || location.accuracy === null || location.accuracy < 1000);
-
   // Default region (Nigeria) - only used as fallback if GPS never becomes available
   const DEFAULT_REGION = {
     latitude: 9.082,
@@ -173,7 +248,8 @@ export default function HomeScreen() {
   // This function must be defined before getActiveRide and other functions that use it
   const clearRideState = useCallback(() => {
     logger.info('🧹 Clearing ride state completely');
-    
+    lastActiveRideUiKeyRef.current = "";
+
     // Clear map coordinates (this will hide polylines and markers)
     setMaps({
       origin: { latitude: 0, longitude: 0 },
@@ -192,26 +268,30 @@ export default function HomeScreen() {
     // Clear driver location
     setDriverLocation(null);
     
+    // Clear route ETA
+    setRouteDurationSeconds(null);
+    setRouteArriveBy(null);
+    
     // Increment route key to force MapDirections refresh
     setRouteKey(prev => prev + 1);
     
-    // Reset Redux state
+    // Reset Redux state so the map route doesn't reappear from stored ride data
     dispatch(
       setAppData({
         isBooking: false,
       })
     );
+    dispatch(setRideData({ waiting: {}, origin: {}, destination: {} } as any));
     dispatch(setSubscriptionUtils({ chat: false }));
     
-    // Animate map to default home region (user location or default)
+    // Animate map to default home region (user location or default). Use ref so async callbacks get latest location.
     if (mapRef.current) {
-      const currentHasValidLocation = location.latitude !== 0 && 
-                                     location.longitude !== 0 && 
-                                     !isNaN(location.latitude) && 
-                                     !isNaN(location.longitude);
+      const lat = locationRef.current.latitude;
+      const lng = locationRef.current.longitude;
+      const currentHasValidLocation = lat !== 0 && lng !== 0 && !isNaN(lat) && !isNaN(lng);
       const defaultRegion = currentHasValidLocation ? {
-        latitude: location.latitude,
-        longitude: location.longitude,
+        latitude: lat,
+        longitude: lng,
         ...mapDelta,
       } : DEFAULT_REGION;
       
@@ -220,101 +300,42 @@ export default function HomeScreen() {
     }
   }, [location.latitude, location.longitude, dispatch]);
 
-  // Use GPS location if available, otherwise use default region
-  // IMPORTANT: Always prefer GPS location over default region
-  // For initialRegion, wait for valid location to avoid showing wrong region
-  const mapRegion = hasValidLocation ? {
-    latitude: location.latitude,
-    longitude: location.longitude,
-    ...mapDelta,
-  } : DEFAULT_REGION; // Use default region so map can render
-  
-  // Create a stable key for the map to force re-render when location changes significantly
-  // This ensures the map centers correctly on the new location
-  const mapKey = hasValidLocation 
-    ? `map-${location.latitude.toFixed(4)}-${location.longitude.toFixed(4)}`
-    : 'map-default';
-  
-  logger.debug("Map region calculated", {
-    hasValidLocation,
-    hasGoodAccuracy,
-    coordinates: hasValidLocation ? { lat: location.latitude, lng: location.longitude } : "none",
-    accuracy: location.accuracy ? `${location.accuracy.toFixed(0)}m` : "unknown",
-    usingDefault: !hasValidLocation,
-    mapKey,
-  });
-
-  // Center map on actual GPS location when it becomes available
+  // Milestone offer countdown: show one toast per session when rider is close or can claim
   useEffect(() => {
-    // Only center if we have coordinates, map is ready, and no active route
-    if (hasValidLocation && mapReady && mapRef.current && maps.origin.latitude === 0 && maps.destination.latitude === 0) {
-      const currentLat = location.latitude;
-      const currentLng = location.longitude;
-      
-      logger.debug("Centering map on GPS location", {
-        latitude: currentLat,
-        longitude: currentLng,
-        accuracy: location.accuracy ? `${location.accuracy.toFixed(0)}m` : 'unknown',
-        hasGoodAccuracy,
-        mapReady,
-        source: location.accuracy && location.accuracy < 20 ? "GPS (excellent)" : 
-                location.accuracy && location.accuracy < 50 ? "GPS (good)" : 
-                location.accuracy && location.accuracy < 200 ? "GPS (fair)" : "GPS/Network",
-      });
-      
-      // Center immediately with exact GPS coordinates
-      const centerMap = () => {
-        if (mapRef.current && mapReady) {
-          try {
-            mapRef.current.animateToRegion({
-              latitude: currentLat,
-              longitude: currentLng,
-              ...mapDelta,
-            }, 1000);
-            logger.debug("Map centered on exact GPS location", { lat: currentLat, lng: currentLng });
-          } catch (error) {
-            logger.error("Error centering map", error);
-          }
+    if (!isFocused || !token) return;
+    if (milestoneToastShownRef.current) return;
+    apiClient
+      .get("special/offers/milestone")
+      .then(({ data: res }) => {
+        const d = res?.data;
+        if (!d?.available || d?.claimed) return;
+        if (d?.can_claim) {
+          milestoneToastShownRef.current = true;
+          safeShowMessage({
+            type: "success",
+            message: "You've unlocked ₦1,000! Tap Offers to claim your free ride credit.",
+            duration: 5000,
+          });
+        } else if (d?.rides_remaining >= 1 && d?.rides_remaining <= 3) {
+          milestoneToastShownRef.current = true;
+          const msg =
+            d.rides_remaining === 1
+              ? "1 more ride to unlock your free ₦1,000!"
+              : `${d.rides_remaining} more rides to unlock your free ₦1,000!`;
+          safeShowMessage({
+            type: "info",
+            message: `🎁 ${msg}`,
+            duration: 4500,
+          });
         }
-      };
-      
-      // Wait a bit for map to be fully ready, then center multiple times
-      // This ensures the map has fully rendered before we try to center
-      setTimeout(centerMap, 100);
-      setTimeout(centerMap, 300);
-      setTimeout(centerMap, 600);
-      setTimeout(centerMap, 1000);
-      setTimeout(centerMap, 2000); // Extra attempt after 2 seconds
-    } else if (!hasValidLocation) {
-      logger.warn("Cannot center map - no valid location", {
-        lat: location.latitude,
-        lng: location.longitude,
-        hasValidLocation,
-        mapReady,
+      })
+      .catch((err) => {
+        if (__DEV__) {
+          const msg = err?.response?.data?.message ?? err?.message;
+          if (msg) safeShowMessage({ type: "info", message: String(msg), duration: 3000 });
+        }
       });
-    } else if (!mapReady) {
-      logger.debug("Waiting for map to be ready before centering");
-    }
-  }, [hasValidLocation, hasGoodAccuracy, mapReady, location.latitude, location.longitude, location.accuracy, maps.origin.latitude, maps.destination.latitude]);
-
-  // Debug: Log when marker should be visible
-  useEffect(() => {
-    if (hasValidLocation) {
-      logger.debug("Location marker should be visible", {
-        lat: location.latitude,
-        lng: location.longitude,
-        accuracy: location.accuracy,
-        hasValidLocation,
-      });
-    } else {
-      logger.warn("Location marker NOT visible", {
-        hasValidLocation,
-        lat: location.latitude,
-        lng: location.longitude,
-        accuracy: location.accuracy,
-      });
-    }
-  }, [hasValidLocation, location.latitude, location.longitude, location.accuracy]);
+  }, [isFocused, token]);
 
   const animateToMapDirections = (item: IARide["data"]["waiting"]) => {
     if (item?.origin?.lat && item?.destination?.lat) {
@@ -329,11 +350,11 @@ export default function HomeScreen() {
         longitude: parseFloat(item?.destination?.long as string),
       };
 
-      // Animate map to show both origin and destination
+      // Animate map to show both origin and destination (wider padding = better zoom)
       mapRef.current?.fitToCoordinates(
         [origin, destination],
         {
-          edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
+          edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
           animated: true,
         }
       );
@@ -350,6 +371,40 @@ export default function HomeScreen() {
     }
   };
 
+  const openFindRideSheet = useCallback((rebookDropoff?: {
+    dropoff_name: string;
+    dropoff_lat?: number | null;
+    dropoff_lng?: number | null;
+  }) => {
+    dispatch(setAppData({ isBooking: true }));
+    dispatch(
+      setRideData({
+        origin: { name: "", lat: "", long: "" },
+        destination: { name: "", lat: "", long: "" },
+        vehicle_type_id: "",
+        driver_id: "",
+        payment_type: "",
+        promo_code: "",
+      })
+    );
+    dispatch(setRideUtils({ drivers: [] }));
+
+    if (rebookDropoff?.dropoff_name) {
+      setInitialDropoff({
+        name: rebookDropoff.dropoff_name,
+        lat: rebookDropoff.dropoff_lat ?? null,
+        lng: rebookDropoff.dropoff_lng ?? null,
+      });
+    } else {
+      setInitialDropoff(null);
+    }
+
+    setTimeout(() => {
+      rideSheetRef?.current?.open();
+    }, 100);
+  }, [dispatch]);
+
+
   const getActiveBooking = () => {
     // Load dismissed booking ID from storage
     AsyncStorage.getItem('dismissedBookingId').then((storedDismissedId) => {
@@ -363,24 +418,27 @@ export default function HomeScreen() {
       .then(async ({ data }) => {
         const bookings = data?.data || [];
         if (Array.isArray(bookings) && bookings.length > 0) {
-          const bookingData = bookings[0];
-          
-          // Filter out cancelled or completed bookings
-          const status = bookingData.status || bookingData.ride_status || '';
-          if (status === 'cancelled' || status === 'completed') {
-            logger.debug('Booking is cancelled or completed, clearing', { status: String(status) });
-            setBooking({});
-            // Clear dismissed state if booking is cancelled/completed
-            await AsyncStorage.removeItem('dismissedBookingId');
-            setDismissedBookingId(null);
-            return;
-          }
-          
-          // Check if this booking was dismissed
           const dismissedId = await AsyncStorage.getItem('dismissedBookingId');
-          const bookingId = bookingData.ride_id || bookingData._id || bookingData.booking_id;
-          if (dismissedId && dismissedId === bookingId) {
-            logger.debug('Booking was dismissed, skipping display');
+          const bookingData = bookings.find((candidate: any) => {
+            const status = String(candidate?.status || candidate?.ride_status || '').toLowerCase();
+            const bookingId = candidate?.ride_id || candidate?._id || candidate?.booking_id;
+            const isClosed = status === 'cancelled' || status === 'completed';
+            const isDismissed = !!dismissedId && dismissedId === bookingId;
+            return !isClosed && !isDismissed;
+          });
+
+          if (!bookingData) {
+            const hasOnlyClosedBookings = bookings.every((candidate: any) => {
+              const status = String(candidate?.status || candidate?.ride_status || '').toLowerCase();
+              return status === 'cancelled' || status === 'completed';
+            });
+
+            if (hasOnlyClosedBookings) {
+              await AsyncStorage.removeItem('dismissedBookingId');
+              setDismissedBookingId(null);
+            }
+
+            logger.debug('No displayable booking found for home preview');
             setBooking({});
             return;
           }
@@ -413,7 +471,7 @@ export default function HomeScreen() {
                   bookingTime = tempDate.toTimeString().split(' ')[0].substring(0, 5);
                 }
               } catch (e) {
-                logger.debug('Error parsing scheduled_at for time', e);
+                logger.debug('Error parsing scheduled_at for time', { error: e instanceof Error ? e.message : String(e) });
               }
             }
           }
@@ -581,40 +639,109 @@ export default function HomeScreen() {
   };
 
   useEffect(() => {
-    if (isFocused) {
+    refreshActiveBookingOnFocus(() => {
+      if (!token) return;
       // Load dismissed booking ID on focus
-      AsyncStorage.getItem('dismissedBookingId').then((dismissedId) => {
+      AsyncStorage.getItem("dismissedBookingId").then((dismissedId) => {
         if (dismissedId) {
           setDismissedBookingId(dismissedId);
         }
       });
       getActiveBooking();
-    }
-  }, [isFocused]);
+    });
+  }, [isFocused, token, refreshActiveBookingOnFocus]);
 
-  // Check if we should open book ride sheet from route params
+  // When user requests to open Book Ride sheet (tap or from Rides tab), set pending so effect can open it
   useEffect(() => {
-    if (params?.openBookRide === "true" && isFocused && bookRideSheetRef?.current) {
-      // Small delay to ensure the screen is fully loaded
-      const timer = setTimeout(() => {
-        bookRideSheetRef?.current?.open();
-      }, 500);
-      
-      return () => clearTimeout(timer);
+    if ((params?.openBookRide === "true" || requestOpenBookRide) && isFocused) {
+      setPendingOpenBookRide(true);
+      if (requestOpenBookRide) dispatch(setAppData({ requestOpenBookRide: false }));
     }
-  }, [params?.openBookRide, isFocused]);
+  }, [params?.openBookRide, requestOpenBookRide, isFocused, dispatch]);
+
+  // Open Book Ride sheet when pending and ref is available (handles ref not ready on first paint)
+  useEffect(() => {
+    if (!pendingOpenBookRide || !isFocused) return;
+
+    const tryOpen = () => {
+      if (bookRideSheetRef?.current?.open) {
+        setBookRideOpenVersion((value) => value + 1);
+        bookRideSheetRef.current.open();
+        router.setParams({ openBookRide: undefined });
+        setPendingOpenBookRide(false);
+        return true;
+      }
+      return false;
+    };
+
+    if (tryOpen()) return;
+
+    const t1 = setTimeout(() => { if (tryOpen()) return; }, 100);
+    const t2 = setTimeout(() => { if (tryOpen()) return; }, 350);
+    const t3 = setTimeout(() => { if (tryOpen()) return; }, 600);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [pendingOpenBookRide, isFocused]);
 
   // Check if we should open find ride sheet from route params (for rebook)
   useEffect(() => {
     if (params?.openFindRide === "true" && isFocused && rideSheetRef?.current) {
       // Small delay to ensure the screen is fully loaded
       const timer = setTimeout(() => {
-        rideSheetRef?.current?.open();
+        openFindRideSheet();
+        router.setParams({ openFindRide: undefined });
       }, 500);
       
       return () => clearTimeout(timer);
     }
-  }, [params?.openFindRide, isFocused]);
+  }, [params?.openFindRide, isFocused, openFindRideSheet]);
+
+  useEffect(() => {
+    const dropoffName = typeof params?.rebook_dropoff_name === "string" ? params.rebook_dropoff_name.trim() : "";
+    const latRaw = typeof params?.rebook_dropoff_lat === "string" ? params.rebook_dropoff_lat.trim() : "";
+    const lngRaw = typeof params?.rebook_dropoff_lng === "string" ? params.rebook_dropoff_lng.trim() : "";
+    const parsedLat = latRaw ? parseFloat(latRaw) : null;
+    const parsedLng = lngRaw ? parseFloat(lngRaw) : null;
+    const hasCoords =
+      parsedLat != null &&
+      parsedLng != null &&
+      !Number.isNaN(parsedLat) &&
+      !Number.isNaN(parsedLng) &&
+      parsedLat !== 0 &&
+      parsedLng !== 0;
+
+    if (!isFocused || !dropoffName) return;
+
+    const timer = setTimeout(() => {
+      openFindRideSheet({
+        dropoff_name: dropoffName,
+        dropoff_lat: hasCoords ? parsedLat : null,
+        dropoff_lng: hasCoords ? parsedLng : null,
+      });
+
+      router.setParams({
+        rebook_dropoff_name: undefined,
+        rebook_dropoff_lat: undefined,
+        rebook_dropoff_lng: undefined,
+      });
+
+      setTimeout(() => {
+        setInitialDropoff(null);
+      }, 1200);
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [
+    params?.rebook_dropoff_name,
+    params?.rebook_dropoff_lat,
+    params?.rebook_dropoff_lng,
+    isFocused,
+    openFindRideSheet,
+  ]);
 
   const getActiveRide = () => {
     setLoading(true);
@@ -627,52 +754,77 @@ export default function HomeScreen() {
       .get(ACTIVE_RIDE)
       .then(({ data }) => {
         clearTimeout(timeoutId);
-        logger.debug('Active ride API response', { data });
-        
         // Try multiple response structures
         const rideData = data?.data?.ride || data?.ride || data?.data || {};
-        logger.debug('Extracted ride data', { 
-          rideData, 
-          keys: Object.keys(rideData),
-          hasRideId: !!rideData?.ride_id 
-        });
-        
+
         if (Object.keys(rideData).length > 0 && (rideData?.ride_id || rideData?._id)) {
-          // Check if ride is cancelled or completed - treat as no active ride
-          const rideStatus = rideData?.status;
-          if (rideStatus === 'cancelled' || rideStatus === 'completed') {
-            logger.debug('Ride is cancelled or completed, clearing ride state', { status: rideStatus });
+          const rideStatusRaw = rideData?.status;
+          const rideStatus =
+            typeof rideStatusRaw === "string" ? rideStatusRaw.toLowerCase() : String(rideStatusRaw || "").toLowerCase();
+          const terminalStatuses = ["completed", "cancelled", "rejected"];
+          /** Matches backend findActiveRideForRider: requested, accepted, arrived, in-progress; include started aliases */
+          const restorableStatuses = [
+            "requested",
+            "accepted",
+            "arrived",
+            "started",
+            "in-progress",
+            "in_progress",
+          ];
+
+          if (terminalStatuses.includes(rideStatus)) {
+            logger.debug("Ride is terminal, clearing ride state", { status: rideStatus });
             clearRideState();
             activeRideSheetRef?.current?.close();
             return;
           }
-          
+
+          if (!restorableStatuses.includes(rideStatus)) {
+            logger.debug("Active ride status not restorable on launch, clearing ride state", {
+              status: rideStatus,
+            });
+            clearRideState();
+            activeRideSheetRef?.current?.close();
+            return;
+          }
+
           // Use ride_id or _id
           const rideId = rideData?.ride_id || rideData?._id;
-          logger.info('Found active ride', { rideId });
-          
+          const rideUiKey = `${rideId}|${rideStatus}|${String(rideData.accepted_by_driver)}|${rideData.driver_id ?? ""}|${String(rideData.updatedAt ?? "")}|${String(rideData.is_ride_started)}|${String(rideData.drop_off_completed)}|${String(rideData.payment_status ?? "")}`;
+          const uiChanged = lastActiveRideUiKeyRef.current !== rideUiKey;
+          lastActiveRideUiKeyRef.current = rideUiKey;
+
+          if (uiChanged) {
+            logger.debug("Active ride API response", { data });
+            logger.debug("Extracted ride data", {
+              rideData,
+              keys: Object.keys(rideData),
+              hasRideId: !!rideData?.ride_id,
+            });
+            logger.info("Found active ride", { rideId });
+          } else if (__DEV__) {
+            logger.debug("Active ride unchanged (skipping sheet re-open / map refit)", { rideId });
+          }
+
           setTemp(rideData as TRide);
-          animateToMapDirections(rideData);
-          
-          // Set ride state with the data
           setRide({
             screen: "WAITING",
             data: { waiting: rideData },
           });
-          
-          // Open the active ride sheet to show waiting for driver
-          setTimeout(() => {
-            logger.debug('Opening active ride sheet');
-            activeRideSheetRef?.current?.open();
-          }, 300);
-          
           dispatch(
             setAppData({
               isBooking: true,
             })
           );
-          
-          setTrigger(Math.random());
+
+          if (uiChanged) {
+            animateToMapDirections(rideData);
+            setTimeout(() => {
+              logger.debug("Opening active ride sheet");
+              activeRideSheetRef?.current?.open();
+            }, 300);
+            setTrigger(Math.random());
+          }
         } else {
           logger.debug('No active ride found or invalid data');
           clearRideState();
@@ -718,233 +870,150 @@ export default function HomeScreen() {
   };
 
   useEffect(() => {
-    if (isFocused && token) {
-      // Get locations first (non-blocking) - only when authenticated
+    refreshLocationsOnFocus(() => {
       getLocations();
-      // Then get active ride
+    });
+  }, [isFocused, token, refreshLocationsOnFocus]);
+
+  useEffect(() => {
+    refreshActiveRideOnFocus(() => {
+      if (!token) return;
       getActiveRide();
-    }
-  }, [isFocused, token]);
+    });
+  }, [isFocused, token, refreshActiveRideOnFocus]);
 
   // Update maps state when ride data changes (from find-ride flow or Redux store)
   useEffect(() => {
-    // Check both local ride state and Redux store for origin/destination
-    // ride.data has structure: { waiting: { origin, destination, ... } }
+    // Prefer waiting (active ride), then top-level origin/destination (selected in Find Ride / Book a Ride)
     const waitingData = ride?.data?.waiting || (reduxRide?.data as any)?.waiting;
-    const rideStatus = waitingData?.status || temp?.status;
-    
-    // Clear map if ride is cancelled or completed
-    if (rideStatus === 'cancelled' || rideStatus === 'completed') {
-      logger.debug('Home: Clearing ride state - ride cancelled or completed', { status: rideStatus });
+    const rideStatusRaw = waitingData?.status ?? temp?.status;
+    const rideStatus =
+      typeof rideStatusRaw === "string"
+        ? rideStatusRaw.toLowerCase()
+        : String(rideStatusRaw ?? "").toLowerCase();
+
+    // Clear map if ride is cancelled, completed, or rejected
+    if (
+      rideStatus === "cancelled" ||
+      rideStatus === "completed" ||
+      rideStatus === "rejected"
+    ) {
+      logger.debug("Home: Clearing ride state - ride ended", { status: rideStatus });
       clearRideState();
       activeRideSheetRef?.current?.close();
       return;
     }
-    
-    if (waitingData?.origin?.lat && waitingData?.destination?.lat) {
-      const originLat = typeof waitingData.origin.lat === "string" 
-        ? parseFloat(waitingData.origin.lat) 
-        : waitingData.origin.lat;
-      const originLong = typeof waitingData.origin.long === "string" 
-        ? parseFloat(waitingData.origin.long) 
-        : waitingData.origin.long;
-      const destLat = typeof waitingData.destination.lat === "string" 
-        ? parseFloat(waitingData.destination.lat) 
-        : waitingData.destination.lat;
-      const destLong = typeof waitingData.destination.long === "string" 
-        ? parseFloat(waitingData.destination.long) 
-        : waitingData.destination.long;
 
-      // Only update if coordinates are valid and different from current
-      if (originLat !== 0 && originLong !== 0 && destLat !== 0 && destLong !== 0) {
-        const newOrigin = { latitude: originLat, longitude: originLong };
-        const newDest = { latitude: destLat, longitude: destLong };
-        
-        // Check if coordinates actually changed
-        if (maps.origin.latitude !== originLat || maps.origin.longitude !== originLong ||
-            maps.destination.latitude !== destLat || maps.destination.longitude !== destLong) {
-          setMaps({
-            origin: newOrigin,
-            destination: newDest,
-          });
-          
-          // Animate map to show both points
-          if (mapRef.current) {
-            mapRef.current.fitToCoordinates(
-              [newOrigin, newDest],
-              {
-                edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-                animated: true,
-              }
-            );
+    const data = reduxRide?.data ?? ride?.data;
+    const originSource = waitingData?.origin ?? (data as any)?.origin;
+    const destSource = waitingData?.destination ?? (data as any)?.destination;
+
+    const originLatRaw = originSource?.lat ?? originSource?.latitude;
+    const originLongRaw = originSource?.long ?? originSource?.longitude;
+    const destLatRaw = destSource?.lat ?? destSource?.latitude;
+    const destLongRaw = destSource?.long ?? destSource?.longitude;
+
+    const hasValidOrigin =
+      originLatRaw != null && originLongRaw != null &&
+      parseFloat(String(originLatRaw)) !== 0 &&
+      parseFloat(String(originLongRaw)) !== 0 &&
+      !Number.isNaN(parseFloat(String(originLatRaw))) &&
+      !Number.isNaN(parseFloat(String(originLongRaw)));
+
+    const hasValidDestination =
+      destLatRaw != null && destLongRaw != null &&
+      String(destLatRaw).trim() !== '' && String(destLongRaw).trim() !== '' &&
+      parseFloat(String(destLatRaw)) !== 0 &&
+      parseFloat(String(destLongRaw)) !== 0 &&
+      !Number.isNaN(parseFloat(String(destLatRaw))) &&
+      !Number.isNaN(parseFloat(String(destLongRaw)));
+
+    if (!hasValidOrigin) return;
+
+    const originLat = parseFloat(String(originLatRaw));
+    const originLong = parseFloat(String(originLongRaw));
+    const destLat = hasValidDestination ? parseFloat(String(destLatRaw)) : 0;
+    const destLong = hasValidDestination ? parseFloat(String(destLongRaw)) : 0;
+
+    const newOrigin = { latitude: originLat, longitude: originLong };
+    const newDest = hasValidDestination ? { latitude: destLat, longitude: destLong } : { latitude: 0, longitude: 0 };
+
+    if (
+      maps.origin.latitude !== originLat ||
+      maps.origin.longitude !== originLong ||
+      maps.destination.latitude !== destLat ||
+      maps.destination.longitude !== destLong
+    ) {
+      setMaps({ origin: newOrigin, destination: newDest });
+
+      if (mapRef.current && hasValidDestination) {
+        const noWorldView = Math.abs(destLat) >= 0.01 && Math.abs(destLong) >= 0.01;
+        if (noWorldView) {
+          const distanceKm = haversineKm(newOrigin, newDest);
+          if (distanceKm <= MAX_FIT_DISTANCE_KM) {
+            (mapRef.current as any).fitToCoordinates?.([newOrigin, newDest], {
+              edgePadding: { top: 80, right: 50, bottom: 60, left: 50 },
+              animated: true,
+            });
+          } else {
+            (mapRef.current as any).animateToRegion?.({
+              latitude: newOrigin.latitude,
+              longitude: newOrigin.longitude,
+              ...mapDelta,
+            }, 400);
           }
-          
-          logger.debug('Home: Updated maps from ride data', { origin: newOrigin, destination: newDest });
         }
       }
+      logger.debug("Home: Updated maps from ride data", { origin: newOrigin, destination: newDest, hasValidDestination });
     }
   }, [
-    (reduxRide?.data as any)?.waiting?.origin?.lat, 
-    (reduxRide?.data as any)?.waiting?.origin?.long, 
-    (reduxRide?.data as any)?.waiting?.destination?.lat, 
+    (reduxRide?.data as any)?.waiting?.origin?.lat,
+    (reduxRide?.data as any)?.waiting?.origin?.long,
+    (reduxRide?.data as any)?.waiting?.origin?.latitude,
+    (reduxRide?.data as any)?.waiting?.origin?.longitude,
+    (reduxRide?.data as any)?.waiting?.destination?.lat,
     (reduxRide?.data as any)?.waiting?.destination?.long,
+    (reduxRide?.data as any)?.waiting?.destination?.latitude,
+    (reduxRide?.data as any)?.waiting?.destination?.longitude,
     (reduxRide?.data as any)?.waiting?.status,
-    ride?.data?.waiting?.origin?.lat, 
-    ride?.data?.waiting?.origin?.long, 
-    ride?.data?.waiting?.destination?.lat, 
+    (reduxRide?.data as any)?.origin?.lat,
+    (reduxRide?.data as any)?.origin?.long,
+    (reduxRide?.data as any)?.origin?.latitude,
+    (reduxRide?.data as any)?.origin?.longitude,
+    (reduxRide?.data as any)?.destination?.lat,
+    (reduxRide?.data as any)?.destination?.long,
+    (reduxRide?.data as any)?.destination?.latitude,
+    (reduxRide?.data as any)?.destination?.longitude,
+    ride?.data?.waiting?.origin?.lat,
+    ride?.data?.waiting?.origin?.long,
+    ride?.data?.waiting?.destination?.lat,
     ride?.data?.waiting?.destination?.long,
-    ride?.data?.waiting?.status
+    ride?.data?.waiting?.status,
+    (ride?.data as any)?.origin?.lat,
+    (ride?.data as any)?.origin?.long,
+    (ride?.data as any)?.origin?.latitude,
+    (ride?.data as any)?.origin?.longitude,
+    (ride?.data as any)?.destination?.lat,
+    (ride?.data as any)?.destination?.long,
+    (ride?.data as any)?.destination?.latitude,
+    (ride?.data as any)?.destination?.longitude,
   ]);
 
-  const onMapReady = () => {
-    logger.info('Map ready');
-    setMapReady(true);
-    const accuracyInfo = location.accuracy 
-      ? ` (accuracy: ${location.accuracy.toFixed(0)}m)` 
-      : " (accuracy: unknown)";
-    
-    logger.debug("Map is ready", {
-      location: { 
-        lat: location.latitude, 
-        lng: location.longitude,
-        accuracy: location.accuracy ? `${location.accuracy.toFixed(0)}m` : "unknown",
-      },
-      mapRegion,
-      hasAddress: !!address?.formattedAddress,
-      address: address?.formattedAddress || "not available",
-    });
-    
-    if (location.latitude !== 0) {
-      // Check if location seems like a mock/test location (common in emulators)
-      const isLikelyMockLocation = 
-        (location.latitude === 37.4219983 && location.longitude === -122.084) || // Google HQ
-        (location.latitude === 37.7749 && location.longitude === -122.4194); // San Francisco
-      
-      if (isLikelyMockLocation) {
-        logger.warn("Detected possible mock/test location (Google HQ or SF)", {
-          lat: location.latitude,
-          lng: location.longitude,
-          note: "If using Android emulator, set custom location via emulator settings or: adb emu geo fix <longitude> <latitude>"
-        });
-      }
-      
-      // Always center on user location when map is ready (unless there's a route)
-      if (maps.origin.latitude === 0 && maps.destination.latitude === 0) {
-        // No active route, center on user location immediately with exact GPS coordinates
-        if (hasValidLocation && mapRef.current) {
-          const exactLat = location.latitude;
-          const exactLng = location.longitude;
-          
-          logger.debug("onMapReady: Centering on exact GPS coordinates", {
-            latitude: exactLat,
-            longitude: exactLng,
-            accuracy: location.accuracy ? `${location.accuracy.toFixed(0)}m` : 'unknown',
-            mapReady: true,
-          });
-          
-          // Try multiple times to ensure it centers on exact location
-          // Use longer delays to ensure map is fully rendered
-          const centerNow = () => {
-            if (mapRef.current && hasValidLocation) {
-              try {
-                mapRef.current.animateToRegion({
-                  latitude: exactLat,
-                  longitude: exactLng,
-                  ...mapDelta,
-                }, 1000);
-                logger.debug(`Map centered on exact GPS: ${exactLat}, ${exactLng}${accuracyInfo}`);
-              } catch (error) {
-                logger.error("Error centering map in onMapReady", error);
-              }
-            }
-          };
-          
-          // Center with increasing delays to ensure map is fully ready
-          setTimeout(centerNow, 100);
-          setTimeout(centerNow, 300);
-          setTimeout(centerNow, 600);
-          setTimeout(centerNow, 1000);
-          setTimeout(centerNow, 2000);
-        } else {
-          logger.warn("onMapReady: Cannot center", { hasValidLocation, mapRef: !!mapRef.current });
-        }
-      } else {
-        // There's a route, but only show it if there's actually a valid active ride
-        const waitingData = ride?.data?.waiting as any; // Type assertion for _id which may exist at runtime
-        const hasActiveRide = waitingData && (
-          waitingData?.ride_id || 
-          waitingData?._id ||
-          (waitingData?.origin?.lat && waitingData?.destination?.lat)
-        );
-        
-        if (hasActiveRide) {
-          logger.debug("onMapReady: Showing route for active ride");
-          animateToMapDirections(ride?.data?.waiting);
-        } else {
-          logger.warn("onMapReady: Maps has coordinates but no active ride - resetting maps");
-          // Reset maps if there's no active ride
-          setMaps({
-            origin: { latitude: 0, longitude: 0 },
-            destination: { latitude: 0, longitude: 0 },
-          });
-          setRouteKey(prev => prev + 1); // Force MapDirections refresh
-          // Center on user location instead
-          if (hasValidLocation && mapRef.current) {
-            const exactLat = location.latitude;
-            const exactLng = location.longitude;
-            mapRef.current.animateToRegion({
-              latitude: exactLat,
-              longitude: exactLng,
-              ...mapDelta,
-            }, 1000);
-            logger.debug(`Map centered on user location after reset: ${exactLat}, ${exactLng}`);
-          }
-        }
-      }
-      if (address) {
-        dispatch(
-          setRideUtils({
-            user_location: {
-              lat: location.latitude?.toString(),
-              long: location.longitude?.toString(),
-              name: address?.formattedAddress,
-            },
-          })
-        );
-      } else {
-        logger.warn("Unknown location");
+  useEffect(() => {
+    const name = address?.formattedAddress;
+    const isValid = typeof name === 'string' && name.trim() && name.trim().toLowerCase() !== 'location';
+    if (isValid && location.latitude !== 0) {
+      dispatch(
         setRideUtils({
-          user_location: {},
-        });
-      }
-      } else {
-        // Location is being fetched asynchronously - this is expected
-        // The useEffect hook will update the map when location becomes available
-        if (locationLoading) {
-          logger.debug("Map ready, waiting for GPS location");
-        } else {
-          logger.warn("Map ready but GPS location not available yet - map will center when GPS locks");
-        }
-      }
-  };
-
-  const onMapError = (error: any) => {
-    logger.error("Map Error", error, { 
-      message: error?.message,
-      fullError: error 
-    });
-    
-    // Check for common API key errors
-    if (error?.message?.includes("API key") || error?.message?.includes("authentication")) {
-      logger.error("Possible Google Maps API key issue", error, {
-        note: "Check if API key is valid in Google Cloud Console, verify 'Maps SDK for Android' is enabled, and check API key restrictions (package name, SHA-1)"
-      });
-      safeShowMessage({
-        type: "danger",
-        message: "Map loading error: Check API key configuration",
-      });
+          user_location: {
+            lat: location.latitude?.toString(),
+            long: location.longitude?.toString(),
+            name: name.trim(),
+          },
+        })
+      );
     }
-  };
+  }, [address?.formattedAddress, location.latitude, location.longitude, dispatch]);
 
   const getLocations = () => {
     // Only fetch locations if user is authenticated
@@ -976,26 +1045,95 @@ export default function HomeScreen() {
   };
 
   useEffect(() => {
-    if (isFocused) {
-      onMapReady();
+    refreshCurrentUserOnFocus(() => {
       getCurrentUser();
-    }
-  }, [isFocused, location.latitude, location.accuracy]);
+    });
+  }, [isFocused, refreshCurrentUserOnFocus]);
   
-  // Update map when location accuracy improves significantly
+  // When booking sheet is open and no pickup/destination set yet, show local region (never world view)
+  const ABAKALIKI_REGION = {
+    latitude: 6.3249,
+    longitude: 8.1137,
+    latitudeDelta: 0.05,
+    longitudeDelta: 0.05,
+  };
   useEffect(() => {
-    if (isFocused && location.latitude !== 0 && location.accuracy && location.accuracy < 50) {
-      // Only update map if we have a good GPS location and origin is not set
-      if (maps.origin.latitude === 0) {
-        mapRef.current?.animateToRegion({
-          latitude: location.latitude,
-          longitude: location.longitude,
-          ...mapDelta,
-        });
-        logger.debug(`Map updated to precise location (accuracy: ${location.accuracy.toFixed(0)}m)`);
+    if (!isBooking || !mapRef.current) return;
+    if (hasPickupAndDest) return;
+    if (maps.origin.latitude !== 0 || maps.origin.longitude !== 0) return; // pickup set — don't resize until destination set
+    const id = setTimeout(() => {
+      if (!mapRef.current) return;
+      const m = mapRef.current as any;
+      if (m.animateToRegion) {
+        const lat = locationRef.current.latitude;
+        const lng = locationRef.current.longitude;
+        const useCurrent = lat !== 0 && lng !== 0 && !isNaN(lat) && !isNaN(lng);
+        const region = useCurrent
+          ? { latitude: lat, longitude: lng, ...mapDelta }
+          : ABAKALIKI_REGION;
+        m.animateToRegion(region, 400);
       }
+    }, 100);
+    return () => clearTimeout(id);
+  }, [isBooking, hasPickupAndDest, maps.origin.latitude, maps.origin.longitude]);
+
+  // When booking sheet is open with both locations, force map to fit route (avoids stuck world view)
+  useEffect(() => {
+    if (!isBooking || !hasPickupAndDest || !mapRef.current) return;
+    const o = maps.origin;
+    const d = maps.destination;
+    if (o.latitude === 0 || o.longitude === 0 || d.latitude === 0 || d.longitude === 0) return;
+    if (Math.abs(d.latitude) < 0.01 && Math.abs(d.longitude) < 0.01) return;
+    const map = mapRef.current as any;
+    const id = setTimeout(() => {
+      const distanceKm = haversineKm(o, d);
+      if (distanceKm <= MAX_FIT_DISTANCE_KM && map.fitToCoordinates) {
+        map.fitToCoordinates([o, d], {
+          edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
+          animated: true,
+        });
+      } else if (map.animateToRegion) {
+        map.animateToRegion({ latitude: o.latitude, longitude: o.longitude, ...mapDelta }, 400);
+      }
+    }, 150);
+    return () => clearTimeout(id);
+  }, [isBooking, hasPickupAndDest, maps.origin.latitude, maps.origin.longitude, maps.destination.latitude, maps.destination.longitude]);
+
+  // When user returns to home tab with valid location and no route, center map on current location
+  const lastFocusedRef = useRef(false);
+  useEffect(() => {
+    if (!isFocused) {
+      lastFocusedRef.current = false;
+      return;
     }
-  }, [location.accuracy, isFocused, maps.origin.latitude]);
+    if (!hasValidLocation || maps.origin.latitude !== 0 || maps.destination.latitude !== 0) return;
+    if (lastFocusedRef.current) return; // Already centered this focus
+    lastFocusedRef.current = true;
+    if (mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        ...mapDelta,
+      }, 600);
+      logger.debug("Map centered on current location (tab focused)", {
+        lat: location.latitude,
+        lng: location.longitude,
+      });
+    }
+  }, [isFocused, hasValidLocation, location.latitude, location.longitude, maps.origin.latitude, maps.destination.latitude]);
+
+  // Update map when location accuracy improves significantly (e.g. GPS lock)
+  useEffect(() => {
+    if (!isFocused || !hasValidLocation || !mapRef.current) return;
+    if (maps.origin.latitude !== 0 || maps.destination.latitude !== 0) return;
+    if (location.accuracy == null || location.accuracy > 80) return;
+    mapRef.current.animateToRegion({
+      latitude: location.latitude,
+      longitude: location.longitude,
+      ...mapDelta,
+    }, 500);
+    logger.debug(`Map updated to precise location (accuracy: ${location.accuracy.toFixed(0)}m)`);
+  }, [isFocused, hasValidLocation, location.latitude, location.longitude, location.accuracy, maps.origin.latitude, maps.destination.latitude]);
 
   const CancelBooking = (
     booking_id: string,
@@ -1011,9 +1149,9 @@ export default function HomeScreen() {
         });
         setBooking({});
         setViewbooking({});
-        // Clear dismissed state when booking is cancelled
         AsyncStorage.removeItem('dismissedBookingId');
         setDismissedBookingId(null);
+        clearRideState();
         bookingViewSheetRef?.current?.close();
       })
       .then(() => {
@@ -1031,6 +1169,7 @@ export default function HomeScreen() {
           });
           setBooking({});
           setViewbooking({});
+          clearRideState();
           bookingViewSheetRef?.current?.close();
           getActiveBooking();
           loading(false);
@@ -1114,6 +1253,7 @@ export default function HomeScreen() {
     onEvent: (event) => {
       logger.info(`Completed ride event received: ${event}`);
       setTripCompleted(true);
+      invalidateRecentPlacesCache();
       clearRideState();
       activeRideSheetRef?.current?.close();
     },
@@ -1121,11 +1261,15 @@ export default function HomeScreen() {
 
   // Subscribe to ride status updates for active rides
   const activeRideId = temp?.ride_id || (ride?.data?.waiting as any)?.ride_id;
-  const rideStatus = (temp?.status as string) || '';
+  const rideStatus = String((temp?.status as string) || "").toLowerCase();
   const rideChannel = activeRideId ? `private.ride.${activeRideId}` : 'private.ride.dummy';
   usePusherChannel({
     channel: rideChannel,
-    visible: !!activeRideId && rideStatus !== 'completed' && rideStatus !== 'cancelled',
+    visible:
+      !!activeRideId &&
+      rideStatus !== "completed" &&
+      rideStatus !== "cancelled" &&
+      rideStatus !== "rejected",
     onSubscriptionSucceeded: () => {
       if (activeRideId) {
         logger.debug(`Subscribed to ride status updates for ride ${activeRideId}`);
@@ -1319,16 +1463,16 @@ export default function HomeScreen() {
     if (notificationEvent?.body !== "") {
       safeShowMessage({ message: notificationEvent?.body, type: "info" });
     }
-    getActiveRide();
+    // Ride refresh is handled by Pusher + focus; avoid getActiveRide on every notification tick
     if (notificationEvent?.data?.sub_type === "private.completed_ride") {
-      // save ride data
       setTripCompleted(true);
       setPaymentReceipt(false);
+      getActiveRide();
     }
     if (notificationEvent?.data?.sub_type === "private.payment") {
-      // save ride data
       setTripCompleted(false);
       setPaymentReceipt(true);
+      getActiveRide();
     }
   }, [notificationEvent]);
 
@@ -1355,42 +1499,6 @@ export default function HomeScreen() {
       }
     }
   }, [location?.longitude, location?.latitude, address?.formattedAddress, isFocused, updateLocation]);
-
-  // Memoize driver markers to prevent hooks violation (must be at top level)
-  const driverMarkers = useMemo(() => {
-    // Limit nearby drivers to prevent memory issues (max 20)
-    const limitedNearby = (Array.isArray(nearby) ? nearby : []).slice(0, 20);
-    return limitedNearby
-      .filter((item: any) => {
-        const lat = item?.location?.latitude;
-        const lng = item?.location?.longitude;
-        return typeof lat === "number" && typeof lng === "number" && !isNaN(lat) && !isNaN(lng);
-      })
-      .map((item: any, idx: number) => {
-        const lat = item?.location?.latitude;
-        const lng = item?.location?.longitude;
-        // Use a stable, unique key based on driver ID, not coordinates
-        const markerKey = item?.id || item?.driver_id || item?.user_id || `driver-marker-${idx}`;
-        const vehicleType = item?.vehicle_type || 'car';
-        return (
-          <Marker
-            key={markerKey}
-            coordinate={{
-              latitude: lat,
-              longitude: lng,
-            }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
-            zIndex={500}
-          >
-            <VehicleMarker 
-              color={tw.color("base-green") || "#3C8F7C"}
-              vehicleType={vehicleType === 'bike' ? 'bike' : vehicleType === 'tricycle' ? 'tricycle' : 'car'}
-            />
-          </Marker>
-        );
-      });
-  }, [nearby]);
 
   return (
     <>
@@ -1438,200 +1546,84 @@ export default function HomeScreen() {
 
       <View style={{ flex: 1, backgroundColor: '#f5f5f5' }}>
         <StatusBar barStyle="dark-content" backgroundColor={"transparent"} />
-        <MapView
-          key={mapKey}
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          // Use GPS location if available, otherwise use default region
-          // The key prop will force re-render when location changes significantly
-          initialRegion={mapRegion}
-          style={StyleSheet.absoluteFillObject}
-          onMapReady={onMapReady}
-          mapType="standard"
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          showsCompass={false}
-          showsScale={false}
-          showsBuildings={true}
-          showsTraffic={true}
-          showsIndoors={false}
-          showsPointsOfInterest={true}
-          toolbarEnabled={false}
-          loadingEnabled={true}
-          pitchEnabled={false}
-          rotateEnabled={false}
-          scrollEnabled={true}
-          zoomEnabled={true}
-          minZoomLevel={14}
-          maxZoomLevel={20}
-          followsUserLocation={false}
-          // Enable map gestures for better UX
-          moveOnMarkerPress={false}
-          // Apply custom map style for cleaner appearance
-          {...Platform.select({
-            android: {
-              // Apply custom style only after map is ready to prevent rendering issues
-              ...(mapReady && { customMapStyle: LIGHT_MAP_STYLE }),
-              zoomControlEnabled: true,
-              cacheEnabled: true,
-            },
-            ios: {
-              // iOS can handle more complex styles
-              customMapStyle: LIGHT_MAP_STYLE,
-            },
-          })}
-        >
-          {/* Custom User Location Marker with Pulse */}
-          {hasValidLocation && (
-            <Marker
-              key={`user-location-marker-${location.latitude}-${location.longitude}`}
-              coordinate={{
-                latitude: location.latitude,
-                longitude: location.longitude,
-              }}
-              anchor={{ x: 0.5, y: 0.5 }}
-              flat={true}
-              tracksViewChanges={false}
-              zIndex={1000}
-            >
-              <UserLocationMarker
-                coordinate={{
+        <HomeMap
+          mapRef={mapRef as React.RefObject<any>}
+          userLocation={
+            hasValidLocation
+              ? {
                   latitude: location.latitude,
                   longitude: location.longitude,
-                }}
-              />
-            </Marker>
-          )}
-
-          {/* Only show POI markers when destination is selected */}
-          {maps.destination.latitude !== 1 && maps.destination.latitude !== 0 && (
-            <POIMarkers />
-          )}
-          
-          {/* Only show driver markers when destination is selected (Bolt-style) */}
-          {maps.destination.latitude !== 1 && maps.destination.latitude !== 0 && driverMarkers}
-          
-          {/* Show route during ride - from pickup to destination when ride is in progress */}
-          {/* Only render if we have valid ride data and coordinates */}
-          {temp?.ride_id && 
-           temp?.is_ride_started && 
-           temp?.origin && 
-           temp?.destination &&
-           typeof temp.origin.lat !== 'undefined' &&
-           typeof temp.origin.long !== 'undefined' &&
-           typeof temp.destination.lat !== 'undefined' &&
-           typeof temp.destination.long !== 'undefined' &&
-           temp?.status !== 'cancelled' && 
-           temp?.status !== 'completed' && (
-            <MapDirections
-              key={`route-${routeKey}-${temp.ride_id}`}
-              check={true}
-              origin={{
-                latitude: typeof temp.origin.lat === 'string' ? parseFloat(temp.origin.lat) : temp.origin.lat,
-                longitude: typeof temp.origin.long === 'string' ? parseFloat(temp.origin.long) : temp.origin.long,
-              }}
-              destination={{
-                latitude: typeof temp.destination.lat === 'string' ? parseFloat(temp.destination.lat) : temp.destination.lat,
-                longitude: typeof temp.destination.long === 'string' ? parseFloat(temp.destination.long) : temp.destination.long,
-              }}
-            />
-          )}
-          
-          {/* Show route from origin to destination when both are selected (for booking) */}
-          {/* Only render if we have valid coordinates and active ride */}
-          {maps.origin.latitude !== 0 && 
-           maps.origin.longitude !== 0 &&
-           maps.destination.latitude !== 0 && 
-           maps.destination.longitude !== 0 &&
-           maps.destination.latitude !== 1 && 
-           maps.destination.longitude !== 1 &&
-           maps.destination.latitude !== maps.origin.latitude &&
-           maps.destination.longitude !== maps.origin.longitude &&
-           !temp?.is_ride_started &&
-           temp?.status !== 'cancelled' && 
-           temp?.status !== 'completed' &&
-           ((ride?.data?.waiting as any)?.ride_id || (ride?.data?.waiting as any)?._id || temp?.ride_id) && (
-            <MapDirections
-              key={`route-${routeKey}-booking`}
-              check={true}
-              origin={maps.origin}
-              destination={maps.destination}
-            />
-          )}
-          
-          {/* Real-time Driver Tracking - shows driver location and route */}
-          {/* Only render if we have valid ride data and driver is accepted */}
-          {temp?.ride_id && 
-           temp?.accepted_by_driver && 
-           temp?.origin &&
-           typeof temp.origin.lat !== 'undefined' &&
-           typeof temp.origin.long !== 'undefined' &&
-           temp?.status !== 'cancelled' && 
-           temp?.status !== 'completed' && (
-            <DriverTracking
-              rideId={temp.ride_id}
-              pickupLocation={{
-                lat: temp.origin.lat,
-                long: temp.origin.long,
-              }}
-              destinationLocation={temp?.destination ? {
-                lat: temp.destination.lat,
-                long: temp.destination.long,
-              } : undefined}
-              mapRef={mapRef}
-              showRoute={true}
-              isRideInProgress={temp?.is_ride_started || false}
-            />
-          )}
-        </MapView>
+                  heading: location.heading,
+                }
+              : undefined
+          }
+          mapState={
+            ride.screen === "WAITING" || (temp?.ride_id ?? (ride?.data?.waiting as any)?._id ?? (ride?.data?.waiting as any)?.ride_id)
+              ? "active"
+              : hasPickupAndDest && routeCoords.length > 0
+                ? "route"
+                : isBooking
+                  ? "searching"
+                  : "idle"
+          }
+          pickup={
+            maps.origin.latitude !== 0 && maps.origin.longitude !== 0
+              ? maps.origin
+              : undefined
+          }
+          dropoff={
+            maps.destination.latitude !== 0 &&
+            maps.destination.longitude !== 0 &&
+            maps.destination.latitude !== 1
+              ? maps.destination
+              : undefined
+          }
+          routeCoords={routeCoords}
+          routeLoading={routeLoading}
+          pauseDriverUpdates={isBooking}
+          etaLabel={hasPickupAndDest && eta ? eta : null}
+          arriveByLabel={hasPickupAndDest && routeArriveBy ? `Arrive by ${routeArriveBy}` : null}
+          onRouteReady={(_coords) => {
+            if (!mapRef.current) return;
+            const o = maps.origin;
+            const d = maps.destination;
+            if (
+              !o.latitude || !d.latitude ||
+              Math.abs(o.latitude) < 0.01 || Math.abs(d.latitude) < 0.01
+            ) return;
+            const distanceKm = haversineKm(o, d);
+            if (distanceKm <= MAX_FIT_DISTANCE_KM) {
+              mapRef.current.fitToCoordinates?.([o, d], {
+                edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
+                animated: true,
+              });
+            } else {
+              (mapRef.current as any).animateToRegion?.(
+                { latitude: o.latitude, longitude: o.longitude, ...mapDelta },
+                400
+              );
+            }
+          }}
+        />
 
         <View
-          style={tw.style(`absolute top-0 right-0 left-0`, {
-            display: isBooking ? "none" : "flex",
-            marginTop: StatusBar.currentHeight || 0,
-          })}
+          style={[
+            tw.style(`absolute top-0 right-0 left-0`, {
+              display: isBooking ? "none" : "flex",
+            }),
+            {
+              paddingTop: insets.top + 8,
+              paddingLeft: Math.max(insets.left, 16),
+              paddingRight: Math.max(insets.right, 16),
+            },
+          ]}
         >
-          {/* Top Header Bar */}
+          {/* Top Header Bar - notification */}
           <View
             style={tw.style(
-              `flex-row items-center justify-between px-4 h-[56px] bg-transparent`
+              `flex-row items-center justify-end h-[52px] bg-transparent`
             )}
           >
-            {/* Search/Destination Input - Extended width */}
-            <TouchableOpacity
-              onPress={() => {
-                // Open find ride modal
-                dispatch(setAppData({ isBooking: true }));
-                setTimeout(() => {
-                  rideSheetRef?.current?.open();
-                }, 100);
-              }}
-              style={tw.style(
-                `flex-1 mr-3 bg-white rounded-full flex-row items-center`,
-                {
-                  paddingHorizontal: 20,
-                  paddingVertical: 14,
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.1,
-                  shadowRadius: 8,
-                  elevation: 4,
-                }
-              )}
-              activeOpacity={0.7}
-            >
-              <MaterialCommunityIcons
-                name="magnify"
-                size={20}
-                color="#757575"
-                style={tw`mr-3`}
-              />
-              <Text style={tw.style(`text-[#212121] text-base`, { fontFamily: "RobotoRegular" })}>
-                Where to?
-              </Text>
-            </TouchableOpacity>
-
-            {/* Notification Button */}
             <TouchableOpacity
               onPress={() => router.push("/(app)/notifications")}
               style={tw`bg-white w-[40px] h-[40px] rounded-full items-center justify-center shadow-lg relative`}
@@ -1641,17 +1633,66 @@ export default function HomeScreen() {
                 size={20}
                 color="#1F2937"
               />
-              {/* Notification badge can be added here */}
+              {unread_count > 0 ? (
+                <View
+                  style={{
+                    position: "absolute",
+                    top: -4,
+                    right: -4,
+                    minWidth: 18,
+                    height: 18,
+                    borderRadius: 9,
+                    backgroundColor: "#FF3B30",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    paddingHorizontal: 4,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#FFFFFF",
+                      fontSize: 11,
+                      fontWeight: "700",
+                    }}
+                  >
+                    {unread_count > 9 ? "9+" : unread_count}
+                  </Text>
+                </View>
+              ) : null}
             </TouchableOpacity>
           </View>
 
+          {/* Location permission / loading prompt - so user knows why map might not show current location */}
+          {locationError ? (
+            <View style={tw`mx-4 mt-2 px-4 py-3 bg-amber-100 dark:bg-amber-900/30 rounded-xl flex-row items-center justify-between`}>
+              <Text style={tw`text-amber-800 dark:text-amber-200 text-sm flex-1`} numberOfLines={2}>
+                Location access is needed to show your position on the map.
+              </Text>
+              <TouchableOpacity
+                onPress={() => typeof refreshLocation === 'function' && refreshLocation()}
+                style={tw`ml-3 px-4 py-2 bg-amber-500 rounded-lg`}
+              >
+                <Text style={tw`text-white font-semibold text-sm`}>Allow</Text>
+              </TouchableOpacity>
+            </View>
+          ) : locationLoading && !hasValidLocation ? (
+            <View style={tw`mx-4 mt-2 px-4 py-2 bg-white/90 dark:bg-gray-800/90 rounded-xl flex-row items-center`}>
+              <Text style={tw`text-gray-600 dark:text-gray-300 text-sm`}>Getting your location…</Text>
+            </View>
+          ) : null}
+
           {/* Show booking info if exists and not dismissed */}
           {Object.keys(booking).length > 0 && 
-           booking?.status !== 'cancelled' && 
-           booking?.status !== 'completed' &&
+           String(booking?.status ?? '').toLowerCase() !== 'cancelled' &&
+           String(booking?.status ?? '').toLowerCase() !== 'completed' &&
            dismissedBookingId !== booking?.booking_id && (
-            <View style={tw`bg-white p-4 shadow-xl relative`}>
-              {/* X button to dismiss */}
+            <View
+              style={tw.style(`ml-4 bg-white p-3 shadow-xl rounded-2xl overflow-hidden relative`, {
+                marginTop: -44,
+                marginRight: 64,
+              })}
+            >
+              {/* X button to dismiss - positioned with padding from edges */}
               <TouchableOpacity
                 onPress={async () => {
                   const bookingId = booking?.booking_id || '';
@@ -1662,22 +1703,22 @@ export default function HomeScreen() {
                     logger.debug('Booking dismissed by user', { bookingId: String(bookingId) });
                   }
                 }}
-                style={tw`absolute top-2 right-2 z-10 w-8 h-8 items-center justify-center`}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={tw`absolute top-2.5 right-2.5 z-10 w-8 h-8 rounded-full bg-gray-100 items-center justify-center`}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <AntDesign name="close" size={18} color="#666" />
+                <AntDesign name="close" size={15} color="#666" />
               </TouchableOpacity>
-              <View style={tw`flex-row justify-between`}>
-                <View style={tw`flex-1`}>
+              <View style={tw`flex-row justify-between pr-7`}>
+                <View style={tw`flex-1 min-w-0`}>
                   <Text
-                    style={tw.style(`text-base text-[#484C52]`, {
+                    style={tw.style(`text-[15px] text-[#484C52]`, {
                       fontFamily: "RobotoBold",
                     })}
                   >
                     Booking Date
                   </Text>
                   <Text
-                    style={tw.style(`text-2xl text-base-green`, {
+                    style={tw.style(`text-[24px] leading-[28px] text-base-green`, {
                       fontFamily: "RobotoBold",
                     })}
                   >
@@ -1697,7 +1738,7 @@ export default function HomeScreen() {
                   </Text>
                   
                   {/* Driver Status Section */}
-                  <View style={tw`mt-3`}>
+                  <View style={tw`mt-2`}>
                     {booking?.driver_id ? (
                       <>
                         <TouchableOpacity
@@ -1710,10 +1751,10 @@ export default function HomeScreen() {
                               activeRideSheetRef?.current?.open();
                             }, 1000);
                           }}
-                          style={tw`px-4 py-1.5 self-start border border-base-green rounded-[8px]`}
+                          style={tw`px-3 py-1 self-start border border-base-green rounded-[8px]`}
                         >
                           <Text
-                            style={tw.style(`text-sm text-base-green`, {
+                            style={tw.style(`text-[13px] text-base-green`, {
                               fontFamily: "RobotoBold",
                             })}
                           >
@@ -1721,7 +1762,7 @@ export default function HomeScreen() {
                           </Text>
                         </TouchableOpacity>
                         {(booking as any)?.driver_name && (
-                          <View style={tw`mt-2`}>
+                          <View style={tw`mt-1.5`}>
                             <Text
                               style={tw.style(`text-xs text-[#666]`, {
                                 fontFamily: "RobotoRegular",
@@ -1731,7 +1772,7 @@ export default function HomeScreen() {
                             </Text>
                             {(booking as any)?.vehicle_type && (
                               <Text
-                                style={tw.style(`text-xs text-[#999] mt-1`, {
+                                style={tw.style(`text-xs text-[#999] mt-0.5`, {
                                   fontFamily: "RobotoRegular",
                                 })}
                               >
@@ -1742,9 +1783,9 @@ export default function HomeScreen() {
                         )}
                       </>
                     ) : (
-                      <View style={tw`px-4 py-1.5 self-start border border-gray-300 rounded-[8px] bg-gray-50`}>
+                      <View style={tw`px-3 py-1 self-start border border-gray-300 rounded-[8px] bg-gray-50`}>
                         <Text
-                          style={tw.style(`text-sm text-gray-600`, {
+                          style={tw.style(`text-[13px] text-gray-600`, {
                             fontFamily: "RobotoRegular",
                           })}
                         >
@@ -1754,26 +1795,36 @@ export default function HomeScreen() {
                     )}
                   </View>
                 </View>
-                <View style={tw`basis-[40%] ml-4`}>
+                <View style={tw`basis-[40%] ml-3 flex-1 min-w-0`}>
                   <Text
-                    style={tw.style(`text-[15px] text-[#484C52] text-right mb-2`, {
+                    style={tw.style(`text-xs text-[#8F92A1] text-right mb-0.5`, {
+                      fontFamily: "RobotoMedium",
+                    })}
+                  >
+                    Drop-off
+                  </Text>
+                  <Text
+                    style={tw.style(`text-[14px] text-[#484C52] text-right mb-1.5`, {
                       fontFamily: "RobotoBold",
                     })}
-                    numberOfLines={3}
+                    numberOfLines={2}
                   >
                     {booking?.dropoff_location && booking.dropoff_location.trim() !== '' && !booking.dropoff_location.toLowerCase().includes('select')
-                      ? booking.dropoff_location
+                      ? (() => {
+                          const formatted = formatAddressForDisplay(booking.dropoff_location);
+                          return formatted.primary ? formatted.full : booking.dropoff_location;
+                        })()
                       : "Drop-off location"}
                   </Text>
-                  <View style={tw`flex-row items-center justify-end gap-x-1 mb-2`}>
+                  <View style={tw`flex-row items-center justify-end gap-x-1 mb-1.5`}>
                     <AntDesign
                       name="clock-circle"
-                      size={21}
+                      size={19}
                       color={tw.color("base-green")}
                     />
                     <Text
                       style={tw.style(
-                        `text-[15px] text-base-green text-right`,
+                        `text-[14px] text-base-green text-right`,
                         {
                           fontFamily: "RobotoBold",
                         }
@@ -1795,7 +1846,7 @@ export default function HomeScreen() {
                     </Text>
                   </View>
                   <Text
-                    style={tw.style(`text-[15px] text-[#FDBC14] text-right capitalize mb-2`, {
+                    style={tw.style(`text-[14px] text-[#FDBC14] text-right capitalize mb-1.5`, {
                       fontFamily: "RobotoBold",
                     })}
                   >
@@ -1805,10 +1856,10 @@ export default function HomeScreen() {
                   </Text>
                   <TouchableOpacity
                     onPress={() => ViewBooking(booking?.booking_id as string)}
-                    style={tw`px-4 py-1 self-end border border-blue-600 rounded-[8px]`}
+                    style={tw`px-3 py-0.5 self-end border border-blue-600 rounded-[8px]`}
                   >
                     <Text
-                      style={tw.style(`text-sm text-blue-600`, {
+                      style={tw.style(`text-[13px] text-blue-600`, {
                         fontFamily: "RobotoBold",
                       })}
                     >
@@ -1818,11 +1869,11 @@ export default function HomeScreen() {
                 </View>
               </View>
               <TouchableOpacity
-                style={tw`ml-2 mt-3 pt-3 border-t border-zinc-200`}
-                onPress={() => router.push("/booked-rides")}
+                style={tw`ml-1 mt-2 pt-2 border-t border-zinc-200`}
+                onPress={() => router.push("/(app)/(tabs)/rides?tab=upcoming")}
               >
                 <Text
-                  style={tw.style(`text-sm text-base-green`, {
+                  style={tw.style(`text-[13px] text-base-green`, {
                     fontFamily: "RobotoBold",
                   })}
                 >
@@ -1833,7 +1884,7 @@ export default function HomeScreen() {
           )}
         </View>
 
-        {/* Recenter Button (Bottom Right) - Always visible when location is available */}
+        {/* Recenter Button (Bottom Right) - Above Find Ride / Book a Ride */}
         {hasValidLocation && location.latitude !== 0 && location.longitude !== 0 && (
           <TouchableOpacity
             onPress={() => {
@@ -1846,24 +1897,24 @@ export default function HomeScreen() {
                   },
                   500
                 );
-                logger.debug('Map recentered to user location', {
+                logger.debug("Map recentered to user location", {
                   lat: location.latitude,
                   lng: location.longitude,
                 });
               }
             }}
             style={{
-              position: 'absolute',
+              position: "absolute",
               width: 48,
               height: 48,
-              bottom: 240, // Position above action buttons and bottom nav (bottom nav ~80px + buttons ~120px + padding ~40px)
-              right: 16,
-              backgroundColor: '#FFFFFF',
+              bottom: insets.bottom + 16 + 120,
+              right: Math.max(insets.right, 16),
+              backgroundColor: "#FFFFFF",
               borderRadius: 24,
-              alignItems: 'center',
-              justifyContent: 'center',
+              alignItems: "center",
+              justifyContent: "center",
               zIndex: 1000,
-              shadowColor: '#000',
+              shadowColor: "#000",
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: 0.15,
               shadowRadius: 8,
@@ -1879,93 +1930,110 @@ export default function HomeScreen() {
           </TouchableOpacity>
         )}
 
-        {/* Show Active Ride button if there's an active ride, otherwise show Find Ride and Book a Ride buttons */}
+        {/* Where are you going? - single CTA (opens booking flow) */}
         <View
-          style={tw.style(
-            `flex-col gap-y-2 absolute bottom-6 px-6 right-0 left-0`,
-            {
-              marginTop: StatusBar.currentHeight,
+          style={[
+            tw.style(`absolute left-0 right-0`, {
               display: "flex",
-            }
-          )}
+            }),
+            {
+              bottom: insets.bottom + 12,
+              paddingLeft: Math.max(insets.left, 20),
+              paddingRight: Math.max(insets.right, 20),
+            },
+          ]}
         >
-          {!loading &&
-            (temp?.ride_id && Object.keys(temp || {}).length > 0 ? (
-              <TouchableOpacity
-                onPress={() => {
-                  dispatch(
-                    setAppData({
-                      isBooking: true,
-                    })
-                  );
-                  setRide((prev) => ({ ...prev, screen: "WAITING" }));
-
-                  activeRideSheetRef?.current?.open();
-                }}
-                style={tw`flex-row items-center justify-center gap-x-2 py-4 bg-base-green rounded-[8px]`}
+          {/* Where are you going? — opens find-ride flow (unchanged); only schedule actions open Book a Ride sheet */}
+          {!loading && (
+            <TouchableOpacity
+              onPress={() => {
+                openFindRideSheet();
+              }}
+              style={tw.style(
+                `rounded-full flex-row items-center`,
+                {
+                  backgroundColor: "#E8F5F0",
+                  borderWidth: 1.5,
+                  borderColor: tw.color("base-green") ?? "#2E7D52",
+                  paddingHorizontal: 18,
+                  paddingVertical: 16,
+                  shadowColor: "#000",
+                  shadowOffset: { width: 0, height: 6 },
+                  shadowOpacity: 0.12,
+                  shadowRadius: 10,
+                  elevation: 10,
+                }
+              )}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons
+                name="magnify"
+                size={22}
+                color={tw.color("base-green")}
+                style={tw`mr-3`}
+              />
+              <Text
+                style={tw.style(`text-[15px] text-[#242E42]`, {
+                  fontFamily: "RobotoRegular",
+                })}
               >
-                <Text
-                  style={tw.style(`text-base text-white`, {
-                    fontFamily: "RobotoBold",
-                  })}
-                >
-                  Active Ride
-                </Text>
-              </TouchableOpacity>
-            ) : (
-              <>
-                <TouchableOpacity
-                  onPress={() => {
-                    dispatch(
-                      setAppData({
-                        isBooking: true,
-                      })
-                    );
-                    rideSheetRef?.current?.open();
-                  }}
-                  style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[8px]`}
-                >
-                  <Image
-                    resizeMode="contain"
-                    source={require("@images/keke-svg.png")}
-                    style={tw`w-[30px] h-[30px]`}
-                  />
-
-                  <Text
-                    style={tw.style(`text-base text-white`, {
-                      fontFamily: "RobotoBold",
-                    })}
-                  >
-                    Find Ride
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => {
-                    dispatch(
-                      setAppData({
-                        isBooking: true,
-                      })
-                    );
-                    bookRideSheetRef?.current?.open();
-                  }}
-                  style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-black bg-white rounded-[8px]`}
-                >
-                  <Image
-                    resizeMode="contain"
-                    source={require("@images/bike-svg.png")}
-                    style={tw`w-[28px] h-[28px]`}
-                  />
-
-                  <Text
-                    style={tw.style(`text-base text-black`, {
-                      fontFamily: "RobotoBold",
-                    })}
-                  >
-                    Book a Ride
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ))}
+                Where are you going?
+              </Text>
+            </TouchableOpacity>
+          )}
+          {/* Schedule a ride for later — card CTA opens schedule sheet */}
+          <TouchableOpacity
+            onPress={() => {
+              dispatch(setAppData({ isBooking: true }));
+              setBookRideOpenVersion((value) => value + 1);
+              setTimeout(() => bookRideSheetRef?.current?.open(), 100);
+            }}
+            activeOpacity={0.75}
+            style={{
+              backgroundColor: "#FFFFFF",
+              borderRadius: 14,
+              borderWidth: 1.5,
+              borderColor: "#1A1A1A",
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              flexDirection: "row",
+              alignItems: "center",
+              marginTop: 8,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.06,
+              shadowRadius: 4,
+              elevation: 2,
+            }}
+          >
+            <Text style={{ fontSize: 20, marginRight: 12 }}>📅</Text>
+            <View style={tw`flex-1`}>
+              <Text
+                style={tw.style(`text-[14px] text-[#1A1A1A]`, {
+                  fontFamily: "RobotoBold",
+                  fontWeight: "600",
+                })}
+              >
+                Schedule a ride for later
+              </Text>
+              <Text
+                style={[
+                  tw.style(`text-[12px] text-[#757575]`, { fontFamily: "RobotoRegular" }),
+                  { marginTop: 2 },
+                ]}
+              >
+                Plan your trip in advance
+              </Text>
+            </View>
+            <Text
+              style={[
+                tw.style(`text-[18px]`, { fontFamily: "RobotoRegular" }),
+                { color: tw.color("base-green") ?? "#2E7D52" },
+              ]}
+            >
+              →
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
       <Portal>
@@ -1975,12 +2043,15 @@ export default function HomeScreen() {
         <BookRideSheet
           bottomSheetRef={bookRideSheetRef}
           getActiveBooking={getActiveBooking}
+          openVersion={bookRideOpenVersion}
         />
       </Portal>
       <Portal>
         <FindRideSheet
           bottomSheetRef={rideSheetRef}
           getActiveRide={getActiveRide}
+          onSheetClose={() => setInitialDropoff(null)}
+          initialDropoff={initialDropoff}
         />
       </Portal>
       <Portal>

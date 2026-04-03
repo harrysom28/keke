@@ -1,8 +1,10 @@
 import {
   ActivityIndicator,
+  Dimensions,
   Image,
   ImageBackground,
   Modal,
+  Platform,
   Pressable,
   StatusBar,
   Text,
@@ -11,13 +13,17 @@ import {
   View,
 } from "react-native";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import Checkbox from "expo-checkbox";
 import FlashMessage from "react-native-flash-message";
 import { ScrollView } from "react-native-gesture-handler";
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+} from "react-native-safe-area-context";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import tw from "@/lib/tailwind";
-import { useDispatch } from "react-redux";
 
 const Checks = [
   "Waiting for long time",
@@ -67,7 +73,8 @@ const CancelPrompt = ({
   setPrompt: React.Dispatch<React.SetStateAction<boolean>>;
   clear: () => void;
 }) => {
-  const dispatch = useDispatch();
+  const screenHeight = Dimensions.get("window").height;
+  const cardMaxHeight = Math.min(screenHeight * 0.8, screenHeight - 120);
 
   const Return = () => {
     setPrompt(false);
@@ -79,43 +86,51 @@ const CancelPrompt = ({
       style={tw`flex-1 flex-col justify-center items-center absolute bg-[#1919194D] z-10 inset-0`}
     >
       <View
-        style={tw`flex-col gap-y-6 h-[400px] w-[90%] p-2.5 bg-white rounded-[8px]`}
+        style={tw.style(`flex-col gap-y-6 w-[90%] p-2.5 bg-white rounded-[8px]`, {
+          maxHeight: cardMaxHeight,
+        })}
       >
-        <MaterialIcons
-          onPress={Return}
-          name="close"
-          size={24}
-          style={tw`self-end`}
-          color="#5A5A5A"
-        />
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={tw`gap-y-6`}
+        >
+          <MaterialIcons
+            onPress={Return}
+            name="close"
+            size={24}
+            style={tw`self-end`}
+            color="#5A5A5A"
+          />
 
-        <Image
-          source={require("@images/sad-emoji.png")}
-          style={tw`w-[106px] h-[106px] self-center`}
-        />
-        <Text
-          style={tw.style(`text-xl text-center`, {
-            fontFamily: "RobotoMedium",
-          })}
-        >
-          We're so sad about your cancellation
-        </Text>
-        <Text
-          style={tw.style(`text-base text-center text-[#898989]`, {
-            fontFamily: "RobotoMedium",
-          })}
-        >
-          We will continue to improve our service & satify you on the next trip.
-        </Text>
-        <Pressable onPress={Return} style={tw` bg-base-green py-4 rounded`}>
+          <Image
+            source={require("@images/sad-emoji.png")}
+            style={tw`w-[106px] h-[106px] self-center`}
+          />
           <Text
-            style={tw.style(`text-base text-center text-white`, {
+            style={tw.style(`text-xl text-center`, {
               fontFamily: "RobotoMedium",
             })}
           >
-            Back Home
+            We're so sad about your cancellation
           </Text>
-        </Pressable>
+          <Text
+            style={tw.style(`text-base text-center text-[#898989]`, {
+              fontFamily: "RobotoMedium",
+            })}
+          >
+            We will continue to improve our service & satify you on the next trip.
+          </Text>
+          <Pressable onPress={Return} style={tw` bg-base-green py-4 rounded`}>
+            <Text
+              style={tw.style(`text-base text-center text-white`, {
+                fontFamily: "RobotoMedium",
+              })}
+            >
+              Back Home
+            </Text>
+          </Pressable>
+        </ScrollView>
       </View>
     </View>
   );
@@ -133,37 +148,33 @@ interface CRProps {
   clear: () => void;
 }
 
-export default function CancelRideModal({
-  show,
+function CancelRideModalInner({
   setShow,
   action,
   clear,
-}: Readonly<CRProps>) {
+}: Omit<CRProps, "show">) {
   const [checked, setChecked] = useState(Checks[0]);
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [prompt, setPrompt] = useState(false);
 
   const fRef = useRef<FlashMessage>(null);
+  const insets = useCombinedSafeInsets();
 
   const showError = (text: string) => {
     fRef.current?.showMessage({ type: "danger", message: text });
   };
 
   return (
-    <Modal
-      visible={show}
-      animationType="fade"
-      style={{ flex: 1, position: "relative" }}
-      statusBarTranslucent
-    >
+    <>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <FlashMessage
         ref={fRef}
         position="top"
         floating
         style={{
           elevation: 1000,
-          marginTop: StatusBar.currentHeight,
+          marginTop: insets.top + 8,
           zIndex: 1000000,
         }}
         duration={3000}
@@ -173,14 +184,21 @@ export default function CancelRideModal({
         <CancelPrompt setPrompt={setPrompt} setShow={setShow} clear={clear} />
       )}
       <ImageBackground
-        style={tw.style(`px-6 `, {
-          flex: 1,
-          paddingTop: StatusBar.currentHeight + 5,
+        style={tw.style(`flex-1`, {
+          paddingTop: insets.top + 8,
+          paddingLeft: 24 + insets.left,
+          paddingRight: 24 + insets.right,
+          paddingBottom: Math.max(insets.bottom, 8),
         })}
         source={require("@images/pattern-bg.png")}
       >
         <View style={tw`flex-row items-center justify-between w-[70%]`}>
-          <TouchableOpacity onPress={() => setShow(false)}>
+          <TouchableOpacity
+            onPress={() => setShow(false)}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
             <Ionicons
               name="arrow-back-outline"
               size={24}
@@ -192,7 +210,12 @@ export default function CancelRideModal({
             Cancel Ride
           </Text>
         </View>
-        <ScrollView>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            paddingBottom: Math.max(insets.bottom, 16),
+          }}
+        >
           <Text
             style={tw.style("text-base text-[#000000A1] my-5", {
               fontFamily: "RobotoMedium",
@@ -248,6 +271,27 @@ export default function CancelRideModal({
           </Pressable>
         </ScrollView>
       </ImageBackground>
+    </>
+  );
+}
+
+export default function CancelRideModal({
+  show,
+  setShow,
+  action,
+  clear,
+}: Readonly<CRProps>) {
+  return (
+    <Modal
+      visible={show}
+      animationType="fade"
+      presentationStyle="fullScreen"
+      statusBarTranslucent={Platform.OS === "android"}
+      onRequestClose={() => setShow(false)}
+    >
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <CancelRideModalInner setShow={setShow} action={action} clear={clear} />
+      </SafeAreaProvider>
     </Modal>
   );
 }

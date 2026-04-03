@@ -153,7 +153,18 @@ export const getVehicleModels = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Default year range when a vehicle type has no years configured (e.g. current year back to 15 years).
+ * Used so driver registration always has a years list.
+ */
+const DEFAULT_YEARS_RANGE = 15;
+const getDefaultYears = () => {
+  const currentYear = new Date().getFullYear();
+  return Array.from({ length: DEFAULT_YEARS_RANGE + 1 }, (_, i) => currentYear - i);
+};
+
+/**
  * Get vehicle years - GET /api/vehicle/years
+ * Returns years for driver registration. Uses vehicle type's configured years, or a default range (current year back 15 years).
  */
 export const getVehicleYears = asyncHandler(async (req, res) => {
   const { vehicleTypeId } = req.query;
@@ -165,7 +176,10 @@ export const getVehicleYears = asyncHandler(async (req, res) => {
       throw new NotFoundError('Vehicle type');
     }
 
-    const years = vehicleType.getActiveYears();
+    let years = vehicleType.getActiveYears && vehicleType.getActiveYears();
+    if (!years || !Array.isArray(years) || years.length === 0) {
+      years = getDefaultYears();
+    }
 
     return res.json({
       status: 'success',
@@ -175,17 +189,21 @@ export const getVehicleYears = asyncHandler(async (req, res) => {
     });
   }
 
-  // Get all unique years across all vehicle types
+  // No vehicleTypeId: return all unique years from vehicle types, or default range
   const allVehicleTypes = await VehicleType.find({ isActive: true });
   const yearSet = new Set();
 
   allVehicleTypes.forEach((type) => {
-    type.getActiveYears().forEach((year) => {
-      yearSet.add(year);
-    });
+    const typeYears = type.getActiveYears && type.getActiveYears();
+    if (typeYears && typeYears.length) {
+      typeYears.forEach((year) => yearSet.add(year));
+    }
   });
 
-  const years = Array.from(yearSet).sort((a, b) => b - a); // Descending order
+  const years =
+    yearSet.size > 0
+      ? Array.from(yearSet).sort((a, b) => b - a)
+      : getDefaultYears();
 
   res.json({
     status: 'success',

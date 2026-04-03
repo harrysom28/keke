@@ -118,7 +118,7 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
       animationType="spring"
       backdropMaskColor="#19191900"
       openDuration={1000}
-      disableKeyboardHandling={true}
+      disableKeyboardHandling={false}
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
       {display === "payment" ? (

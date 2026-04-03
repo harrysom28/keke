@@ -20,6 +20,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 
 import FormInput from "@/components/formInput";
+import { validators } from "@/utils/formValidators";
 import { OtpInput } from "react-native-otp-entry";
 import { RESET_PASSWORD } from "@/constants";
 import axios from "axios";
@@ -28,7 +29,7 @@ import tw from "@/lib/tailwind";
 
 const SetPassword = () => {
   const router = useRouter();
-  const { otp } = useLocalSearchParams();
+  const { otp, reset_token } = useLocalSearchParams<{ otp?: string; reset_token?: string }>();
   const [state, setState] = useState({
     password: "",
     password_confirmation: "",
@@ -43,8 +44,11 @@ const SetPassword = () => {
       });
 
     setLoading(true);
+    const payload = reset_token
+      ? { reset_token, password: state.password, password_confirmation: state.password_confirmation }
+      : { otp, password: state.password, password_confirmation: state.password_confirmation };
     axios
-      .post(RESET_PASSWORD, { otp, ...state })
+      .post(RESET_PASSWORD, payload)
       .then(({ data }) => {
         console.log(data);
         showMessage({
@@ -55,13 +59,13 @@ const SetPassword = () => {
         router.navigate("/login");
       })
       .catch((err) => {
-        console.log(err?.response?.data);
-        if (err?.response?.data?.message) {
-          showMessage({
-            type: "danger",
-            message: err?.response?.data.message,
-          });
-        }
+        const msg =
+          err?.response?.data?.message ??
+          err?.response?.data?.error?.message ??
+          (typeof err?.response?.data?.error === "string" ? err.response.data.error : null) ??
+          err?.message ??
+          "Could not reset password. Please try again.";
+        showMessage({ type: "danger", message: msg });
       })
       .finally(() => setLoading(false));
   };
@@ -121,6 +125,8 @@ const SetPassword = () => {
               placeholder="Enter Your New Password"
               height={50}
               secureTextEntry
+              passwordVisibleByDefault
+              validate={validators.passwordRequired(6)}
             />
             <FormInput
               value={state.password_confirmation}
@@ -130,6 +136,11 @@ const SetPassword = () => {
               placeholder="Confirm Password"
               height={50}
               secureTextEntry
+              passwordVisibleByDefault
+              validate={(v) => {
+                if (!v?.trim()) return "Confirm your password";
+                return v !== state.password ? "Passwords do not match" : undefined;
+              }}
             />
 
             <Text

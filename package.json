@@ -1,0 +1,17 @@
+{
+  "scripts": {
+    "ios": "npm run ios --prefix mobile",
+    "android": "npm run android --prefix mobile",
+    "start": "npm run start --prefix mobile",
+    "admin": "serve admin -l 3000"
+  },
+  "dependencies": {
+    "expo": "^55.0.8",
+    "mongoose": "^9.1.5"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.10",
+    "serve": "^14.2.5",
+    "typescript": "~5.9.2"
+  }
+}

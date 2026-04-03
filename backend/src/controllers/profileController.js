@@ -43,10 +43,39 @@ export const updateProfile = asyncHandler(async (req, res) => {
   if (city !== undefined) user.city = city;
   if (state !== undefined) user.state = state;
   if (country !== undefined) user.country = country;
-  if (profileImage !== undefined) user.profileImage = profileImage;
-  if (policeEmergencyContact !== undefined) user.policeEmergencyContact = policeEmergencyContact;
+  if (profileImage !== undefined) {
+    // Schema expects string URL only; ignore object (e.g. mobile sending { uri, type, name } by mistake)
+    if (typeof profileImage === 'string' && profileImage.trim()) {
+      user.profileImage = profileImage.trim();
+    } else if (!profileImage || (typeof profileImage === 'object' && !profileImage.uri)) {
+      user.profileImage = null;
+    }
+    // else: profileImage is object with uri (file reference) — do not set, keep existing
+  }
+  if (policeEmergencyContact !== undefined) {
+    // Schema expects string; accept string or object with phone/number for compatibility
+    if (typeof policeEmergencyContact === 'string') {
+      user.policeEmergencyContact = policeEmergencyContact.trim() || null;
+    } else if (policeEmergencyContact && typeof policeEmergencyContact === 'object' && (policeEmergencyContact.phone || policeEmergencyContact.number)) {
+      user.policeEmergencyContact = String(policeEmergencyContact.phone || policeEmergencyContact.number).trim() || null;
+    } else {
+      user.policeEmergencyContact = null;
+    }
+  }
 
-  await user.save();
+  try {
+    await user.save();
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      const msg = Object.values(err.errors || {}).map((e) => e.message).join('; ') || err.message;
+      throw new ValidationError(msg);
+    }
+    if (err.code === 11000) {
+      const field = err.message.includes('email') ? 'Email' : err.message.includes('phone') ? 'Phone number' : 'Field';
+      throw new ConflictError(`${field} is already in use`);
+    }
+    throw err;
+  }
 
   logger.info(`Profile updated for user ${userId}`);
 
@@ -229,6 +258,7 @@ export const getReferralCode = asyncHandler(async (req, res) => {
 
 /**
  * Get referral list - GET /api/user/profile/referral-list
+ * Includes success status: invited user completed registration AND at least 1 ride
  */
 export const getReferralList = asyncHandler(async (req, res) => {
   const userId = req.user._id;
@@ -241,12 +271,29 @@ export const getReferralList = asyncHandler(async (req, res) => {
 
   const skip = (page - 1) * limit;
 
-  // Find users referred by this user
   const referredUsers = await User.find({ referredBy: userId })
-    .select('name email phone createdAt totalRides')
+    .select('name email phone profileImage createdAt isRegCompleted')
     .sort({ createdAt: -1 })
     .skip(skip)
-    .limit(parseInt(limit));
+    .limit(parseInt(limit))
+    .lean();
+
+  // For each referred user, check if they've completed at least 1 ride
+  const referralsWithStatus = await Promise.all(
+    referredUsers.map(async (refUser) => {
+      const completedRides = await Ride.countDocuments({ rider: refUser._id, status: 'completed' });
+      const isSuccessful = !!(refUser.isRegCompleted && completedRides >= 1);
+      return {
+        referred_user_id: refUser._id.toString(),
+        referred_user_name: refUser.name || '—',
+        referred_user_email_phone: refUser.email || refUser.phone || '—',
+        referred_user_image: refUser.profileImage || null,
+        joined_at: refUser.createdAt,
+        total_rides: completedRides,
+        verified: isSuccessful,
+      };
+    })
+  );
 
   const total = await User.countDocuments({ referredBy: userId });
 
@@ -254,14 +301,7 @@ export const getReferralList = asyncHandler(async (req, res) => {
     status: 'success',
     data: {
       referral_code: user.referralCode,
-      referrals: referredUsers.map((refUser) => ({
-        user_id: refUser._id.toString(),
-        name: refUser.name,
-        email: refUser.email,
-        phone: refUser.phone,
-        joined_at: refUser.createdAt,
-        total_rides: refUser.totalRides || 0,
-      })),
+      referrals: referralsWithStatus,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),

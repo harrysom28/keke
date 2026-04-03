@@ -1,7 +1,10 @@
-import SharedNotificationsScreen from "@/shared/screens/notifications";
+import NotificationInbox from "@/components/NotificationInbox";
+import { AuthState } from "@/store/AuthSlice";
+import { useSelector } from "react-redux";
 
 const NotificationsScreen = () => {
-  return <SharedNotificationsScreen />;
+  const { user } = useSelector(AuthState);
+  return <NotificationInbox userId={user?.profile?.user_id || ""} isDriver />;
 };
 
 export default NotificationsScreen;

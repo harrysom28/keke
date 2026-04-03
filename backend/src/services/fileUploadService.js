@@ -34,8 +34,8 @@ if (UPLOAD_PROVIDER === 'cloudinary' && process.env.CLOUDINARY_CLOUD_NAME) {
   });
 }
 
-// Allowed file types
-const allowedMimeTypes = (process.env.ALLOWED_FILE_TYPES || 'image/jpeg,image/png,image/jpg,image/gif,application/pdf')
+// Allowed file types (include HEIC for iOS)
+const allowedMimeTypes = (process.env.ALLOWED_FILE_TYPES || 'image/jpeg,image/png,image/jpg,image/gif,image/heic,application/pdf')
   .split(',')
   .map((type) => type.trim());
 
@@ -207,9 +207,15 @@ export const getFileUrl = (file) => {
 
   if (file.path) {
     // Local file - construct URL
-    const baseUrl = process.env.API_BASE_URL || 'http://localhost:8000';
+    const baseUrl = process.env.API_BASE_URL;
+    if (!baseUrl && process.env.NODE_ENV === 'production') {
+      logger.error(
+        'CRITICAL: API_BASE_URL is not set. Local file URLs will be inaccessible. Set API_BASE_URL to your public API origin.'
+      );
+    }
+    const resolvedBase = baseUrl || 'http://localhost:8000';
     const relativePath = file.path.replace(/^.*uploads[\/\\]/, '/uploads/').replace(/\\/g, '/');
-    return `${baseUrl}${relativePath}`;
+    return `${resolvedBase}${relativePath}`;
   }
 
   return file.url || null;

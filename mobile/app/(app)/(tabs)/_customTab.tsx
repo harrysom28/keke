@@ -1,19 +1,26 @@
 import { Pressable, Text, View } from "react-native";
 import React, { ReactElement } from "react";
 import Svg, { Path } from "react-native-svg";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useTranslation } from "react-i18next";
 
 import { AntDesign } from "@expo/vector-icons";
 import { router } from "expo-router";
 import tw from "@/lib/tailwind";
 
 interface ITabs {
-  screen: string[];
+  /** Substring matched against `route.name` (e.g. `(home)/home` → match `home`). */
+  routeMatch: string;
+  path: string;
+  labelKey: "tabs.home" | "tabs.offers" | "tabs.rides" | "tabs.profile";
   icon: (focused: boolean) => ReactElement;
 }
 
-const Tabs: ITabs[] = [
+const RIDER_TAB_ITEMS: ITabs[] = [
   {
-    screen: ["Home", "/(home)/home"],
+    routeMatch: "home",
+    path: "/(home)/home",
+    labelKey: "tabs.home",
     icon: (focused) => (
       <Svg width="25" height="24" viewBox="0 0 25 24" fill="none">
         <Path
@@ -38,7 +45,9 @@ const Tabs: ITabs[] = [
     ),
   },
   {
-    screen: ["Offers", "/offers"],
+    routeMatch: "offers",
+    path: "/offers",
+    labelKey: "tabs.offers",
     icon: (focused) => (
       <Svg width="25" height="24" viewBox="0 0 19 19" fill="none">
         <Path
@@ -68,7 +77,9 @@ const Tabs: ITabs[] = [
     ),
   },
   {
-    screen: ["Rides", "/rides"],
+    routeMatch: "rides",
+    path: "/rides",
+    labelKey: "tabs.rides",
     icon: (focused) => (
       <View>
         <AntDesign
@@ -80,7 +91,9 @@ const Tabs: ITabs[] = [
     ),
   },
   {
-    screen: ["Profile", "/(profile)/profile"],
+    routeMatch: "profile",
+    path: "/(profile)/profile",
+    labelKey: "tabs.profile",
     icon: (focused) => (
       <Svg width="25" height="24" viewBox="0 0 25 24" fill="none">
         <Path
@@ -113,16 +126,17 @@ interface TProps {
 }
 
 const TabItem = ({ item, currentRouteName }: TProps) => {
-  const { screen, icon } = item;
-  const isFocused = currentRouteName.includes(item.screen[0].toLowerCase());
+  const { t } = useTranslation();
+  const { path, icon, routeMatch, labelKey } = item;
+  const isFocused = currentRouteName.toLowerCase().includes(routeMatch);
   const handlePress = () => {
-    router.navigate(screen[1] as any);
+    router.navigate(path as any);
   };
 
   return (
     <Pressable
       onPress={handlePress}
-      style={tw`flex-col gap-y-2 basis-[25%] justify-end items-center`}
+      style={tw`flex-col gap-y-1 basis-[25%] justify-end items-center`}
     >
       <View
         style={tw.style(
@@ -135,36 +149,49 @@ const TabItem = ({ item, currentRouteName }: TProps) => {
       </View>
       {!isFocused && (
         <Text
-          style={tw.style("text-[#484C52", {
+          style={tw.style("text-[#484C52]", {
             fontSize: 12,
             fontFamily: "RobotoRegular",
           })}
         >
-          {screen[0]}
+          {t(labelKey, { defaultValue: routeMatch })}
         </Text>
       )}
     </Pressable>
   );
 };
 
-const BottomTabBar = ({ state }: any) => {
-  // console.log(state.routes[state.index].name);
+const BottomTabBar = ({
+  state,
+}: {
+  state?: { routes: { name: string }[]; index: number };
+}) => {
+  const { i18n } = useTranslation();
+  const routeName = state?.routes?.[state?.index ?? 0]?.name ?? "";
+  if (!state?.routes?.length) {
+    return null;
+  }
   return (
-    <View
-      style={tw.style(
-        `flex-row justify-between rounded-t-[33px] items-center bg-white px-4 py-3.5`,
-        { elevation: 32 }
-      )}
+    <SafeAreaView
+      key={i18n.language ?? "en"}
+      edges={["bottom"]}
+      style={tw.style(`bg-white`, { elevation: 32 })}
     >
-      {Tabs.map((tab, index) => (
-        <TabItem
-          key={tab.screen[0]}
-          item={tab}
-          // state={state}
-          currentRouteName={state.routes[state.index].name}
-        />
-      ))}
-    </View>
+      <View
+        style={[
+          tw.style(`flex-row justify-between rounded-t-[33px] items-end px-4 pt-2.5`),
+          { paddingBottom: 8 },
+        ]}
+      >
+        {RIDER_TAB_ITEMS.map((tab) => (
+          <TabItem
+            key={tab.routeMatch}
+            item={tab}
+            currentRouteName={routeName}
+          />
+        ))}
+      </View>
+    </SafeAreaView>
   );
 };
 

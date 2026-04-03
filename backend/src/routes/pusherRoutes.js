@@ -5,7 +5,7 @@ import { validationRules, validate } from '../middleware/validation.js';
 
 const router = express.Router();
 
-// All routes require authentication
+// All routes require authentication (public test-pusher is in routes/index.js)
 router.use(protect);
 
 // Pusher authentication route

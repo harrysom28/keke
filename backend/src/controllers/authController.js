@@ -1,12 +1,53 @@
 import User from '../models/User.js';
 import Driver from '../models/Driver.js';
-import { generateTokenPair, verifyRefreshToken, generateAccessToken } from '../utils/jwt.js';
+import AdminSettings from '../models/AdminSettings.js';
+import { generateTokenPair } from '../utils/jwt.js';
+import { addToBlacklist } from '../services/tokenBlacklist.js';
+import { extractTokenFromRequest } from '../middleware/auth.js';
+import { createSession, validateAndRotateSession, revokeSessions } from '../services/sessionService.js';
+import crypto from 'crypto';
 import { generateOTP, storeOTP, verifyOTP, deleteOTP } from '../utils/otp.js';
+import { cache } from '../config/redis.js';
 import { AuthenticationError, ValidationError, ConflictError, NotFoundError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import notificationService from '../services/notificationService.js';
+import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
 const { sendEmail, sendSMS } = notificationService;
 import logger from '../utils/logger.js';
+
+/** Termii / telco template — must match approved copy (channel dnd, sender N-Alert). */
+const termiiOtpSmsBody = (otp) =>
+  `Your Keke App Verification code is: ${otp}. Valid for 10 minutes.`;
+
+/** Log OTP to terminal in development so you can copy it without SMS/email */
+function logOtpToTerminal(otp, target, purpose = 'verification') {
+  if (process.env.NODE_ENV === 'production') return;
+  const line = '════════════════════════════════════════';
+  console.log('\n' + line);
+  console.log('  🔐 OTP (' + purpose + '):', otp);
+  console.log('  For:', target);
+  console.log(line + '\n');
+}
+
+/**
+ * Issue token pair and create device-bound session
+ * device_id: required for session; use 'legacy' if not provided (backward compat)
+ */
+async function issueTokenPairWithSession(user, req) {
+  const deviceId = req.body.device_id || req.headers['x-device-id'] || 'legacy';
+  const ipAddress = req.ip || req.connection?.remoteAddress;
+
+  const tokens = generateTokenPair({ id: user._id, role: user.role });
+
+  await createSession({
+    userId: user._id,
+    deviceId,
+    refreshToken: tokens.refreshToken,
+    ipAddress,
+  });
+
+  return tokens;
+}
 
 /**
  * Register/Signup user
@@ -28,19 +69,41 @@ export const register = asyncHandler(async (req, res) => {
   const sendOtpForUser = async (userDoc, statusCode, baseMessage) => {
     const otp = generateOTP();
 
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info(`🔐 [DEV] OTP for ${userDoc.phone || userDoc.email}: ${otp} (use this if SMS/email not received)`);
+      logOtpToTerminal(otp, userDoc.phone || userDoc.email, 'signup/verification');
+    }
+
     // Store OTP for whatever identifiers exist
     if (userDoc.phone) await storeOTP(userDoc.phone, otp, 'verification');
     if (userDoc.email) await storeOTP(userDoc.email.toLowerCase(), otp, 'verification');
 
-    const smsSent = userDoc.phone
-      ? await sendSMS(userDoc.phone, `Your verification code is: ${otp}. Valid for 10 minutes.`)
-      : false;
-    
-    let emailSent = false;
-    if (userDoc.email) {
-      try {
+    // Respond immediately after OTP is stored (do not block on SMS/email providers)
+    const message = baseMessage;
+    const response = res.status(statusCode).json({
+      status: 'success',
+      message,
+      data: {
+        user: {
+          user_id: userDoc._id,
+          phone: userDoc.phone,
+          email: userDoc.email,
+        },
+        otp_queued: true,
+      },
+    });
+
+    // Fire-and-forget delivery after responding
+    setImmediate(() => {
+      if (userDoc.phone) {
+        sendSMS(userDoc.phone, termiiOtpSmsBody(otp)).catch((err) => {
+          logger.error(`❌ Error sending OTP SMS to ${userDoc.phone}: ${err.message}`);
+        });
+      }
+
+      if (userDoc.email) {
         logger.info(`📧 Attempting to send OTP email to: ${userDoc.email.toLowerCase()}`);
-        emailSent = await sendEmail(
+        sendEmail(
           userDoc.email.toLowerCase(),
           'Your Verification Code',
           `
@@ -54,43 +117,22 @@ export const register = asyncHandler(async (req, res) => {
               <p style="color: #666; font-size: 12px;">If you didn't request this code, please ignore this email.</p>
             </div>
           `
-        );
-        if (emailSent) {
-          logger.info(`✅ OTP email sent successfully to ${userDoc.email}`);
-        } else {
-          logger.warn(`⚠️ OTP email send returned false for ${userDoc.email} - check SMTP configuration`);
-        }
-      } catch (emailError) {
-        logger.error(`❌ Error sending OTP email to ${userDoc.email}: ${emailError.message}`);
-        logger.error(`Email error details: ${JSON.stringify(emailError)}`);
-        emailSent = false;
+        )
+          .then((emailSent) => {
+            if (emailSent) {
+              logger.info(`✅ OTP email sent successfully to ${userDoc.email}`);
+            } else {
+              logger.warn(`⚠️ OTP email send returned false for ${userDoc.email} - check SMTP configuration`);
+            }
+          })
+          .catch((emailError) => {
+            logger.error(`❌ Error sending OTP email to ${userDoc.email}: ${emailError.message}`);
+            logger.error(`Email error details: ${JSON.stringify(emailError)}`);
+          });
       }
-    }
-
-    const sentMethods = [];
-    if (smsSent) sentMethods.push('SMS');
-    if (emailSent) sentMethods.push('email');
-
-    let message = baseMessage;
-    if (sentMethods.length > 0) {
-      message = `${baseMessage} via ${sentMethods.join(' and ')}`;
-    } else {
-      logger.warn(`Failed to send OTP via any method for user: ${userDoc.phone || userDoc.email}`);
-      message = 'OTP generated but could not be sent. Please contact support.';
-    }
-
-    return res.status(statusCode).json({
-      status: 'success',
-      message,
-      data: {
-        user: {
-          user_id: userDoc._id,
-          phone: userDoc.phone,
-          email: userDoc.email,
-        },
-        otp_sent: { sms: smsSent, email: emailSent },
-      },
     });
+
+    return response;
   };
 
   if (existingUser) {
@@ -175,6 +217,66 @@ export const verifyOTPCode = asyncHandler(async (req, res) => {
 });
 
 /**
+ * OTP-only login: verify OTP and issue tokens if onboarding complete
+ * POST /auth/user/login-with-otp
+ * Body: email_phone_number, otp, device_id?, device_token?
+ */
+export const loginWithOtp = asyncHandler(async (req, res) => {
+  const { email_phone_number, otp, device_id, device_token } = req.body;
+
+  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
+  const isEmail = emailRegex.test(email_phone_number);
+  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
+  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const identifier = email || phone;
+
+  const result = await verifyOTP(identifier, otp, 'verification');
+  if (!result.valid) {
+    throw new ValidationError(result.message);
+  }
+
+  const user = await User.findOne({
+    ...(email ? { email } : {}),
+    ...(phone ? { phone } : {}),
+  });
+
+  if (!user) {
+    throw new NotFoundError('User');
+  }
+
+  if (!user.isActive) {
+    throw new AuthenticationError('Your account has been deactivated');
+  }
+
+  user.isVerified = true;
+  if (device_id) user.deviceId = device_id;
+  if (device_token) user.deviceToken = device_token;
+  await user.save();
+
+  if (phone) await deleteOTP(phone, 'verification');
+  if (email) await deleteOTP(email, 'verification');
+
+  const tokens = await issueTokenPairWithSession(user, req);
+
+  const canBook =
+    user.onboardingStage === 'rider_complete' || user.onboardingStage === 'driver_complete' || user.isRegCompleted;
+
+  res.json({
+    status: 'success',
+    message: canBook ? 'Login successful' : 'Complete onboarding to continue',
+    authorisation: {
+      token: tokens.token,
+      refresh_token: tokens.refreshToken,
+      type: 'bearer',
+    },
+    data: {
+      user: formatUserResponse(user),
+      needs_onboarding: !canBook,
+    },
+  });
+});
+
+/**
  * Complete signup
  */
 export const completeSignup = asyncHandler(async (req, res) => {
@@ -182,12 +284,10 @@ export const completeSignup = asyncHandler(async (req, res) => {
     email_phone_number,
     otp,
     name,
-    password,
-    password_confirmation,
-    country,
-    state,
+    email: optionalEmail,
     device_id,
     device_token,
+    profile_photo,
   } = req.body;
 
   const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
@@ -216,26 +316,33 @@ export const completeSignup = asyncHandler(async (req, res) => {
     user.isVerified = true;
   }
 
-  // Update user
   user.name = name;
-  user.password = password;
-  user.country = country;
-  user.state = state;
+  if (optionalEmail?.trim()) user.email = String(optionalEmail).toLowerCase().trim();
+  if (profile_photo) user.profileImage = profile_photo;
   user.isRegCompleted = true;
   user.isRegVerified = true;
   user.deviceId = device_id;
   user.deviceToken = device_token;
 
+  if (user.role === 'passenger') {
+    user.onboardingStage = 'rider_complete';
+  }
+
+  // Fallback wallet reference (used when Paystack DVA is not available)
+  if (!user.walletAccountNumber) {
+    user.walletAccountNumber = 'KEKE' + user._id.toString().slice(-8).toUpperCase();
+  }
+
   await user.save();
+
+  provisionDvaAsync(user._id);
 
   // Best-effort delete OTP if still present (either identifier)
   if (phone) await deleteOTP(phone, 'verification');
   if (email) await deleteOTP(email, 'verification');
 
-  // Generate tokens
-  const tokens = generateTokenPair({ id: user._id, role: user.role });
+  const tokens = await issueTokenPairWithSession(user, req);
 
-  // Return user data with Laravel-style response for mobile app compatibility
   res.json({
     status: 'success',
     message: 'Registration completed successfully',
@@ -247,6 +354,22 @@ export const completeSignup = asyncHandler(async (req, res) => {
     data: {
       user: formatUserResponse(user),
     },
+  });
+});
+
+/**
+ * Validate referral code - GET /api/auth/referral-code/validate?code=XXX
+ * Public endpoint to check if a referral code exists
+ */
+export const validateReferralCode = asyncHandler(async (req, res) => {
+  const code = (req.query.code || '').trim();
+  if (!code) {
+    return res.json({ valid: false, message: 'Referral code is required' });
+  }
+  const referrer = await User.findOne({ referralCode: code }).select('_id');
+  res.json({
+    valid: !!referrer,
+    message: referrer ? 'Referral code is valid' : 'Referral code not found',
   });
 });
 
@@ -284,15 +407,12 @@ export const login = asyncHandler(async (req, res) => {
     throw new AuthenticationError('Your account has been deactivated');
   }
 
-  // Update device info
   if (device_id) user.deviceId = device_id;
   if (device_token) user.deviceToken = device_token;
   await user.save();
 
-  // Generate tokens
-  const tokens = generateTokenPair({ id: user._id, role: user.role });
+  const tokens = await issueTokenPairWithSession(user, req);
 
-  // Laravel-style response for mobile app compatibility
   res.json({
     status: 'success',
     message: 'Login successful',
@@ -308,46 +428,51 @@ export const login = asyncHandler(async (req, res) => {
 });
 
 /**
- * Refresh token
+ * Refresh token - device-bound, rotates refresh token on use
+ * Requires: refresh_token, device_id (or x-device-id header)
  */
 export const refreshToken = asyncHandler(async (req, res) => {
-  const { refresh_token } = req.body;
+  const refreshTokenRaw = req.body.refresh_token;
+  const deviceId = req.body.device_id || req.headers['x-device-id'];
+  const ipAddress = req.ip || req.connection?.remoteAddress;
 
-  if (!refresh_token) {
-    throw new AuthenticationError('Refresh token is required');
-  }
-
-  const decoded = verifyRefreshToken(refresh_token);
-
-  // Get user
-  const user = await User.findById(decoded.id);
-
-  if (!user || !user.isActive) {
-    throw new AuthenticationError('User not found or inactive');
-  }
-
-  // Generate new access token
-  const accessToken = generateAccessToken({ id: user._id, role: user.role });
+  const { user, accessToken, refreshToken: newRefreshToken } = await validateAndRotateSession(
+    refreshTokenRaw,
+    deviceId || 'legacy',
+    ipAddress
+  );
 
   res.json({
     status: 'success',
     authorisation: {
       token: accessToken,
+      refresh_token: newRefreshToken,
       type: 'bearer',
+    },
+    data: {
+      user: formatUserResponse(user),
     },
   });
 });
 
 /**
- * Logout
+ * Logout - blacklist access token and revoke session(s)
+ * Optional: device_id in body to revoke only that device; else revokes all sessions
  */
 export const logout = asyncHandler(async (req, res) => {
-  // Clear device token (optional - can implement token blacklist)
+  const token = extractTokenFromRequest(req);
+  if (token) {
+    await addToBlacklist(token);
+  }
+
   if (req.user) {
     const user = await User.findById(req.user._id);
     if (user) {
       user.deviceToken = null;
       await user.save();
+
+      const deviceId = req.body.device_id || req.headers['x-device-id'];
+      await revokeSessions(user._id, deviceId || undefined);
     }
   }
 
@@ -361,21 +486,51 @@ export const logout = asyncHandler(async (req, res) => {
  * Get current user
  */
 export const getCurrentUser = asyncHandler(async (req, res) => {
-  // `User` schema doesn't have a `driver` field, so populating it throws StrictPopulateError.
-  // Driver data is fetched separately below when role === 'driver'.
   const user = await User.findById(req.user._id);
 
-  // Get driver profile if user is a driver
   if (user.role === 'driver') {
     const driver = await Driver.findOne({ user: user._id })
       .populate('vehicleDetails.vehicleType');
     user.driver = driver;
   }
 
+  const formatted = formatUserResponse(user);
+
+  const uid = user._id.toString();
+  const topupRef = user.walletAccountNumber || ('KEKE' + uid.slice(-8).toUpperCase());
+  if (!user.walletAccountNumber) {
+    user.walletAccountNumber = topupRef;
+    User.findByIdAndUpdate(user._id, { walletAccountNumber: topupRef }).catch(() => {});
+  }
+  formatted.wallet_account_number = topupRef;
+  formatted.topup_reference = topupRef;
+
+  // Single AdminSettings fetch for DVA and platform top-up
+  let settings = await cache.get('admin_settings:default');
+  if (!settings) {
+    settings = await AdminSettings.findOne({ key: 'default' }).lean();
+    if (settings) {
+      await cache.set('admin_settings:default', settings, 300);
+    }
+  }
+
+  if (!user.topupAccountNumber && process.env.PAYSTACK_SECRET_KEY && user.isRegCompleted) {
+    provisionDvaAsync(user._id);
+  }
+
+  if (!formatted.topup_account_number || !formatted.topup_bank_name) {
+    const platform = settings?.topup;
+    if (platform?.accountNumber && platform?.bankName) {
+      formatted.topup_bank_name = formatted.topup_bank_name || platform.bankName;
+      formatted.topup_account_name = formatted.topup_account_name || platform.accountName;
+      formatted.topup_account_number = formatted.topup_account_number || platform.accountNumber;
+    }
+  }
+
   res.json({
     status: 'success',
     data: {
-      user: formatUserResponse(user),
+      user: formatted,
     },
   });
 });
@@ -449,26 +604,111 @@ export const resendOTP = asyncHandler(async (req, res) => {
     throw new ConflictError('Account already exists. Please login instead.');
   }
 
-  // Helper function to send OTP (reused from register endpoint)
-  const sendOtpForUser = async (userDoc, statusCode, baseMessage) => {
+  return await sendOtpForUser(res, user, 200, 'OTP resent');
+});
+
+/**
+ * Request OTP for login - POST /api/auth/user/request-login-otp
+ * For existing users (including fully registered). Sends OTP to phone/email.
+ */
+export const requestLoginOtp = asyncHandler(async (req, res) => {
+  const { email_phone_number } = req.body;
+
+  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
+  const isEmail = emailRegex.test(email_phone_number);
+  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
+  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+
+  const user = await User.findOne({
+    $or: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])],
+  });
+
+  if (!user) {
+    throw new NotFoundError('No account found with this phone or email. Please sign up first.');
+  }
+
+  const otp = generateOTP();
+  const identifier = email || phone;
+  if (process.env.NODE_ENV !== 'production') {
+    logger.info(`🔐 [DEV] Login OTP for ${identifier}: ${otp} (use this if SMS/email not received)`);
+    logOtpToTerminal(otp, identifier, 'login');
+  }
+  await storeOTP(identifier, otp, 'verification');
+
+  const queuedMethods = [];
+  if (user.phone) queuedMethods.push('SMS');
+  if (user.email) queuedMethods.push('email');
+  const message =
+    queuedMethods.length > 0
+      ? `Login code queued via ${queuedMethods.join(' and ')}`
+      : 'Code generated. Check your phone or email.';
+
+  res.json({
+    status: 'success',
+    message,
+    data: { otp_queued: true },
+  });
+
+  setImmediate(() => {
+    if (user.phone) {
+      sendSMS(user.phone, termiiOtpSmsBody(otp)).catch((err) => {
+        logger.error(`❌ Error sending login OTP SMS to ${user.phone}: ${err.message}`);
+      });
+    }
+
+    if (user.email) {
+      sendEmail(
+        user.email,
+        'Your Login Code',
+        `<p>Your login code is: <strong>${otp}</strong>. Valid for 10 minutes.</p>`
+      ).catch((e) => {
+        logger.error(`Login OTP email error: ${e.message}`);
+      });
+    }
+  });
+});
+
+/**
+ * Helper to send OTP (used by resendOTP)
+ */
+async function sendOtpForUser(res, userDoc, statusCode, baseMessage) {
     const otp = generateOTP();
 
-    // Store OTP for whatever identifiers exist
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info(`🔐 [DEV] OTP for ${userDoc.phone || userDoc.email}: ${otp} (use this if SMS/email not received)`);
+      logOtpToTerminal(otp, userDoc.phone || userDoc.email, 'resend');
+    }
+
     if (userDoc.phone) await storeOTP(userDoc.phone, otp, 'verification');
     if (userDoc.email) await storeOTP(userDoc.email.toLowerCase(), otp, 'verification');
 
-    const smsSent = userDoc.phone
-      ? await sendSMS(userDoc.phone, `Your verification code is: ${otp}. Valid for 10 minutes.`)
-      : false;
-    
-    let emailSent = false;
+  const message = baseMessage;
+  const response = res.status(statusCode).json({
+    status: 'success',
+    message,
+    data: {
+      user: {
+        user_id: userDoc._id,
+        phone: userDoc.phone,
+        email: userDoc.email,
+      },
+      otp_queued: true,
+    },
+  });
+
+  setImmediate(() => {
+    if (userDoc.phone) {
+      sendSMS(userDoc.phone, termiiOtpSmsBody(otp)).catch((err) => {
+        logger.error(`❌ Error sending OTP SMS to ${userDoc.phone}: ${err.message}`);
+      });
+    }
+
     if (userDoc.email) {
-      try {
-        logger.info(`📧 Attempting to send OTP email to: ${userDoc.email.toLowerCase()}`);
-        emailSent = await sendEmail(
-          userDoc.email.toLowerCase(),
-          'Your Verification Code',
-          `
+      logger.info(`📧 Attempting to send OTP email to: ${userDoc.email.toLowerCase()}`);
+      sendEmail(
+        userDoc.email.toLowerCase(),
+        'Your Verification Code',
+        `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #43A048;">Verification Code</h2>
               <p>Your verification code is:</p>
@@ -479,47 +719,167 @@ export const resendOTP = asyncHandler(async (req, res) => {
               <p style="color: #666; font-size: 12px;">If you didn't request this code, please ignore this email.</p>
             </div>
           `
-        );
-        if (emailSent) {
-          logger.info(`✅ OTP email sent successfully to ${userDoc.email}`);
-        } else {
-          logger.warn(`⚠️ OTP email send returned false for ${userDoc.email} - check SMTP configuration`);
-        }
-      } catch (emailError) {
-        logger.error(`❌ Error sending OTP email to ${userDoc.email}: ${emailError.message}`);
-        logger.error(`Email error details: ${JSON.stringify(emailError)}`);
-        emailSent = false;
-      }
+      )
+        .then((emailSent) => {
+          if (emailSent) {
+            logger.info(`✅ OTP email sent successfully to ${userDoc.email}`);
+          } else {
+            logger.warn(`⚠️ OTP email send returned false for ${userDoc.email} - check SMTP configuration`);
+          }
+        })
+        .catch((emailError) => {
+          logger.error(`❌ Error sending OTP email to ${userDoc.email}: ${emailError.message}`);
+          logger.error(`Email error details: ${JSON.stringify(emailError)}`);
+        });
+    }
+  });
+
+  return response;
+}
+
+const PASSWORD_RESET_TOKEN_EXPIRE_SECONDS = 5 * 60; // 5 minutes
+
+/**
+ * Forgot password init - POST /api/forgot/password (public)
+ * Sends OTP to email/phone for password reset. User must already be registered.
+ */
+export const forgotPasswordInit = asyncHandler(async (req, res) => {
+  const { email_phone_number } = req.body;
+
+  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
+  const isEmail = emailRegex.test(email_phone_number);
+  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
+  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+
+  const user = await User.findOne({
+    $or: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])],
+  });
+
+  if (!user) {
+    throw new NotFoundError('No account found with this email or phone number.');
+  }
+
+  if (!user.isRegCompleted) {
+    throw new ValidationError('Please complete registration first, then use login.');
+  }
+
+  const otp = generateOTP();
+  const identifier = email || phone;
+  if (process.env.NODE_ENV !== 'production') {
+    logger.info(`🔐 [DEV] Password reset OTP for ${identifier}: ${otp} (use this if SMS/email not received)`);
+    logOtpToTerminal(otp, identifier, 'password_reset');
+  }
+  await storeOTP(identifier, otp, 'password_reset');
+
+  const queuedMethods = [];
+  if (user.phone) queuedMethods.push('SMS');
+  if (user.email) queuedMethods.push('email');
+  const message =
+    queuedMethods.length > 0
+      ? `Password reset code queued via ${queuedMethods.join(' and ')}`
+      : 'Code generated but could not be sent. Please contact support.';
+
+  res.json({
+    status: 'success',
+    message,
+    data: {
+      otp_queued: true,
+    },
+  });
+
+  setImmediate(() => {
+    if (user.phone) {
+      sendSMS(user.phone, termiiOtpSmsBody(otp)).catch((err) => {
+        logger.error(`❌ Error sending password reset OTP SMS to ${user.phone}: ${err.message}`);
+      });
     }
 
-    const sentMethods = [];
-    if (smsSent) sentMethods.push('SMS');
-    if (emailSent) sentMethods.push('email');
-
-    let message = baseMessage;
-    if (sentMethods.length > 0) {
-      message = `${baseMessage} via ${sentMethods.join(' and ')}`;
-    } else {
-      logger.warn(`Failed to send OTP via any method for user: ${userDoc.phone || userDoc.email}`);
-      message = 'OTP generated but could not be sent. Please contact support.';
+    if (user.email) {
+      sendEmail(
+        user.email,
+        'Password Reset Code',
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #43A048;">Password Reset</h2>
+            <p>Your password reset code is:</p>
+            <div style="background-color: #f5f5f5; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; border-radius: 5px; letter-spacing: 5px;">
+              ${otp}
+            </div>
+            <p>This code is valid for 10 minutes.</p>
+            <p style="color: #666; font-size: 12px;">If you didn't request this, please ignore this email.</p>
+          </div>
+        `
+      ).catch((e) => {
+        logger.error(`Forgot password email error: ${e.message}`);
+      });
     }
+  });
+});
 
-    return res.status(statusCode).json({
-      status: 'success',
-      message,
-      data: {
-        user: {
-          user_id: userDoc._id,
-          phone: userDoc.phone,
-          email: userDoc.email,
-        },
-        otp_sent: { sms: smsSent, email: emailSent },
-      },
-    });
-  };
+/**
+ * Forgot password confirm OTP - POST /api/forgot/password/confirm-otp (public)
+ * Verifies OTP and returns a short-lived reset_token for the reset step.
+ */
+export const forgotPasswordConfirmOtp = asyncHandler(async (req, res) => {
+  const { email_phone_number, otp } = req.body;
 
-  // Send OTP
-  return await sendOtpForUser(user, 200, 'OTP resent');
+  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
+  const isEmail = emailRegex.test(email_phone_number);
+  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
+  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const identifier = email || phone;
+
+  const result = await verifyOTP(identifier, otp, 'password_reset');
+  if (!result.valid) {
+    throw new ValidationError(result.message);
+  }
+
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  await cache.set(`reset_token:${resetToken}`, identifier, PASSWORD_RESET_TOKEN_EXPIRE_SECONDS);
+
+  res.json({
+    status: 'success',
+    message: 'OTP verified. You can now set a new password.',
+    data: {
+      reset_token: resetToken,
+    },
+  });
+});
+
+/**
+ * Forgot password reset - POST /api/forgot/password/reset (public)
+ * Accepts reset_token from confirm-otp and new password.
+ */
+export const forgotPasswordReset = asyncHandler(async (req, res) => {
+  const { reset_token, password, password_confirmation } = req.body;
+
+  const identifier = await cache.get(`reset_token:${reset_token}`);
+  if (!identifier) {
+    throw new ValidationError('Invalid or expired reset link. Please request a new password reset.');
+  }
+
+  await cache.del(`reset_token:${reset_token}`);
+
+  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
+  const isEmail = emailRegex.test(identifier);
+  const user = await User.findOne({
+    $or: [
+      ...(isEmail ? [{ email: identifier }] : []),
+      ...(!isEmail ? [{ phone: identifier }] : []),
+    ],
+  });
+
+  if (!user) {
+    throw new NotFoundError('User not found.');
+  }
+
+  user.password = password;
+  await user.save();
+
+  res.json({
+    status: 'success',
+    message: 'Password updated successfully. You can now log in.',
+  });
 });
 
 /**
@@ -541,7 +901,6 @@ export const googleAuthCallback = asyncHandler(async (req, res) => {
         const { OAuth2Client } = await import('google-auth-library');
         const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-        // Verify the token
         const ticket = await client.verifyIdToken({
           idToken: id_token,
           audience: process.env.GOOGLE_CLIENT_ID,
@@ -549,15 +908,20 @@ export const googleAuthCallback = asyncHandler(async (req, res) => {
 
         payload = ticket.getPayload();
       } catch (error) {
+        if (process.env.NODE_ENV === 'production') {
+          logger.warn(`Google token verification failed in production: ${error.message}`);
+          throw new ValidationError('Google authentication failed');
+        }
         logger.warn(`Google token verification failed, using fallback: ${error.message}`);
-        // Fallback: decode JWT without verification (for development only)
-        // In production, this should fail
         const base64Url = id_token.split('.')[1];
         const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
         payload = JSON.parse(Buffer.from(base64, 'base64').toString());
       }
     } else {
-      // Fallback if Google Client ID not configured
+      if (process.env.NODE_ENV === 'production') {
+        logger.warn('GOOGLE_CLIENT_ID not configured in production');
+        throw new ValidationError('Google authentication is not configured');
+      }
       logger.warn('GOOGLE_CLIENT_ID not configured, using fallback JWT decode');
       const base64Url = id_token.split('.')[1];
       const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
@@ -584,8 +948,7 @@ export const googleAuthCallback = asyncHandler(async (req, res) => {
       await user.save();
     } else {
       // Create new user
-      const phone = email.split('@')[0]; // Use email prefix as temporary phone
-      user = await User.create({
+      const newUser = await User.create({
         name: name || 'User',
         email: email.toLowerCase(),
         phone: `+${Date.now()}`, // Temporary phone number
@@ -597,10 +960,30 @@ export const googleAuthCallback = asyncHandler(async (req, res) => {
         deviceId: device_id,
         deviceToken: device_token,
       });
+      newUser.walletAccountNumber = 'KEKE' + newUser._id.toString().slice(-8).toUpperCase();
+      await newUser.save({ validateBeforeSave: false });
+      user = newUser;
+
+      // Create Paystack DVA for wallet top-ups (best-effort). Drivers get DVA only when admin approves.
+      if (user.role !== 'driver') {
+        try {
+          const settings = await AdminSettings.findOne({ key: 'default' });
+          const preferredBank = settings?.dvaPreferredBank || 'wema-bank';
+          const dva = await createDVAForUser(user, preferredBank);
+          if (dva) {
+            user.topupAccountNumber = dva.account_number;
+            user.topupBankName = dva.bank_name;
+            user.topupAccountName = dva.account_name;
+            user.paystackCustomerCode = dva.paystackCustomerCode;
+            await user.save({ validateBeforeSave: false });
+          }
+        } catch (err) {
+          logger.warn(`Paystack DVA creation failed for Google user ${user._id}: ${err.message}`);
+        }
+      }
     }
 
-    // Generate tokens
-    const tokens = generateTokenPair({ id: user._id, role: user.role });
+    const tokens = await issueTokenPairWithSession(user, req);
 
     logger.info(`Google authentication successful for user ${user._id}`);
 
@@ -645,6 +1028,7 @@ const formatUserResponse = (user) => {
     topup_account_name: user.topupAccountName,
     topup_account_number: user.topupAccountNumber,
     topup_bank_name: user.topupBankName,
+    wallet_account_number: user.walletAccountNumber || ('KEKE' + user._id.toString().slice(-8).toUpperCase()),
     police_emergency_contact: user.policeEmergencyContact,
     referral_code: user.referralCode,
     driver_id: user.driver?._id?.toString() || null,

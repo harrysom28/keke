@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useRef, useContext, useCallback } from "react";
 import {
   ImageBackground,
+  Keyboard,
+  Modal,
+  Pressable,
   StatusBar,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -19,10 +23,10 @@ import { useSelector } from "react-redux";
 import { AuthState } from "@/store/AuthSlice";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
-import { TOPUP, INITIATE_PAYMENT } from "@/constants";
+import { INITIATE_WALLET_TOPUP } from "@/constants";
 import apiClient from "@/utils/apiClient";
-import { Linking } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import { PaymentWebViewModal } from "@/components/PaymentWebViewModal";
 
 interface Transaction {
   payment_id: string;
@@ -39,17 +43,64 @@ const WalletScreen = () => {
   const { user } = useSelector(AuthState);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
+  const [walletSummaryLoading, setWalletSummaryLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [topupModal, setTopupModal] = useState(false);
   const [topupMethod, setTopupMethod] = useState<"dva" | "card">("dva");
   const [cardAmount, setCardAmount] = useState("");
   const [cardLoading, setCardLoading] = useState(false);
-  const [bankAmount, setBankAmount] = useState("");
-  const [bankLoading, setBankLoading] = useState(false);
+  const [pendingPaymentUrl, setPendingPaymentUrl] = useState<string | null>(null);
+  const [pendingTopupReference, setPendingTopupReference] = useState<string | null>(null);
+  const [paymentWebViewUrl, setPaymentWebViewUrl] = useState<string | null>(null);
+  const [paymentWebViewRef, setPaymentWebViewRef] = useState<string | null>(null);
+  const [walletAvailableBalance, setWalletAvailableBalance] = useState<number | null>(null);
+  const [walletHeldBalance, setWalletHeldBalance] = useState<number>(0);
+  const topupAmountRef = useRef<TextInput>(null);
+  const initialBalanceRef = useRef<string | undefined>(undefined);
+
+  const closeTopupModal = () => {
+    topupAmountRef.current?.blur();
+    Keyboard.dismiss();
+    setTopupModal(false);
+  };
 
   useEffect(() => {
-    fetchTransactions();
+    void Promise.all([fetchTransactions(), fetchWalletSummary()]);
   }, []);
+  const fetchWalletSummary = async () => {
+    setWalletSummaryLoading(true);
+    try {
+      const { data } = await apiClient.get("wallet");
+      const walletData = data?.data || {};
+      const available = Number(walletData.availableBalance ?? walletData.balance ?? 0);
+      const held = Number(walletData.heldBalance ?? 0);
+      setWalletAvailableBalance(Number.isFinite(available) ? available : 0);
+      setWalletHeldBalance(Number.isFinite(held) ? held : 0);
+    } catch (error) {
+      if (error?.response?.data?.message) {
+        showMessage({ type: "danger", message: String(error.response.data.message) });
+      }
+    } finally {
+      setWalletSummaryLoading(false);
+    }
+  };
+
+
+  useEffect(() => {
+    if (initialBalanceRef.current != null && user?.profile?.balance !== undefined) {
+      const initial = parseFloat(initialBalanceRef.current) || 0;
+      const current = parseFloat(String(user.profile.balance)) || 0;
+      if (current > initial && initialBalanceRef.current !== String(user.profile.balance)) {
+        console.log("✅ Balance updated! Old:", initialBalanceRef.current, "New:", user.profile.balance);
+        showMessage({
+          type: "success",
+          message: `Payment successful! Balance updated to ₦${current.toLocaleString()}`,
+          duration: 4000,
+        });
+        initialBalanceRef.current = undefined;
+      }
+    }
+  }, [user?.profile?.balance]);
 
   const fetchTransactions = async () => {
     setLoading(true);
@@ -89,7 +140,7 @@ const WalletScreen = () => {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchTransactions(), getCurrentUser()]);
+    await Promise.all([fetchTransactions(), fetchWalletSummary(), getCurrentUser()]);
     setRefreshing(false);
   };
 
@@ -114,99 +165,50 @@ const WalletScreen = () => {
     setCardLoading(true);
     try {
       const { data } = await axios.post(
-        INITIATE_PAYMENT,
+        INITIATE_WALLET_TOPUP,
         { amount, type: "topup" },
         apiConfig
       );
 
+      console.log("Payment response:", data);
+
       if (data?.data?.payment_url) {
-        const canOpen = await Linking.canOpenURL(data.data.payment_url);
-        if (canOpen) {
-          await Linking.openURL(data.data.payment_url);
-          showMessage({
-            type: "info",
-            message: "Complete payment in the browser. Your wallet will be updated automatically.",
-          });
-          setCardAmount("");
-          setTopupModal(false);
-        } else {
-          showMessage({
-            type: "danger",
-            message: "Could not open payment page",
-          });
-        }
+        const paymentUrl = data.data.payment_url;
+        const reference = data.data.reference || null;
+        setCardAmount("");
+        setCardLoading(false);
+        setPendingPaymentUrl(paymentUrl);
+        setPendingTopupReference(reference);
+        closeTopupModal();
       } else {
         showMessage({
           type: "danger",
           message: data?.message || "Payment initialization failed",
         });
+        setCardLoading(false);
       }
     } catch (error: any) {
       console.log("Error initializing payment:", error);
-      if (error?.response?.data?.message) {
-        showMessage({
-          type: "danger",
-          message: error.response.data.message,
-        });
-      } else {
-        showMessage({
-          type: "danger",
-          message: "Could not initialize payment",
-        });
-      }
-    } finally {
+      showMessage({
+        type: "danger",
+        message: error?.response?.data?.message || "Could not initialize payment",
+      });
       setCardLoading(false);
     }
   };
 
-  const handleBankTopup = async () => {
-    const amount = parseFloat(bankAmount);
-    if (isNaN(amount) || amount <= 0) {
-      showMessage({
-        type: "warning",
-        message: "Please enter a valid amount",
-      });
-      return;
-    }
-
-    if (amount < 100) {
-      showMessage({
-        type: "warning",
-        message: "Minimum top-up amount is ₦100",
-      });
-      return;
-    }
-
-    setBankLoading(true);
-    try {
-      const { data } = await axios.post(
-        TOPUP,
-        { amount, method: "bank_transfer" },
-        apiConfig
-      );
-
-      showMessage({
-        type: "success",
-        message: data?.message || "Top-up request submitted. Balance will be updated after verification.",
-      });
-      setBankAmount("");
-      setTopupModal(false);
-      onRefresh();
-    } catch (error: any) {
-      console.log("Error submitting bank transfer:", error);
-      if (error?.response?.data?.message) {
-        showMessage({
-          type: "danger",
-          message: error.response.data.message,
-        });
-      } else {
-        showMessage({
-          type: "danger",
-          message: "Could not submit top-up request",
-        });
-      }
-    } finally {
-      setBankLoading(false);
+  const handleModalDismiss = () => {
+    if (pendingPaymentUrl) {
+      const url = pendingPaymentUrl;
+      const ref = pendingTopupReference;
+      setPendingPaymentUrl(null);
+      setPendingTopupReference(null);
+      console.log("📱 Modal dismissed, opening payment in WebView:", url);
+      initialBalanceRef.current = user?.profile?.balance;
+      setTimeout(() => {
+        setPaymentWebViewUrl(url);
+        setPaymentWebViewRef(ref);
+      }, 300);
     }
   };
 
@@ -223,9 +225,9 @@ const WalletScreen = () => {
 
   const getTransactionIcon = (type: string, method: string) => {
     if (type === "topup" || type === "refund") {
-      return <AntDesign name="arrowdown" size={20} color="#3C8F7C" />;
+      return <AntDesign name="arrow-down" size={20} color="#3C8F7C" />;
     } else if (type === "withdrawal") {
-      return <AntDesign name="arrowup" size={20} color="#F31717" />;
+      return <AntDesign name="arrow-up" size={20} color="#F31717" />;
     } else {
       return <Feather name="credit-card" size={20} color="#8F92A1" />;
     }
@@ -326,6 +328,30 @@ const WalletScreen = () => {
     );
   };
 
+  const displayedAvailableBalance =
+    walletAvailableBalance !== null
+      ? walletAvailableBalance
+      : parseFloat(user?.profile?.balance || "0");
+  const transferUserData = (user?.profile || {}) as Record<string, any>;
+  const transferAccountNumber =
+    transferUserData.topup_account_number ??
+    transferUserData.account_number ??
+    transferUserData.accountNumber ??
+    transferUserData.bank_account?.account_number ??
+    "";
+  const transferBankName =
+    transferUserData.topup_bank_name ??
+    transferUserData.bank_name ??
+    transferUserData.bankName ??
+    transferUserData.bank_account?.bank_name ??
+    "";
+  const transferAccountName =
+    transferUserData.topup_account_name ??
+    transferUserData.account_name ??
+    transferUserData.accountName ??
+    transferUserData.bank_account?.account_name ??
+    "";
+
   return (
     <ImageBackground
       style={tw.style(`bg-white`, {
@@ -379,13 +405,28 @@ const WalletScreen = () => {
           >
             Available Balance
           </Text>
-          <Text
-            style={tw.style(`text-white text-4xl mb-4`, {
-              fontFamily: "RobotoBold",
-            })}
-          >
-            ₦{parseFloat(user?.profile?.balance || "0").toLocaleString()}
-          </Text>
+          {walletSummaryLoading ? (
+            <View style={tw`py-2 mb-4`}>
+              <ActivityIndicator color="white" size="small" />
+            </View>
+          ) : (
+            <Text
+              style={tw.style(`text-white text-4xl mb-4`, {
+                fontFamily: "RobotoBold",
+              })}
+            >
+              ₦{displayedAvailableBalance.toLocaleString()}
+            </Text>
+          )}
+          {walletHeldBalance > 0 ? (
+            <Text
+              style={tw.style(`text-white text-xs mb-3`, {
+                fontFamily: "RobotoRegular",
+              })}
+            >
+              ₦{walletHeldBalance.toLocaleString()} is currently held for active or scheduled rides
+            </Text>
+          ) : null}
           <TouchableOpacity
             onPress={() => setTopupModal(true)}
             style={tw`bg-white py-3 rounded-lg`}
@@ -474,14 +515,20 @@ const WalletScreen = () => {
       </ScrollView>
 
       {/* Top-up Modal */}
-      {topupModal && (
-        <View
-          style={tw`absolute inset-0 bg-black/50 justify-end`}
-          onTouchEnd={() => setTopupModal(false)}
-        >
+      <Modal
+        visible={topupModal}
+        transparent
+        animationType="slide"
+        onRequestClose={closeTopupModal}
+        onDismiss={handleModalDismiss}
+      >
+        <View style={tw`flex-1 justify-end`}>
+          <Pressable
+            style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]}
+            onPress={closeTopupModal}
+          />
           <View
-            style={tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8 max-h-[70%]`}
-            onTouchEnd={(e) => e.stopPropagation()}
+            style={[tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8`, { maxHeight: '60%' }]}
           >
             <View
               style={tw`flex-row items-center justify-between mb-5`}
@@ -494,13 +541,18 @@ const WalletScreen = () => {
                 Top Up Wallet
               </Text>
               <TouchableOpacity
-                onPress={() => setTopupModal(false)}
+                onPress={closeTopupModal}
                 style={tw`h-[34px] w-[34px] items-center justify-center bg-black rounded-full`}
               >
                 <AntDesign name="close" size={20} color="white" />
               </TouchableOpacity>
             </View>
 
+            <ScrollView
+              contentContainerStyle={tw`pb-6`}
+              showsVerticalScrollIndicator={true}
+              keyboardShouldPersistTaps="handled"
+            >
             {/* Method Selection */}
             <View style={tw`flex-row gap-x-2 mb-6`}>
               <TouchableOpacity
@@ -558,6 +610,7 @@ const WalletScreen = () => {
                     Enter Amount
                   </Text>
                   <TextInput
+                    ref={topupAmountRef}
                     style={tw.style(
                       `text-base px-4 py-3 text-black border border-[#B8B8B8] rounded-[8px]`,
                       {
@@ -594,30 +647,14 @@ const WalletScreen = () => {
               </>
             ) : (
               <>
-                <View style={tw`mb-4`}>
+                <View style={tw`bg-gray-50 rounded-lg p-4 mb-4`}>
                   <Text
-                    style={tw.style(`text-sm text-[#8F92A1] mb-2`, {
-                      fontFamily: "RobotoMedium",
+                    style={tw.style(`text-xs text-[#6B7280] mb-2`, {
+                      fontFamily: "RobotoRegular",
                     })}
                   >
-                    Enter Amount
+                    Include your unique reference when making the transfer so we can match your payment.
                   </Text>
-                  <TextInput
-                    style={tw.style(
-                      `text-base px-4 py-3 text-black border border-[#B8B8B8] rounded-[8px]`,
-                      {
-                        fontFamily: "RobotoMedium",
-                      }
-                    )}
-                    value={bankAmount}
-                    onChangeText={(text) => setBankAmount(text.replace(/[^0-9.]/g, ""))}
-                    placeholder="₦0.00"
-                    placeholderTextColor="#D0D0D0"
-                    keyboardType="numeric"
-                  />
-                </View>
-
-                <View style={tw`bg-gray-50 rounded-lg p-4 mb-4`}>
                   <Text
                     style={tw.style(`text-sm text-[#8F92A1] mb-3`, {
                       fontFamily: "RobotoMedium",
@@ -640,7 +677,7 @@ const WalletScreen = () => {
                         fontFamily: "RobotoMedium",
                       })}
                     >
-                      {user?.profile?.topup_bank_name || "N/A"}
+                      {transferBankName || "N/A"}
                     </Text>
                   </View>
                   <View
@@ -658,16 +695,14 @@ const WalletScreen = () => {
                         fontFamily: "RobotoMedium",
                       })}
                     >
-                      {user?.profile?.topup_account_name || "N/A"}
+                      {transferAccountName || "N/A"}
                     </Text>
                   </View>
                   <TouchableOpacity
                     style={tw`flex-row items-center justify-between py-2`}
                     onPress={async () => {
-                      const accountNumber =
-                        user?.profile?.topup_account_number;
-                      if (accountNumber) {
-                        await Clipboard.setStringAsync(accountNumber);
+                      if (transferAccountNumber) {
+                        await Clipboard.setStringAsync(String(transferAccountNumber));
                         showMessage({ type: "info", message: "Account number copied!" });
                       }
                     }}
@@ -685,40 +720,34 @@ const WalletScreen = () => {
                           fontFamily: "RobotoMedium",
                         })}
                       >
-                        {user?.profile?.topup_account_number || "N/A"}
+                        {transferAccountNumber || "N/A"}
                       </Text>
-                      {user?.profile?.topup_account_number && (
+                      {transferAccountNumber ? (
                         <Feather name="copy" size={18} color="#3C8F7C" />
-                      )}
+                      ) : null}
                     </View>
                   </TouchableOpacity>
                 </View>
-
-                <TouchableOpacity
-                  onPress={handleBankTopup}
-                  disabled={bankAmount.length === 0 || bankLoading}
-                  style={tw.style(
-                    `bg-base-green py-3.5 rounded-lg`,
-                    (bankAmount.length === 0 || bankLoading) && "opacity-50"
-                  )}
-                >
-                  {bankLoading ? (
-                    <ActivityIndicator color="white" />
-                  ) : (
-                    <Text
-                      style={tw.style(`text-center text-base text-white`, {
-                        fontFamily: "RobotoMedium",
-                      })}
-                    >
-                      Submit Top-up Request
-                    </Text>
-                  )}
-                </TouchableOpacity>
               </>
             )}
+            </ScrollView>
           </View>
         </View>
-      )}
+      </Modal>
+
+      <PaymentWebViewModal
+        visible={!!paymentWebViewUrl}
+        onClose={() => {
+          setPaymentWebViewUrl(null);
+          setPaymentWebViewRef(null);
+        }}
+        paymentUrl={paymentWebViewUrl ?? ""}
+        referenceFromInit={paymentWebViewRef}
+        initialBalance={user?.profile?.balance}
+        getCurrentUser={getCurrentUser}
+        onRefresh={onRefresh}
+        showMessage={showMessage}
+      />
     </ImageBackground>
   );
 };

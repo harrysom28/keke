@@ -1,0 +1,13 @@
+diff --git a/node_modules/expo-router/ios/LinkPreview/LinkPreviewNativeActionView.swift b/node_modules/expo-router/ios/LinkPreview/LinkPreviewNativeActionView.swift
+index 0000000..1111111 100644
+--- a/node_modules/expo-router/ios/LinkPreview/LinkPreviewNativeActionView.swift
++++ b/node_modules/expo-router/ios/LinkPreview/LinkPreviewNativeActionView.swift
+@@ -108,7 +108,7 @@
+         options.insert(.displayAsPalette)
+       }
+     }
+-    if singleSelection {
++    if #available(iOS 15.0, *), singleSelection {
+       options.insert(.singleSelection)
+     }
+     if displayInline {

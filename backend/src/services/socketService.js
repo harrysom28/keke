@@ -57,6 +57,20 @@ class SocketService {
   }
 
   /**
+   * Emit a single ride offer to one driver (sequential offer queue payload).
+   */
+  emitRideOfferToDriver(driverId, ridePayload) {
+    if (!this.io) {
+      logger.warn('Socket.io not initialized');
+      return;
+    }
+    const id = typeof driverId === 'string' ? driverId : driverId?.toString?.();
+    if (!id) return;
+    this.io.to(`driver:${id}`).emit('ride-request', ridePayload);
+    logger.info(`Ride offer emitted via Socket.io to driver ${id}`);
+  }
+
+  /**
    * Emit ride status update to rider
    */
   async emitRideStatusUpdate(ride, status, driver = null) {

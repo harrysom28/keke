@@ -127,10 +127,11 @@ Update `mobile/app.json` or `mobile/utils/apiUrlOverride.ts` for API URL configu
 
 ## Next Steps
 
-1. Complete backend implementation (see `backend/IMPLEMENTATION_NOTES.md`)
-2. Build admin panel
-3. Add more features based on requirements
-4. Deploy to production
+1. **Pre-launch (critical):** Paystack webhook reliability + idempotency, rate limiting on rides/wallet/auth, support ticket API + mobile wiring
+2. **Retention:** Ride details screen (backend endpoint exists at `GET /api/rides/:rideId`)
+3. **Supply:** Driver onboarding audit before launch
+4. **Ops:** Sentry with financial tags (day before launch)
+5. Deploy to production
 
 ## License
 

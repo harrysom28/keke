@@ -1,18 +1,27 @@
 import { Pressable, Text, View } from "react-native";
 import React, { ReactElement } from "react";
 import Svg, { Path } from "react-native-svg";
+import { useTranslation } from "react-i18next";
 
 import { router } from "expo-router";
 import tw from "@/lib/tailwind";
 
 interface ITabs {
-  screen: string[];
+  routeMatch: string;
+  path: string;
+  labelKey:
+    | "driver_tabs.home"
+    | "driver_tabs.bookings"
+    | "driver_tabs.tasks"
+    | "driver_tabs.profile";
   icon: (focused: boolean) => ReactElement;
 }
 
-const Tabs: ITabs[] = [
+const DRIVER_TAB_ITEMS: ITabs[] = [
   {
-    screen: ["Home", "/(dashboard)/home"],
+    routeMatch: "home",
+    path: "/(dashboard)/home",
+    labelKey: "driver_tabs.home",
     icon: (focused) => (
       <Svg width="25" height="24" viewBox="0 0 25 24" fill="none">
         <Path
@@ -37,7 +46,9 @@ const Tabs: ITabs[] = [
     ),
   },
   {
-    screen: ["Bookings", "/bookings"],
+    routeMatch: "bookings",
+    path: "/bookings",
+    labelKey: "driver_tabs.bookings",
     icon: (focused) => (
       <Svg width={25} height={24} viewBox="0 0 23 22" fill="none">
         <Path
@@ -64,7 +75,9 @@ const Tabs: ITabs[] = [
     ),
   },
   {
-    screen: ["Task", "/tasks"],
+    routeMatch: "tasks",
+    path: "/tasks",
+    labelKey: "driver_tabs.tasks",
     icon: (focused) => (
       <Svg width={25} height={24} viewBox="0 0 33 32" fill="none">
         <Path
@@ -81,7 +94,9 @@ const Tabs: ITabs[] = [
     ),
   },
   {
-    screen: ["Profile", "/(profile)/profile"],
+    routeMatch: "profile",
+    path: "/(profile)/profile",
+    labelKey: "driver_tabs.profile",
     icon: (focused) => (
       <Svg width="25" height="24" viewBox="0 0 25 24" fill="none">
         <Path
@@ -109,15 +124,15 @@ const Tabs: ITabs[] = [
 
 interface TProps {
   item: ITabs;
-  // state: { key: string; item: ITabs; state: any; index: number };
   currentRouteName: string;
 }
 
 const TabItem = ({ item, currentRouteName }: TProps) => {
-  const { screen, icon } = item;
-  const isFocused = currentRouteName.includes(item.screen[0].toLowerCase());
+  const { t } = useTranslation();
+  const { path, icon, routeMatch, labelKey } = item;
+  const isFocused = currentRouteName.toLowerCase().includes(routeMatch);
   const handlePress = () => {
-    router.navigate(screen[1]);
+    router.navigate(path as any);
   };
 
   return (
@@ -136,33 +151,41 @@ const TabItem = ({ item, currentRouteName }: TProps) => {
       </View>
       {!isFocused && (
         <Text
-          style={tw.style("text-[#484C52", {
+          style={tw.style("text-[#484C52]", {
             fontSize: 12,
             fontFamily: "RobotoRegular",
           })}
         >
-          {screen[0]}
+          {t(labelKey, { defaultValue: routeMatch })}
         </Text>
       )}
     </Pressable>
   );
 };
 
-const BottomTabBar = ({ state }: any) => {
-  // console.log(state.routes[state.index].name);
+const BottomTabBar = ({
+  state,
+}: {
+  state?: { routes: { name: string }[]; index: number };
+}) => {
+  const { i18n } = useTranslation();
+  const routeName = state?.routes?.[state?.index ?? 0]?.name ?? "";
+  if (!state?.routes?.length) {
+    return null;
+  }
   return (
     <View
+      key={i18n.language ?? "en"}
       style={tw.style(
         `flex-row justify-between rounded-t-[33px] items-center bg-white px-4 py-3.5`,
         { elevation: 32 }
       )}
     >
-      {Tabs.map((tab, index) => (
+      {DRIVER_TAB_ITEMS.map((tab) => (
         <TabItem
-          key={tab.screen[0]}
+          key={tab.routeMatch}
           item={tab}
-          // state={state}
-          currentRouteName={state.routes[state.index].name}
+          currentRouteName={routeName}
         />
       ))}
     </View>

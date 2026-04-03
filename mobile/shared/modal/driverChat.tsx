@@ -1,112 +1,153 @@
 import {
   ActivityIndicator,
   Image,
-  ImageBackground,
   KeyboardAvoidingView,
+  InteractionManager,
   Modal,
+  FlatList,
   Platform,
-  Pressable,
-  ScrollView,
   StatusBar,
+  StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from "react-native";
+import { TouchableOpacity } from "react-native-gesture-handler";
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+} from "react-native-safe-area-context";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import { AppDetailsState, setSubscriptionUtils } from "@/store/AppSlice";
 import { CREATE_CHAT, RETRIEVE_CHAT } from "@/constants";
-import React, { useContext, useEffect, useRef, useState } from "react";
-import Svg, { Path } from "react-native-svg";
+import React, { memo, useContext, useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
 import { AppContext } from "@/app/context";
 import { AuthState } from "@/store/AuthSlice";
 import FlashMessage from "react-native-flash-message";
-import { AntDesign, Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import axios from "axios";
-import tw from "@/lib/tailwind";
 import usePusherChannel from "@/hooks/usePusherChannel";
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+const formatTime = (dateString: string | Date): string => {
+  if (!dateString) return "";
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const formatSectionDate = (dateString: string | Date): string => {
+  if (!dateString) return "";
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return "";
+  const now = new Date();
+  const diffDays = Math.floor(
+    (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)
+  );
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return date.toLocaleDateString([], {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+};
+
+// ─── MessageItem ─────────────────────────────────────────────────────────────
 
 interface MProps {
   isOwner: boolean;
   item: {
     message: string;
-    date: string;
+    created_at?: string;
+    createdAt?: string;
+    date?: string;
   };
-  data: {
-    id: string;
-    name: string;
-    image: string;
-  };
+  showAvatar: boolean;
+  driverImage?: string;
 }
 
-const MessageItem = ({ isOwner = false, item, data }: MProps) => {
+const MessageItem = ({ isOwner, item, showAvatar, driverImage }: MProps) => {
+  const time = formatTime(
+    item?.created_at || item?.createdAt || item?.date || ""
+  );
+
   return (
-    <View style={tw`mb-1.5`}>
-      <Pressable
-        style={tw.style(
-          isOwner ? `flex-row-reverse` : `flex-row`,
-          `items-start gap-x-2 py-1`
-        )}
-      >
-        {!isOwner && (
-          <Image
-            source={{
-              uri: data?.image,
-            }}
-            style={tw`h-[40px] w-[40px] rounded-full border-2 border-base-green`}
-          />
-        )}
-        <View
-          style={tw.style(
-            `max-w-[80%] px-4 py-3`,
-            isOwner
-              ? `bg-base-green rounded-l-[20px] rounded-br-[20px]`
-              : `bg-[#E8E8E8] rounded-r-[20px] rounded-bl-[20px]`
-          )}
-        >
-          <Text
-            style={tw.style(
-              `text-base leading-5`,
-              isOwner ? `text-white` : `text-[#1F2937]`,
-              {
-                fontFamily: "RobotoRegular",
-              }
-            )}
-          >
+    <View
+      style={[
+        styles.msgRow,
+        isOwner ? styles.msgRowOwner : styles.msgRowOther,
+      ]}
+    >
+      {/* Driver avatar — only show on last message in a group */}
+      {!isOwner && (
+        <View style={styles.avatarSlot}>
+          {showAvatar ? (
+            driverImage ? (
+              <Image
+                source={{ uri: driverImage }}
+                style={styles.msgAvatar}
+              />
+            ) : (
+              <View style={styles.msgAvatarFallback}>
+                <Ionicons name="person" size={16} color="#fff" />
+              </View>
+            )
+          ) : null}
+        </View>
+      )}
+
+      <View style={isOwner ? styles.bubbleWrapOwner : styles.bubbleWrapOther}>
+        <View style={[styles.bubble, isOwner ? styles.bubbleOwner : styles.bubbleOther]}>
+          <Text style={[styles.bubbleText, isOwner ? styles.bubbleTextOwner : styles.bubbleTextOther]}>
             {item?.message}
           </Text>
         </View>
-      </Pressable>
-      <Text
-        style={tw.style(
-          `px-2 text-[#717171] text-xs mt-1`,
-          isOwner ? `text-right` : `text-left pl-[52px]`,
-          { fontFamily: "RobotoRegular" }
+        {!!time && (
+          <Text style={[styles.timeText, isOwner ? styles.timeOwner : styles.timeOther]}>
+            {time}
+            {isOwner && (
+              <Text style={styles.checkmark}> ✓✓</Text>
+            )}
+          </Text>
         )}
-      >
-        {item?.date}
-      </Text>
+      </View>
     </View>
   );
 };
+
+// ─── EmptyState ──────────────────────────────────────────────────────────────
+
+const EmptyState = ({ name }: { name: string }) => (
+  <View style={styles.emptyWrap}>
+    <View style={styles.emptyIconWrap}>
+      <Ionicons name="chatbubble-ellipses-outline" size={36} color="#2D7A4F" />
+    </View>
+    <Text style={styles.emptyTitle}>Say hello to {name?.split(" ")[0] || "your driver"}</Text>
+    <Text style={styles.emptySubtitle}>
+      Messages are only visible during your ride.
+    </Text>
+  </View>
+);
+
+// ─── DriverChatModal ─────────────────────────────────────────────────────────
 
 interface Props {
   visible: boolean;
   onClose: () => void;
   data: {
-    id: string; // user_id (for display)
-    rideId?: string; // ride_id (for API calls)
+    id: string;
+    rideId?: string;
     name: string;
     image: string;
   };
 }
 
-export default function DriverChatModal({
-  visible,
-  onClose,
-  data,
-}: Readonly<Props>) {
+function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
+  const insets = useCombinedSafeInsets();
   const dispatch = useDispatch();
   const { user } = useSelector(AuthState);
   const { subscription } = useSelector(AppDetailsState);
@@ -115,270 +156,535 @@ export default function DriverChatModal({
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
-  const scrollViewRef = useRef<ScrollView | null>(null);
   const flashMessageRef = useRef<FlashMessage | null>(null);
 
-  // Use ride-specific channel if rideId is available
   const channelName = data?.rideId ? `private-ride-${data.rideId}` : null;
 
   usePusherChannel({
-    channel: channelName || 'private-chat', // Fallback to prevent errors
+    channel: channelName || "private-chat",
     visible: visible && !subscription.chat && !!data?.rideId && !!channelName,
-    onSubscriptionSucceeded: () => {
-      dispatch(setSubscriptionUtils({ chat: true }));
-    },
+    onSubscriptionSucceeded: () => dispatch(setSubscriptionUtils({ chat: true })),
     onEvent: (event) => {
-      console.log(`Event received: ${event}`);
-      if (event?.data) {
-        setChats((prev) => [...prev, event.data]);
-      }
+      if (event?.data) setChats((prev) => [...prev, event.data]);
     },
   });
 
   const sendChat = () => {
     if (!data?.rideId) {
-      flashMessageRef.current?.showMessage({
-        type: "danger",
-        message: "Ride ID is required to send messages",
-      });
+      flashMessageRef.current?.showMessage({ type: "danger", message: "Ride ID is required" });
       return;
     }
-
-    const trimmedMessage = message.trim();
-    if (trimmedMessage.length === 0) {
-      flashMessageRef.current?.showMessage({
-        type: "warning",
-        message: "Please enter a message",
-      });
-      return;
-    }
+    const trimmed = message.trim();
+    if (!trimmed) return;
 
     setSending(true);
     axios
-      .post(CREATE_CHAT, { rideId: data.rideId, message: trimmedMessage }, apiConfig)
+      .post(CREATE_CHAT, { rideId: data.rideId, message: trimmed }, apiConfig)
       .then(({ data }) => {
         setChats((prev) => [...prev, data?.data?.message || data?.data]);
         setMessage("");
       })
       .catch((err) => {
-        console.log(err?.response?.data, "ear");
-        if (err?.response?.data?.message) {
-          const message = err.response.data.message;
-          // Handle specific error messages
-          if (message.includes('No driver assigned')) {
-            flashMessageRef.current?.showMessage({
-              type: "warning",
-              message: "Please wait for a driver to accept your ride before sending messages.",
-            });
-          } else {
-            flashMessageRef.current?.showMessage({
-              type: "danger",
-              message: message,
-            });
-          }
-        } else if (err?.response?.data?.error) {
-          flashMessageRef.current?.showMessage({
-            type: "danger",
-            message: err?.response?.data.error,
-          });
-        } else {
-          flashMessageRef.current?.showMessage({
-            type: "danger",
-            message: "Something went wrong! Check your internet connection",
-          });
-        }
+        const msg = err?.response?.data?.message;
+        flashMessageRef.current?.showMessage({
+          type: "danger",
+          message: msg?.includes("No driver assigned")
+            ? "Wait for a driver to accept your ride first."
+            : msg || "Something went wrong",
+        });
       })
       .finally(() => setSending(false));
   };
 
   const getAllChats = () => {
-    if (!data?.rideId) {
-      console.warn("No rideId provided for chat");
-      return;
-    }
-
+    if (!data?.rideId) return;
     setLoading(true);
     axios
       .get(RETRIEVE_CHAT + data.rideId, apiConfig)
       .then(({ data }) => {
-        // Backend returns { data: { messages: [...], pagination: {...} } }
         const messages = data?.data?.messages || data?.data || [];
         setChats(messages);
       })
       .catch((err) => {
-        console.log(err?.response?.data, "ear");
-        if (err?.response?.data?.message) {
-          flashMessageRef.current?.showMessage({
-            type: "danger",
-            message: err?.response?.data.message,
-          });
-        } else if (err?.response?.data?.error) {
-          flashMessageRef.current?.showMessage({
-            type: "danger",
-            message: err?.response?.data.error,
-          });
-        } else {
-          flashMessageRef.current?.showMessage({
-            type: "danger",
-            message: "Something went wrong! Check your internet connection",
-          });
-        }
+        flashMessageRef.current?.showMessage({
+          type: "danger",
+          message: err?.response?.data?.message || "Could not load messages",
+        });
       })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     if (visible) {
-      getAllChats();
+      const interactionTask = InteractionManager.runAfterInteractions(() => {
+        getAllChats();
+      });
+      return () => interactionTask.cancel();
     }
+    else setChats([]);
   }, [visible]);
+
+  const keyboardOffset =
+    Platform.OS === "ios" ? Math.max(insets.top, 12) + 8 : 0;
+
+  // Group messages to know when to show avatar (last in a consecutive group)
+  const isLastInGroup = (index: number): boolean => {
+    const current = chats[index] as any;
+    const next = chats[index + 1] as any;
+    const currentIsOwner =
+      current?.is_sender ||
+      current?.sender?.user_id === user?.profile?.user_id ||
+      current?.sender_id === user?.profile?.user_id;
+    if (!next) return true;
+    const nextIsOwner =
+      next?.is_sender ||
+      next?.sender?.user_id === user?.profile?.user_id ||
+      next?.sender_id === user?.profile?.user_id;
+    return currentIsOwner !== nextIsOwner;
+  };
+
   return (
-    <Modal visible={visible}>
-      <ImageBackground
-        style={tw.style(`bg-white px-4 flex-1`)}
-        source={require("@images/pattern-bg.png")}
+    <>
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
+
+      <FlashMessage
+        ref={flashMessageRef}
+        position="top"
+        floating
+        style={{ zIndex: 99999, marginTop: insets.top + 8 }}
+        duration={3000}
+        titleStyle={{ fontFamily: "RobotoMedium", textAlign: "center" }}
+      />
+
+      <View
+        style={[
+          styles.root,
+          {
+            paddingLeft: insets.left,
+            paddingRight: insets.right,
+          },
+        ]}
       >
-        <StatusBar backgroundColor="white" />
-        <FlashMessage
-          ref={flashMessageRef}
-          position="top"
-          floating
-          style={{
-            elevation: 1000,
-            marginTop: StatusBar.currentHeight,
-            zIndex: 1000000,
-          }}
-          duration={3000}
-          titleStyle={{ fontFamily: "RobotoMedium", textAlign: "center" }}
-        />
-        <View style={tw.style(`flex-row items-center justify-between px-4 pt-2 pb-3`, {
-          paddingTop: (StatusBar.currentHeight || 0) + 8,
-        })}>
-          <View style={tw`flex-row items-center gap-x-3.5 flex-1`}>
-            <Image
-              source={{
-                uri: data?.image,
-              }}
-              style={tw`h-[40px] w-[40px] rounded-full border-2 border-base-green`}
-            />
-            <Text
-              style={tw.style(`text-xl`, {
-                fontFamily: "RobotoBold",
-              })}
+        {/* Top inset on white chrome only — avoids a gray band under status bar / notch */}
+        <View style={[styles.headerSafe, { paddingTop: insets.top }]}>
+          <View style={styles.header}>
+            <TouchableOpacity
+              onPress={onClose}
+              style={styles.backBtn}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              activeOpacity={0.7}
             >
-              {data?.name}
-            </Text>
-          </View>
-          <TouchableOpacity
-            onPress={onClose}
-            style={tw.style(`h-[36px] w-[36px] flex-col items-center justify-center bg-black rounded-full`, {
-              marginRight: 4,
-            })}
-            activeOpacity={0.7}
-          >
-            <AntDesign name="close" size={22} color="white" />
-          </TouchableOpacity>
-        </View>
+              <Ionicons name="chevron-back" size={24} color="#111827" />
+            </TouchableOpacity>
 
-        <View style={tw`flex-1`}>
-          <ScrollView
-            style={tw`flex-1 px-2`}
-            ref={scrollViewRef}
-            onContentSizeChange={() =>
-              scrollViewRef.current?.scrollToEnd({ animated: true })
-            }
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={tw`pb-4`}
-          >
-            {loading ? (
-              <ActivityIndicator
-                style={tw`mt-[70%]`}
-                size="large"
-                color={tw.color("base-green")}
-              />
-            ) : (
-              <View style={tw`flex-col gap-y-2`}>
-                {chats.map((item) => {
-                  // Format date from backend (created_at) to display format
-                  const formatDate = (dateString: string | Date) => {
-                    if (!dateString) return '';
-                    const date = new Date(dateString);
-                    const now = new Date();
-                    const diffMs = now.getTime() - date.getTime();
-                    const diffMins = Math.floor(diffMs / 60000);
-                    
-                    if (diffMins < 1) return 'Just now';
-                    if (diffMins < 60) return `${diffMins}m ago`;
-                    const diffHours = Math.floor(diffMins / 60);
-                    if (diffHours < 24) return `${diffHours}h ago`;
-                    const diffDays = Math.floor(diffHours / 24);
-                    if (diffDays < 7) return `${diffDays}d ago`;
-                    return date.toLocaleDateString();
-                  };
-
-                  return (
-                    <MessageItem
-                      key={item?.message_id || item?._id}
-                      item={{
-                        message: item?.message || '',
-                        date: item?.date || formatDate(item?.created_at || item?.createdAt),
-                      }}
-                      data={data}
-                      isOwner={item?.is_sender || item?.sender?.user_id === user?.profile?.user_id || item?.sender_id === user?.profile?.user_id}
-                    />
-                  );
-                })}
+            <View style={styles.headerMeta}>
+              <View style={styles.avatarWrap}>
+                {data?.image ? (
+                  <Image source={{ uri: data.image }} style={styles.headerAvatar} />
+                ) : (
+                  <View style={styles.headerAvatarFallback}>
+                    <Ionicons name="person" size={20} color="#fff" />
+                  </View>
+                )}
+                <View style={styles.onlineDot} />
               </View>
-            )}
-          </ScrollView>
+              <View style={styles.headerTextBlock}>
+                <Text style={styles.headerName} numberOfLines={1}>
+                  {data?.name || "Driver"}
+                </Text>
+                <Text style={styles.headerStatus}>In your ride</Text>
+              </View>
+            </View>
+
+            <View style={{ width: 40 }} />
+          </View>
+
+          <View style={styles.divider} />
         </View>
-      </ImageBackground>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
-        style={tw.style(
-          `flex-row items-center justify-between px-4 pb-4 pt-3 bg-white border-t border-gray-200`
-        )}
-      >
-        <View style={tw`flex-1 mr-3`}>
-          <TextInput
-            value={message}
-            onChangeText={(text) => setMessage(text)}
-            multiline
-            maxLength={1000}
-            style={tw.style(
-              `border border-[#B8B8B8] text-black text-base rounded-[12px] py-3 px-4 min-h-[48px] max-h-[100px]`,
-              {
-                fontFamily: "RobotoRegular",
-                fontSize: 16,
-              }
-            )}
-            placeholder="Type your message..."
-            placeholderTextColor="#9CA3AF"
+
+        {/* ── Messages ── */}
+        {loading ? (
+          <View style={styles.loaderWrap}>
+            <ActivityIndicator size="large" color="#2D7A4F" />
+          </View>
+        ) : chats.length === 0 ? (
+          <View style={[styles.scrollContent, styles.scrollCentered]}>
+            <EmptyState name={data?.name} />
+          </View>
+        ) : (
+          <FlatList
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollContent}
+            inverted={true}
+            initialNumToRender={20}
+            windowSize={5}
+            removeClippedSubviews={true}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            data={[...chats].reverse()}
+            keyExtractor={(item, index) =>
+              String((item as any)?.message_id || (item as any)?._id || index)
+            }
+            ListFooterComponent={
+              chats.length > 0 ? (
+                <Text style={styles.dateSeparator}>
+                  {formatSectionDate(
+                    (chats[0] as any)?.created_at ||
+                      (chats[0] as any)?.createdAt ||
+                      (chats[0] as any)?.date ||
+                      new Date()
+                  )}
+                </Text>
+              ) : null
+            }
+            renderItem={({ item, index }) => {
+              const isOwner =
+                item?.is_sender ||
+                item?.sender?.user_id === user?.profile?.user_id ||
+                item?.sender_id === user?.profile?.user_id;
+
+              // index here is for reversed array; map back to original chats index for grouping logic
+              const originalIndex = chats.length - 1 - index;
+
+              return (
+                <MessageItem
+                  item={item}
+                  isOwner={isOwner}
+                  showAvatar={!isOwner && isLastInGroup(originalIndex)}
+                  driverImage={data?.image}
+                />
+              );
+            }}
           />
-        </View>
-        <TouchableOpacity 
-          disabled={message.trim().length === 0 || sending} 
-          onPress={sendChat}
-          style={tw.style(
-            `h-[48px] w-[48px] rounded-full items-center justify-center`,
-            message.trim().length === 0 
-              ? `bg-gray-300` 
-              : `bg-base-green`
-          )}
-          activeOpacity={0.7}
+        )}
+
+        {/* ── Input bar ── */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={keyboardOffset}
         >
-          {sending ? (
-            <ActivityIndicator size="small" color="white" />
-          ) : (
-            <Ionicons 
-              name="send" 
-              size={22} 
-              color={message.trim().length === 0 ? "#9CA3AF" : "white"} 
+          <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <TextInput
+              value={message}
+              onChangeText={setMessage}
+              multiline
+              maxLength={1000}
+              style={styles.textInput}
+              placeholder="Message your driver…"
+              placeholderTextColor="#9CA3AF"
+              returnKeyType="send"
+              onSubmitEditing={sendChat}
+              blurOnSubmit={false}
             />
-          )}
-        </TouchableOpacity>
-      </KeyboardAvoidingView>
+            <TouchableOpacity
+              onPress={sendChat}
+              disabled={!message.trim() || sending}
+              style={[
+                styles.sendBtn,
+                (!message.trim() || sending) && styles.sendBtnDisabled,
+              ]}
+              activeOpacity={0.8}
+            >
+              {sending ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="send" size={18} color="#fff" />
+              )}
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </>
+  );
+}
+
+function DriverChatModal(props: Readonly<Props>) {
+  return (
+    <Modal
+      visible={props.visible}
+      animationType="slide"
+      presentationStyle="fullScreen"
+      statusBarTranslucent={Platform.OS === "android"}
+      onRequestClose={props.onClose}
+    >
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <DriverChatModalContent {...props} />
+      </SafeAreaProvider>
     </Modal>
   );
 }
+
+export default memo(DriverChatModal);
+
+// ─── styles ──────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: "#F7F8FA",
+  },
+  headerSafe: {
+    backgroundColor: "#fff",
+  },
+
+  // ── header
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#fff",
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerMeta: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  avatarWrap: {
+    position: "relative",
+  },
+  headerAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 2,
+    borderColor: "#2D7A4F",
+  },
+  headerAvatarFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#2D7A4F",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  onlineDot: {
+    position: "absolute",
+    bottom: 1,
+    right: 1,
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    backgroundColor: "#22C55E",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  headerTextBlock: {
+    alignItems: "center",
+    minWidth: 0,
+    maxWidth: "100%",
+  },
+  headerName: {
+    fontSize: 16,
+    fontFamily: "RobotoBold",
+    color: "#111827",
+    textAlign: "center",
+  },
+  headerStatus: {
+    fontSize: 12,
+    fontFamily: "RobotoRegular",
+    color: "#22C55E",
+    marginTop: 1,
+  },
+
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#E5E7EB",
+  },
+
+  // ── scroll
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  scrollCentered: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
+
+  // ── loading
+  loaderWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 60,
+  },
+
+  // ── date separator
+  dateSeparator: {
+    textAlign: "center",
+    fontSize: 12,
+    fontFamily: "RobotoRegular",
+    color: "#9CA3AF",
+    marginBottom: 16,
+    marginTop: 4,
+  },
+
+  // ── empty state
+  emptyWrap: {
+    alignItems: "center",
+    paddingHorizontal: 32,
+  },
+  emptyIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "#EBF5EE",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontFamily: "RobotoBold",
+    color: "#111827",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    fontFamily: "RobotoRegular",
+    color: "#6B7280",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+
+  // ── messages
+  msgRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    marginBottom: 4,
+  },
+  msgRowOwner: {
+    justifyContent: "flex-end",
+  },
+  msgRowOther: {
+    justifyContent: "flex-start",
+  },
+  avatarSlot: {
+    width: 32,
+    marginRight: 8,
+    alignItems: "center",
+    justifyContent: "flex-end",
+  },
+  msgAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+  },
+  msgAvatarFallback: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#2D7A4F",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bubbleWrapOwner: {
+    alignItems: "flex-end",
+    maxWidth: "75%",
+  },
+  bubbleWrapOther: {
+    alignItems: "flex-start",
+    maxWidth: "75%",
+  },
+  bubble: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  bubbleOwner: {
+    backgroundColor: "#2D7A4F",
+    borderBottomRightRadius: 4,
+  },
+  bubbleOther: {
+    backgroundColor: "#fff",
+    borderBottomLeftRadius: 4,
+    // subtle shadow for depth
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  bubbleText: {
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: "RobotoRegular",
+  },
+  bubbleTextOwner: {
+    color: "#fff",
+  },
+  bubbleTextOther: {
+    color: "#111827",
+  },
+  timeText: {
+    fontSize: 11,
+    fontFamily: "RobotoRegular",
+    color: "#9CA3AF",
+    marginTop: 3,
+    marginHorizontal: 4,
+  },
+  timeOwner: {
+    textAlign: "right",
+  },
+  timeOther: {
+    textAlign: "left",
+  },
+  checkmark: {
+    color: "#2D7A4F",
+    fontSize: 11,
+  },
+
+  // ── input bar
+  inputBar: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    backgroundColor: "#fff",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#E5E7EB",
+    gap: 10,
+  },
+  textInput: {
+    flex: 1,
+    minHeight: 44,
+    maxHeight: 110,
+    backgroundColor: "#F3F4F6",
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === "ios" ? 12 : 10,
+    paddingBottom: Platform.OS === "ios" ? 12 : 10,
+    fontSize: 15,
+    fontFamily: "RobotoRegular",
+    color: "#111827",
+  },
+  sendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#2D7A4F",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 0,
+  },
+  sendBtnDisabled: {
+    backgroundColor: "#D1D5DB",
+  },
+});

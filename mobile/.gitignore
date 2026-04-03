@@ -1,5 +1,11 @@
 node_modules/
 
+# Local env (keys, secrets). Use .env.example as template.
+.env
+.env.local
+.env.production
+.env.*.local
+
 .vscode
 .expo/
 dist/

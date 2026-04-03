@@ -1,4 +1,4 @@
-import React, { useState, useContext } from "react";
+import React, { useState } from "react";
 import {
   ImageBackground,
   StatusBar,
@@ -14,13 +14,12 @@ import {
 import { AntDesign } from "@expo/vector-icons";
 import { router } from "expo-router";
 import tw from "@/lib/tailwind";
-import { AppContext } from "@/app/context";
-import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import { Linking } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import apiClient from "@/utils/apiClient";
 
 const ContactScreen = () => {
-  const { apiConfig } = useContext(AppContext);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -49,41 +48,23 @@ const ContactScreen = () => {
     }
 
     setLoading(true);
-    
-    // In a real app, you would send this to your backend API
-    // For now, we'll use email linking as a fallback
     try {
-      const emailBody = `Name: ${formData.name}\nEmail: ${formData.email}\nSubject: ${formData.subject}\n\nMessage:\n${formData.message}`;
-      const emailUrl = `mailto:support@keke.com?subject=${encodeURIComponent(formData.subject)}&body=${encodeURIComponent(emailBody)}`;
-      
-      const canOpen = await Linking.canOpenURL(emailUrl);
-      if (canOpen) {
-        await Linking.openURL(emailUrl);
-        showMessage({
-          type: "success",
-          message: "Opening email client...",
-        });
-        // Reset form after a delay
-        setTimeout(() => {
-          setFormData({
-            name: "",
-            email: "",
-            subject: "",
-            message: "",
-          });
-        }, 1000);
-      } else {
-        showMessage({
-          type: "info",
-          message: "Please contact us at support@keke.com",
-        });
-      }
-    } catch (error) {
-      console.log("Error opening email:", error);
-      showMessage({
-        type: "danger",
-        message: "Could not open email client. Please contact support@keke.com",
+      await apiClient.post("support/tickets", {
+        subject: formData.subject,
+        message: `${formData.name} (${formData.email})\n\n${formData.message}`,
       });
+      showMessage({
+        type: "success",
+        message: "Message sent! We'll get back to you soon.",
+      });
+      setFormData({ name: "", email: "", subject: "", message: "" });
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.message || "Failed to send message.";
+      if (err?.status === 429) {
+        showMessage({ type: "warning", message: "Too many requests. Please wait a moment." });
+      } else {
+        showMessage({ type: "danger", message: msg });
+      }
     } finally {
       setLoading(false);
     }
@@ -93,8 +74,23 @@ const ContactScreen = () => {
     Linking.openURL("tel:+2348000000000");
   };
 
-  const handleEmail = () => {
-    Linking.openURL("mailto:support@keke.com");
+  const handleEmail = async () => {
+    try {
+      const url = "mailto:support@keke.com";
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+        showMessage({ type: "success", message: "Opening email client..." });
+      } else {
+        throw new Error("Cannot open mailto");
+      }
+    } catch {
+      await Clipboard.setStringAsync("support@keke.com");
+      showMessage({
+        type: "info",
+        message: "Email copied to clipboard. Contact support@keke.com",
+      });
+    }
   };
 
   return (
