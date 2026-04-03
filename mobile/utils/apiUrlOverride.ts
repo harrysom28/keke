@@ -38,13 +38,26 @@ function isEmulatorOnlyUrl(url: string | undefined): boolean {
 /**
  * Trim slashes and strip a trailing `/api` so we never build `.../api/api/...`
  * when appending `api/` for SERVER_URL / apiClient baseURL.
+ *
+ * If the env value omits a scheme (e.g. `*.up.railway.app`), prepend `https://` so
+ * composed URLs are absolute. Otherwise axios treats `host/api/...` as a path
+ * relative to baseURL and the host is doubled: `.../api/host/api/...`.
  */
 function normalizeBaseUrl(url: string): string {
   let u = url.trim().replace(/\/+$/, '');
   if (u.endsWith('/api')) {
     u = u.slice(0, -4).replace(/\/+$/, '');
   }
-  return u;
+  if (!u || /^https?:\/\//i.test(u)) {
+    return u;
+  }
+  if (/^localhost\b/i.test(u) || /^127\.0\.0\.1\b/.test(u)) {
+    return `http://${u}`;
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(u)) {
+    return `http://${u}`;
+  }
+  return `https://${u}`;
 }
 
 function asTrimmedString(v: unknown): string | undefined {

@@ -25,7 +25,7 @@ async function ensureRedisForOtp() {
   const client = getRedisClient();
   if (!client) {
     throw new ValidationError(
-      'Verification service is temporarily unavailable. Ensure Redis is running and REDIS_HOST is set.'
+      'Verification service is temporarily unavailable. Set REDIS_URL (recommended) or REDIS_HOST to a reachable Redis instance.'
     );
   }
   if (!client.isOpen) {

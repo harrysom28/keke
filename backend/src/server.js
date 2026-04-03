@@ -28,7 +28,7 @@ import { connectDB, disconnectDB } from './config/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-import { ensureRedisConnected, closeRedisConnection } from './config/redis.js';
+import { ensureRedisConnected, closeRedisConnection, isRedisConfigured } from './config/redis.js';
 import { securityMiddleware } from './middleware/security.js';
 import { initRateLimiters, limiters } from './middleware/rateLimiter.js';
 import { errorHandler, handleUnhandledRejection, handleUncaughtException } from './utils/errors.js';
@@ -359,11 +359,11 @@ const startServer = async () => {
     schedulePreloadRefresh();
 
     let redisOk = false;
-    if (process.env.REDIS_HOST && process.env.REDIS_HOST !== '') {
+    if (isRedisConfigured()) {
       redisOk = await ensureRedisConnected();
       if (!redisOk) {
         logger.warn(
-          'Redis unavailable — distributed rate limits fall back to per-process memory; OTP requires Redis when REDIS_HOST is set'
+          'Redis unavailable — distributed rate limits fall back to per-process memory; OTP requires a working Redis when REDIS_URL or REDIS_HOST is set'
         );
       }
     } else {
@@ -373,7 +373,7 @@ const startServer = async () => {
     process.env.USE_REDIS_RATE_LIMIT_STORE =
       process.env.NODE_ENV === 'test'
         ? 'false'
-        : redisOk && process.env.REDIS_HOST
+        : redisOk && isRedisConfigured()
           ? 'true'
           : 'false';
 

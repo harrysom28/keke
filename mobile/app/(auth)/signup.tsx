@@ -114,28 +114,22 @@ const SignUp = () => {
       })
       .catch((err) => {
         console.log("Registration error:", err?.response?.data || err.message);
-        
-        // If OTP was generated but sending failed, still navigate to OTP screen
-        if (!err?.response?.data?.otp_confirmed) {
-          if (err?.response?.data?.message) {
-            showMessage({
-              type: "warning",
-              message: err.response.data.message,
-            });
-          }
-          dispatch(updateRegistration({ ...registration, email_phone_number: dta?.email_phone_number }));
-          router.push({ pathname: `/otpcode`, params: item });
-        } else if (err?.response?.data?.message) {
+
+        // Do not navigate to OTP on error — the previous logic treated missing `otp_confirmed` as
+        // "navigate anyway", which is always true on failures (e.g. 500 when Redis is down).
+        if (err?.response?.data?.message) {
           showMessage({
             type: "danger",
             message: err.response.data.message,
           });
         } else if (err?.response?.data?.error) {
-          // Handle error object - extract message string
           const errorData = err.response.data.error;
-          const errorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'Registration failed. Please try again.');
+          const errorMessage =
+            typeof errorData === "string"
+              ? errorData
+              : errorData?.message ||
+                errorData?.name ||
+                "Registration failed. Please try again.";
           showMessage({
             type: "danger",
             message: errorMessage,

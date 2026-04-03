@@ -23,13 +23,13 @@ const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const Pages = [
   {
     img: require("@/assets/images/onboard-1.png"),
-    title: "Get there fast with our rides",
-    text: "Want a hassle-free ride? Our improved trains would take you to your destination in no time. Simple, classy, affordable, and fast! ",
+    title: "Fast, Reliable Rides Across Your City",
+    text: "Book safe, affordable rides in minutes with Keke. Whether you're commuting to work, heading to school, or moving around town, enjoy quick pickups and trusted drivers.",
   },
   {
     img: require("@/assets/images/onboard-2.png"),
-    title: "Multiplied Earnings",
-    text: "With Keke app, you can get extra incentives on a daily basis by running in-app  tasks and challenges uploaded .",
+    title: "Ride with Trusted Drivers",
+    text: "Travel with confidence knowing your ride is handled by verified drivers focused on safety, professionalism, and a better customer experience.",
   },
   {
     img: require("@/assets/images/onboard-3.png"),
@@ -140,7 +140,7 @@ const Onboard = () => {
       config={{
         velocityThreshold: 0.2,
         directionalOffsetThreshold: 50,
-        gestureIsolationThreshold: 10,
+        gestureIsClickThreshold: 10,
       }}
       style={{
         flex: 1,

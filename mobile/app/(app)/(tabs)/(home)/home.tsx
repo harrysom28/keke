@@ -1,7 +1,4 @@
 import {
-  ACTIVE_BOOKING,
-  ACTIVE_RIDE,
-  CANCEL_BOOKING,
   DRIVER_BOOKING_ID,
   DRIVER_PASSENGER_LOCATION,
   LOCATION_UPDATE,
@@ -414,7 +411,7 @@ export default function HomeScreen() {
     });
     
     apiClient
-      .get(ACTIVE_BOOKING)
+      .get("schedule/latest/booking")
       .then(async ({ data }) => {
         const bookings = data?.data || [];
         if (Array.isArray(bookings) && bookings.length > 0) {
@@ -751,7 +748,7 @@ export default function HomeScreen() {
     }, 10000); // 10 second timeout
 
     apiClient
-      .get(ACTIVE_RIDE)
+      .get("booking/active-ride")
       .then(({ data }) => {
         clearTimeout(timeoutId);
         // Try multiple response structures
@@ -1141,7 +1138,7 @@ export default function HomeScreen() {
   ) => {
     loading(true);
     apiClient
-      .post(CANCEL_BOOKING, { booking_id })
+      .post("schedule/cancel/booking", { booking_id })
       .then(() => {
         safeShowMessage({
           type: "success",

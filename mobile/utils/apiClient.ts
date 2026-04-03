@@ -66,6 +66,23 @@ const apiClient: AxiosInstance = axios.create({
 
 let refreshPromise: Promise<string | null> | null = null;
 
+/** Normalize request URL for logs when callers pass absolute https URLs instead of relative paths. */
+function stripApiUrlForLog(url: string | undefined): string {
+  if (!url || typeof url !== 'string') return 'unknown';
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const u = new URL(url);
+      let path = u.pathname + u.search;
+      if (path.startsWith('/api/')) path = path.slice(5);
+      else if (path.startsWith('/api')) path = path.slice(4).replace(/^\//, '') || '';
+      return path || url;
+    } catch {
+      return url;
+    }
+  }
+  return url;
+}
+
 // Request interceptor for debugging and Sucuri bypass
 apiClient.interceptors.request.use(
   (config) => {
@@ -121,7 +138,7 @@ apiClient.interceptors.response.use(
   (response) => {
     // Success response logging
     if (__DEV__) {
-      const url = response.config.url || 'unknown';
+      const url = stripApiUrlForLog(response.config.url);
       console.log('📥 API Response:', response.status, url);
     }
     return response;
@@ -277,8 +294,10 @@ apiClient.interceptors.response.use(
                 `   Base: ${baseFromConfig} | Path: ${url}`
             );
           }
+        } else if (status === 404 && __DEV__) {
+          console.warn('📥 HTTP 404:', stripApiUrlForLog(url));
         } else {
-          console.error('📥 Response Error:', status, url);
+          console.error('📥 Response Error:', status, stripApiUrlForLog(url));
         }
       }
 

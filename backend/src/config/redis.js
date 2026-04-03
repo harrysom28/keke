@@ -3,18 +3,36 @@ import logger from '../utils/logger.js';
 
 let client = null;
 
+/** True when REDIS_URL or REDIS_HOST is set (used at startup and by getRedisClient). */
+export function isRedisConfigured() {
+  const url = typeof process.env.REDIS_URL === 'string' && process.env.REDIS_URL.trim() !== '';
+  const host = typeof process.env.REDIS_HOST === 'string' && process.env.REDIS_HOST.trim() !== '';
+  return url || host;
+}
+
+const socketOpts = {
+  connectTimeout: 5000,
+  reconnectStrategy: (retries) => {
+    if (retries > 10) return new Error('Redis max retries reached');
+    return Math.min(retries * 100, 3000);
+  },
+};
+
 /**
  * Create Redis client (does not connect — call ensureRedisConnected from server startup).
+ * Prefer REDIS_URL (Railway, Render, Heroku Redis) over REDIS_HOST/PORT.
  */
 export const createRedisClient = () => {
   if (client) {
     return client;
   }
 
-  if (!process.env.REDIS_HOST || process.env.REDIS_HOST === '') {
+  if (!isRedisConfigured()) {
     logger.info('Redis not configured, continuing without cache...');
     return null;
   }
+
+  const redisUrl = typeof process.env.REDIS_URL === 'string' ? process.env.REDIS_URL.trim() : '';
 
   const redisConfig = {
     host: process.env.REDIS_HOST || 'localhost',
@@ -28,20 +46,27 @@ export const createRedisClient = () => {
     password.trim() !== '' &&
     password.toLowerCase() !== 'null';
 
+  if (process.env.NODE_ENV === 'production' && !redisUrl && redisConfig.host === 'localhost') {
+    logger.warn(
+      'REDIS_HOST is localhost in production — OTP will fail. Set REDIS_URL from your host Redis (e.g. Railway) or the private Redis hostname.'
+    );
+  }
+
   try {
-    const clientOptions = {
-      socket: {
-        host: redisConfig.host,
-        port: redisConfig.port,
-        connectTimeout: 5000,
-        reconnectStrategy: (retries) => {
-          if (retries > 10) return new Error('Redis max retries reached');
-          return Math.min(retries * 100, 3000);
+    let clientOptions;
+    if (redisUrl) {
+      clientOptions = { url: redisUrl, socket: socketOpts };
+    } else {
+      clientOptions = {
+        socket: {
+          ...socketOpts,
+          host: redisConfig.host,
+          port: redisConfig.port,
         },
-      },
-    };
-    if (usePassword) {
-      clientOptions.password = password;
+      };
+      if (usePassword) {
+        clientOptions.password = password;
+      }
     }
     client = redis.createClient(clientOptions);
 
@@ -72,7 +97,7 @@ export async function ensureRedisConnected() {
   if (process.env.NODE_ENV === 'test') {
     return false;
   }
-  if (!process.env.REDIS_HOST || process.env.REDIS_HOST === '') {
+  if (!isRedisConfigured()) {
     return false;
   }
   const c = createRedisClient();
@@ -100,7 +125,7 @@ export async function ensureRedisConnected() {
  * May be non-open until ensureRedisConnected() resolves.
  */
 export const getRedisClient = () => {
-  if (!client && process.env.REDIS_HOST) {
+  if (!client && isRedisConfigured()) {
     createRedisClient();
   }
   return client;
