@@ -18,7 +18,6 @@ import { showMessage } from "react-native-flash-message";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import { getErrorMessage } from "@/utils/errorHandler";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
-import AppStore from "@/store";
 import { pusherManager } from "@/utils/pusherManager";
 import { clearRecentPlacesCache } from "@/utils/recentPlacesCache";
 
@@ -98,8 +97,8 @@ export default function GlobalContext({
           authEndpoint: PUSHER_AUTH,
           onError: (message, code, e) => {
             // Completely suppress quota errors - they're just noise from over-quota accounts
-            // Check both string and number formats
-            if (code === 4004 || code === "4004" || message?.includes("over quota")) {
+            // Pusher types `code` as Number; normalize for comparison
+            if (Number(code) === 4004 || message?.includes("over quota")) {
               return; // Silently ignore quota errors
             }
             // Only log non-quota errors
@@ -108,55 +107,15 @@ export default function GlobalContext({
 
           onAuthorizer: async function onAuthorizer(channelName, socketId) {
             const dta = {
-              socket_id: socketId, // Send socket ID for authentication
-              channel_name: channelName, // Specify the private channel
-            };
-
-            // Get the current token from Redux store (might be refreshed)
-            const currentToken = AppStore.getState().Auth.token;
-            if (!currentToken) {
-              console.log('No token available for Pusher authentication');
-              return null;
-            }
-
-            const authConfig = {
-              headers: {
-                Authorization: `Bearer ${currentToken}`,
-                Accept: "application/json",
-              },
+              socket_id: socketId,
+              channel_name: channelName,
             };
 
             try {
-              const response = await apiClient.post(PUSHER_AUTH, dta, authConfig);
-
-              // Backend returns auth directly (not wrapped in data.data)
-              let auth = response?.data;
-              return auth;
+              const response = await apiClient.post(PUSHER_AUTH, dta);
+              return response?.data ?? null;
             } catch (err: any) {
-              // Handle specific error cases
-              if (err?.response?.status === 401) {
-                console.log('Pusher auth failed with 401 - token might be expired');
-                // The token refresh should have been attempted by apiClient interceptor
-                // Try one more time with the potentially refreshed token
-                const refreshedToken = AppStore.getState().Auth.token;
-                if (refreshedToken && refreshedToken !== currentToken) {
-                  console.log('Retrying Pusher auth with refreshed token');
-                  const retryConfig = {
-                    headers: {
-                      Authorization: `Bearer ${refreshedToken}`,
-                      Accept: "application/json",
-                    },
-                  };
-                  try {
-                    const retryResponse = await apiClient.post(PUSHER_AUTH, dta, retryConfig);
-                    return retryResponse?.data;
-                  } catch (retryErr: any) {
-                    const retryErrorMsg = getErrorMessage(retryErr, 'Pusher auth retry failed');
-                    console.log('Pusher auth retry also failed:', retryErrorMsg);
-                  }
-                }
-              } else if (err?.response?.data?.code !== 4004) {
-                // Only log if it's not a quota error
+              if (err?.response?.data?.code !== 4004) {
                 const errorMsg = getErrorMessage(err, 'Pusher auth error');
                 console.log('Pusher auth error:', errorMsg);
               }
