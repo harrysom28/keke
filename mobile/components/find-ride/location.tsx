@@ -355,9 +355,13 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
     const origin = (ride?.data as any)?.origin;
     const destination = (ride?.data as any)?.destination;
     const oLat = parseFloat(String(origin?.lat ?? origin?.latitude ?? "0"));
-    const oLng = parseFloat(String(origin?.long ?? origin?.longitude ?? "0"));
+    const oLng = parseFloat(
+      String(origin?.long ?? origin?.lng ?? origin?.longitude ?? "0")
+    );
     const dLat = parseFloat(String(destination?.lat ?? destination?.latitude ?? "0"));
-    const dLng = parseFloat(String(destination?.long ?? destination?.longitude ?? "0"));
+    const dLng = parseFloat(
+      String(destination?.long ?? destination?.lng ?? destination?.longitude ?? "0")
+    );
 
     const hasCoords =
       isFinite(oLat) &&

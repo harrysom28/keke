@@ -29,7 +29,14 @@ async function ensureRedisForOtp() {
     );
   }
   if (!client.isOpen) {
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (err) {
+      logger.error(`Redis connect failed for OTP: ${err.message}`);
+      throw new ValidationError(
+        'Verification service is temporarily unavailable. Please try again in a few minutes.'
+      );
+    }
   }
   return client;
 }

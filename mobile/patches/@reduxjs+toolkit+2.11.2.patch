@@ -1,0 +1,13 @@
+diff --git a/node_modules/@reduxjs/toolkit/src/query/fetchBaseQuery.ts b/node_modules/@reduxjs/toolkit/src/query/fetchBaseQuery.ts
+index 4258043..2f72d0e 100644
+--- a/node_modules/@reduxjs/toolkit/src/query/fetchBaseQuery.ts
++++ b/node_modules/@reduxjs/toolkit/src/query/fetchBaseQuery.ts
+@@ -38,7 +38,7 @@ export interface FetchArgs extends CustomRequestInit {
+  * {@link [fetch](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API)}.
+  * Avoids storing `fetch` in a closure, in order to permit mocking/monkey-patching.
+  */
+-const defaultFetchFn: typeof fetch = (...args) => fetch(...args)
++const defaultFetchFn: typeof fetch = (input, init) => fetch(input, init)
+ 
+ const defaultValidateStatus = (response: Response) =>
+   response.status >= 200 && response.status <= 299

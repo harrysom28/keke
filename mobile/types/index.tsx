@@ -136,7 +136,7 @@ export type TRemoteNotification = {
     screen?: string;
     rideId?: string;
     paymentId?: string;
-    priority?: "high" | "medium" | "low";
+    priority?: "critical" | "high" | "medium" | "low";
     [key: string]: string | undefined;
   };
 };

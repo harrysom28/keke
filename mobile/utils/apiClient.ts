@@ -298,6 +298,10 @@ apiClient.interceptors.response.use(
           console.warn('📥 HTTP 404:', stripApiUrlForLog(url));
         } else {
           console.error('📥 Response Error:', status, stripApiUrlForLog(url));
+          if (__DEV__ && typeof status === 'number' && status >= 400 && status < 500 && dataStr) {
+            const clipped = dataStr.length > 1200 ? `${dataStr.slice(0, 1200)}…` : dataStr;
+            console.error('   Response body:', clipped);
+          }
         }
       }
 

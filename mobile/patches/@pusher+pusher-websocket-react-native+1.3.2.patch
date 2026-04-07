@@ -1,0 +1,12 @@
+diff --git a/node_modules/@pusher/pusher-websocket-react-native/tsconfig.json b/node_modules/@pusher/pusher-websocket-react-native/tsconfig.json
+index c642ac3..733c9c3 100644
+--- a/node_modules/@pusher/pusher-websocket-react-native/tsconfig.json
++++ b/node_modules/@pusher/pusher-websocket-react-native/tsconfig.json
+@@ -7,7 +7,6 @@
+     "allowUnreachableCode": false,
+     "allowUnusedLabels": false,
+     "esModuleInterop": true,
+-    "importsNotUsedAsValues": "error",
+     "forceConsistentCasingInFileNames": true,
+     "jsx": "react",
+     "lib": ["esnext"],

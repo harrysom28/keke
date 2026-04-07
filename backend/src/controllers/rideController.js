@@ -397,7 +397,7 @@ export const getFareEstimatePreview = asyncHandler(async (req, res) => {
     throw new ValidationError('originLat, originLng, destLat, destLng must be valid numbers');
   }
 
-  const vehicleType = await VehicleType.findOne({
+  let vehicleType = await VehicleType.findOne({
     isActive: true,
     $or: [
       { name: { $regex: /keke/i } },
@@ -408,7 +408,11 @@ export const getFareEstimatePreview = asyncHandler(async (req, res) => {
     .lean();
 
   if (!vehicleType?._id) {
-    throw new ValidationError('Default vehicle type (Keke) is not configured');
+    vehicleType = await VehicleType.findOne({ isActive: true }).select('_id').lean();
+  }
+
+  if (!vehicleType?._id) {
+    throw new ValidationError('No active vehicle type is configured');
   }
 
   const distanceKm = calculateDistance(oLat, oLng, dLat, dLng);
@@ -1119,7 +1123,7 @@ export const assignNewDriver = asyncHandler(async (req, res) => {
 
   if (!alternativeDriver) {
     logger.warn(`No alternative driver found for ride ${rideId} (vehicle type: ${ride.vehicleType?._id || ride.vehicleType})`);
-    throw new NotFoundError('No alternative driver available at this time');
+    throw new NotFoundError('No alternative driver available at this time.');
   }
 
   // Remove previous driver

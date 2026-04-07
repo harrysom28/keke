@@ -39,8 +39,16 @@ export class AuthorizationError extends AppError {
 }
 
 export class NotFoundError extends AppError {
-  constructor(resource = 'Resource') {
-    super(`${resource} not found`, 404);
+  /**
+   * Use a short resource label (e.g. "Ride") → "Ride not found".
+   * Pass a full sentence (contains "." or ends with "not found") → message is sent as-is.
+   */
+  constructor(message = 'Resource') {
+    const raw = String(message ?? 'Resource').trim();
+    const isFullSentence =
+      /\bnot\s+found\.?$/i.test(raw) || (raw.includes('.') && raw.length > 3);
+    const text = isFullSentence ? raw : `${raw} not found`;
+    super(text, 404);
     this.name = 'NotFoundError';
   }
 }

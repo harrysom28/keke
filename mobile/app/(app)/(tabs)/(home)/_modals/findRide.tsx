@@ -5,7 +5,15 @@ import {
   setRideData,
   setRideUtils,
 } from "@/store/AppSlice";
-import { BackHandler, StatusBar, Dimensions, Platform, View } from "react-native";
+import {
+  BackHandler,
+  Dimensions,
+  Keyboard,
+  KeyboardEvent,
+  Platform,
+  StatusBar,
+  View,
+} from "react-native";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { AntDesign } from "@expo/vector-icons";
 import React, { useCallback, useContext, useEffect, useState, useMemo, useRef } from "react";
@@ -48,6 +56,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onSheetClose, initialDro
   const dispatch = useDispatch();
   const screenHeight = Dimensions.get('window').height;
   const [height, setHeight] = useState<number>(Math.round(screenHeight * 0.6));
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [step, setStep] = useState<number>(1);
   const contentHeightRef = useRef(0);
   const criteriaSignatureRef = useRef("");
@@ -112,6 +121,23 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onSheetClose, initialDro
     contentHeightRef.current = 0;
     setHeight(Math.round(screenHeight * 0.6));
   }, [step, ride.status, screenHeight]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const showSub = Keyboard.addListener(showEvent, (e: KeyboardEvent) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   useEffect(() => {
     const signature = [
@@ -497,8 +523,13 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onSheetClose, initialDro
     
     // Ensure it's a reasonable value (between 200px and screen height)
     heightValue = Math.max(200, Math.min(heightValue, screenHeight));
-    heightValue = Math.round(heightValue);
-    return heightValue;
+    if (keyboardHeight > 0) {
+      heightValue = Math.min(
+        heightValue + keyboardHeight,
+        Math.round(screenHeight * 0.98)
+      );
+    }
+    return Math.round(heightValue);
   };
 
   // Don't render the BottomSheet at all if there's no valid content
