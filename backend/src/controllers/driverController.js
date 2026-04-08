@@ -242,19 +242,18 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
   const kycUserId = driver.user?._id || driver.user;
 
   if (idImageUrl != null || selfieUrl != null) {
-    const kycSet = {};
-    if (idImageUrl) kycSet.idImageUrl = idImageUrl;
-    if (selfieUrl) kycSet.selfieUrl = selfieUrl;
     await DriverKyc.findOneAndUpdate(
       { userId: kycUserId },
       {
-        $set: { ...kycSet, updatedAt: new Date() },
+        $set: {
+          idImageUrl: idImageUrl || 'pending',
+          selfieUrl: selfieUrl || 'pending',
+          updatedAt: new Date(),
+        },
         $setOnInsert: {
           userId: kycUserId,
           idType: 'drivers_license',
           idNumber: String(licenseNumber || '').trim() || 'pending',
-          idImageUrl: idImageUrl || 'pending',
-          selfieUrl: selfieUrl || 'pending',
           verificationStatus: 'pending',
         },
       },
