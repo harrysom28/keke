@@ -6,7 +6,7 @@ import { addToBlacklist } from '../services/tokenBlacklist.js';
 import { extractTokenFromRequest } from '../middleware/auth.js';
 import { createSession, validateAndRotateSession, revokeSessions } from '../services/sessionService.js';
 import crypto from 'crypto';
-import { generateOTP, storeOTP, verifyOTP, deleteOTP } from '../utils/otp.js';
+import { generateOTP, storeOTP, verifyOTP, deleteOTP, wasOtpIssuedRecently } from '../utils/otp.js';
 import { cache } from '../config/redis.js';
 import { AuthenticationError, ValidationError, ConflictError, NotFoundError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
@@ -139,6 +139,24 @@ export const register = asyncHandler(async (req, res) => {
     // If fully registered, tell client to login
     if (existingUser.isRegCompleted) {
       throw new ConflictError('Account already exists. Please login.');
+    }
+
+    // Avoid a second OTP when the user double-submits signup: same code stays valid
+    const throttleId = existingUser.phone || existingUser.email?.toLowerCase();
+    if (throttleId && (await wasOtpIssuedRecently(throttleId, 'verification'))) {
+      return res.status(200).json({
+        status: 'success',
+        message: 'Verification code already sent. Please check your messages.',
+        data: {
+          user: {
+            user_id: existingUser._id,
+            phone: existingUser.phone,
+            email: existingUser.email,
+          },
+          otp_queued: false,
+          otp_recently_sent: true,
+        },
+      });
     }
 
     // If not completed, resend OTP instead of failing
@@ -604,6 +622,13 @@ export const resendOTP = asyncHandler(async (req, res) => {
     throw new ConflictError('Account already exists. Please login instead.');
   }
 
+  const throttleId = user.phone || user.email?.toLowerCase();
+  if (throttleId && (await wasOtpIssuedRecently(throttleId, 'verification'))) {
+    throw new ValidationError(
+      'A verification code was just sent. Please wait about a minute before requesting a new one.'
+    );
+  }
+
   return await sendOtpForUser(res, user, 200, 'OTP resent');
 });
 
@@ -627,8 +652,14 @@ export const requestLoginOtp = asyncHandler(async (req, res) => {
     throw new NotFoundError('No account found with this phone or email. Please sign up first.');
   }
 
-  const otp = generateOTP();
   const identifier = email || phone;
+  if (identifier && (await wasOtpIssuedRecently(identifier, 'verification'))) {
+    throw new ValidationError(
+      'A login code was just sent. Please wait about a minute before requesting another.'
+    );
+  }
+
+  const otp = generateOTP();
   if (process.env.NODE_ENV !== 'production') {
     logger.info(`🔐 [DEV] Login OTP for ${identifier}: ${otp} (use this if SMS/email not received)`);
     logOtpToTerminal(otp, identifier, 'login');

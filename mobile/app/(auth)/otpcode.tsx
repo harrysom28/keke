@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Svg, { Circle, Path } from "react-native-svg";
 import {
   WINDOW_WIDTH,
@@ -41,6 +41,7 @@ const OtpCode = () => {
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
   const [resend, setResend] = useState(false);
+  const confirmLockRef = useRef(false);
 
   useEffect(() => {
     if (item?.email_phone_number) {
@@ -60,6 +61,10 @@ const OtpCode = () => {
   };
 
   const validateForgotPasswordPin = (text: string) => {
+    if (loading || confirmLockRef.current) {
+      return;
+    }
+    confirmLockRef.current = true;
     setLoading(true);
     apiClient
       .post("forgot/password/confirm-otp", {
@@ -88,13 +93,28 @@ const OtpCode = () => {
           });
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        confirmLockRef.current = false;
+      });
   };
 
   const validateLoginOtp = async (text: string) => {
+    if (loading || confirmLockRef.current) {
+      return;
+    }
+    confirmLockRef.current = true;
     setLoading(true);
-    const device_id = await getUniqueId().catch(() => "mobile");
-    const device_token = await requestUserNotificationPermission();
+    let device_id = "mobile";
+    let device_token: string | null = null;
+    try {
+      device_id = await getUniqueId().catch(() => "mobile");
+      device_token = await requestUserNotificationPermission();
+    } catch {
+      setLoading(false);
+      confirmLockRef.current = false;
+      return;
+    }
     apiClient
       .post("auth/user/login-with-otp", {
         email_phone_number: item?.email_phone_number,
@@ -127,10 +147,17 @@ const OtpCode = () => {
           showMessage({ type: "danger", message: "Login failed" });
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        confirmLockRef.current = false;
+      });
   };
 
   const validateSignupPin = (text: string) => {
+    if (loading || confirmLockRef.current) {
+      return;
+    }
+    confirmLockRef.current = true;
     setLoading(true);
     apiClient
       .post("auth/user/confirm-otp", { otp: text, email_phone_number: item?.email_phone_number })
@@ -155,10 +182,16 @@ const OtpCode = () => {
           });
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        confirmLockRef.current = false;
+      });
   };
 
   const resendOtp = () => {
+    if (resend) {
+      return;
+    }
     setResend(true);
 
     const isForgotPassword = item?.target === OTP_TARGET[1];

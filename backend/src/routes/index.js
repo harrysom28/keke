@@ -90,7 +90,7 @@ router.post(
 );
 router.post(
   '/forgot/password/confirm-otp',
-  limiters.otpLimiter,
+  limiters.otpVerifyLimiter,
   validationRules.forgotPasswordConfirmOtp,
   validate,
   authController.forgotPasswordConfirmOtp

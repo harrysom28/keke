@@ -31,6 +31,7 @@ const renderDropdownImage = () => {
 
 const SignUp = () => {
   const phoneInput = useRef<PhoneInput>(null);
+  const submitLockRef = useRef(false);
   const router = useRouter();
   const dispatch = useDispatch();
   const { registration } = useSelector(AuthState);
@@ -40,6 +41,10 @@ const SignUp = () => {
   });
 
   const handleSubmit = async () => {
+    if (submitLockRef.current || loading) {
+      return;
+    }
+
     const num = phoneInput?.current?.getNumberAfterPossiblyEliminatingZero()
       ?.formattedNumber as string;
     const isValidNumber = phoneInput?.current?.isValidNumber(num);
@@ -88,6 +93,7 @@ const SignUp = () => {
       email_phone_number: dta.email_phone_number,
     };
 
+    submitLockRef.current = true;
     setLoading(true);
     axios
       .post(REGISTER, dta)
@@ -141,7 +147,10 @@ const SignUp = () => {
           });
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        submitLockRef.current = false;
+      });
   };
 
   return (

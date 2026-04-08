@@ -164,6 +164,34 @@ export const checkOTPExists = async (identifier, purpose = 'verification') => {
 };
 
 /**
+ * True if a verification OTP was stored recently (based on Redis TTL), to avoid
+ * double-submit / duplicate API calls issuing a second code and invalidating the first.
+ */
+export const wasOtpIssuedRecently = async (
+  identifier,
+  purpose = 'verification',
+  recentSeconds = parseInt(process.env.OTP_ISSUE_COOLDOWN_SEC || '75', 10)
+) => {
+  const id = typeof identifier === 'string' ? identifier.trim().toLowerCase() : String(identifier);
+  const key = otpDataKey(id, purpose);
+  try {
+    const client = getRedisClient();
+    if (!client?.isOpen) {
+      return false;
+    }
+    const ttl = await client.ttl(key);
+    if (ttl <= 0) {
+      return false;
+    }
+    const maxTtl = OTP_EXPIRE_MINUTES * 60;
+    const ageSeconds = maxTtl - ttl;
+    return ageSeconds < recentSeconds;
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Delete OTP
  */
 export const deleteOTP = async (identifier, purpose = 'verification') => {

@@ -154,6 +154,32 @@ export function initRateLimiters() {
     },
   });
 
+  /** Verify attempts (confirm / login-with-otp): separate bucket so SMS resends do not exhaust verify budget. */
+  limiters.otpVerifyLimiter = rateLimit({
+    windowMs: parseInt(process.env.OTP_VERIFY_RATE_LIMIT_WINDOW_MS || '900000', 10),
+    max: parseInt(process.env.OTP_VERIFY_RATE_LIMIT_MAX || '40', 10),
+    store: makeRedisStore('rl:otpverify:'),
+    keyGenerator: otpRateLimitKey,
+    skipSuccessfulRequests: true,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => {
+      return process.env.NODE_ENV === 'test';
+    },
+    message: {
+      status: 'error',
+      message: 'Too many verification attempts, please try again later.',
+    },
+    handler: (req, res) => {
+      const windowMs = parseInt(process.env.OTP_VERIFY_RATE_LIMIT_WINDOW_MS || '900000', 10);
+      res.status(429).json({
+        status: 'error',
+        message: 'Too many verification attempts, please try again later.',
+        retryAfter: Math.ceil(windowMs / 1000),
+      });
+    },
+  });
+
   limiters.passwordResetLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 3,
