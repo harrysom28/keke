@@ -114,7 +114,10 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
   // Check if user already has a driver profile
   const existingDriver = await Driver.findOne({ user: userId });
   if (existingDriver) {
-    throw new ConflictError('Driver profile already exists');
+    if (existingDriver.verificationStatus === 'approved' || existingDriver.documentsVerified) {
+      throw new ConflictError('Driver profile already exists');
+    }
+    await Driver.deleteOne({ _id: existingDriver._id });
   }
 
   // Check if user role is driver
