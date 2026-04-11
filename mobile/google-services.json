@@ -1,44 +1,26 @@
 {
   "project_info": {
-    "project_number": "739000728443",
-    "project_id": "kekeapp-79989",
-    "storage_bucket": "kekeapp-79989.firebasestorage.app"
+    "project_number": "283157572139",
+    "project_id": "keke-1ea45",
+    "storage_bucket": "keke-1ea45.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:739000728443:android:3138956cc5b08f1ecadbde",
+        "mobilesdk_app_id": "1:283157572139:android:7b3005519795597846586e",
         "android_client_info": {
           "package_name": "com.keke.app"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "739000728443-9rkecl15ccd3mla76qk2ukdl97gr7d4s.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.keke.app",
-            "certificate_hash": "398a661afb227497a36e856f90ad47f2cc7d9316"
-          }
-        },
-        {
-          "client_id": "739000728443-1m6a11h3ahe55khqk7vceigs31r83uhh.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyB0Q0zTlazui_1ixJfyQjU_wk2TQTib6T0"
+          "current_key": "AIzaSyC8ybczSzZFvizinERR6f98sitRKCI-KTI"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "739000728443-1m6a11h3ahe55khqk7vceigs31r83uhh.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }
