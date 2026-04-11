@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useContext, useCallback } from "react";
+import React, { useState, useEffect, useRef, useContext } from "react";
 import {
   ImageBackground,
   Keyboard,
@@ -27,6 +27,7 @@ import { INITIATE_WALLET_TOPUP } from "@/constants";
 import apiClient from "@/utils/apiClient";
 import * as Clipboard from "expo-clipboard";
 import { PaymentWebViewModal } from "@/components/PaymentWebViewModal";
+import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 
 interface Transaction {
   payment_id: string;
@@ -57,11 +58,32 @@ const WalletScreen = () => {
   const [walletHeldBalance, setWalletHeldBalance] = useState<number>(0);
   const topupAmountRef = useRef<TextInput>(null);
   const initialBalanceRef = useRef<string | undefined>(undefined);
+  const pendingPaymentUrlRef = useRef<string | null>(null);
+  const pendingTopupRefRef = useRef<string | null>(null);
+  const topupKeyboardInset = useKeyboardInset(topupModal);
+
+  const handleModalDismiss = () => {
+    const url = pendingPaymentUrlRef.current;
+    const ref = pendingTopupRefRef.current;
+    if (url) {
+      pendingPaymentUrlRef.current = null;
+      pendingTopupRefRef.current = null;
+      setPendingPaymentUrl(null);
+      setPendingTopupReference(null);
+      initialBalanceRef.current = user?.profile?.balance;
+      setTimeout(() => {
+        setPaymentWebViewUrl(url);
+        setPaymentWebViewRef(ref);
+      }, 300);
+    }
+  };
 
   const closeTopupModal = () => {
     topupAmountRef.current?.blur();
     Keyboard.dismiss();
     setTopupModal(false);
+    // Android: Modal onDismiss is iOS-only; open WebView when modal closes
+    handleModalDismiss();
   };
 
   useEffect(() => {
@@ -117,11 +139,13 @@ const WalletScreen = () => {
             : payment.amount > 0
             ? "topup"
             : "withdrawal",
-          description: payment.ride_id
-            ? "Ride Payment"
-            : payment.amount > 0
-            ? "Wallet Top-up"
-            : "Withdrawal",
+          description:
+            payment.description ||
+            (payment.ride_id
+              ? "Ride Payment"
+              : payment.amount > 0
+              ? "Wallet Top-up"
+              : "Withdrawal"),
         }));
         setTransactions(transformed);
       }
@@ -179,6 +203,8 @@ const WalletScreen = () => {
         setCardLoading(false);
         setPendingPaymentUrl(paymentUrl);
         setPendingTopupReference(reference);
+        pendingPaymentUrlRef.current = paymentUrl;
+        pendingTopupRefRef.current = reference;
         closeTopupModal();
       } else {
         showMessage({
@@ -194,21 +220,6 @@ const WalletScreen = () => {
         message: error?.response?.data?.message || "Could not initialize payment",
       });
       setCardLoading(false);
-    }
-  };
-
-  const handleModalDismiss = () => {
-    if (pendingPaymentUrl) {
-      const url = pendingPaymentUrl;
-      const ref = pendingTopupReference;
-      setPendingPaymentUrl(null);
-      setPendingTopupReference(null);
-      console.log("📱 Modal dismissed, opening payment in WebView:", url);
-      initialBalanceRef.current = user?.profile?.balance;
-      setTimeout(() => {
-        setPaymentWebViewUrl(url);
-        setPaymentWebViewRef(ref);
-      }, 300);
     }
   };
 
@@ -520,7 +531,6 @@ const WalletScreen = () => {
         transparent
         animationType="slide"
         onRequestClose={closeTopupModal}
-        onDismiss={handleModalDismiss}
       >
         <View style={tw`flex-1 justify-end`}>
           <Pressable
@@ -528,7 +538,10 @@ const WalletScreen = () => {
             onPress={closeTopupModal}
           />
           <View
-            style={[tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8`, { maxHeight: '60%' }]}
+            style={[
+              tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8`,
+              { maxHeight: "60%", marginBottom: topupKeyboardInset },
+            ]}
           >
             <View
               style={tw`flex-row items-center justify-between mb-5`}
