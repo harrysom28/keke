@@ -181,9 +181,14 @@ const SelectItem = ({
 };
 
 const Gender = [
-  { label: "Male", value: "Male" },
-  { label: "Female", value: "Female" },
+  { label: "Male", value: "male" },
+  { label: "Female", value: "female" },
 ];
+
+const normalizeGenderForEnum = (g: string) => {
+  const x = String(g || "").trim().toLowerCase();
+  return x === "male" || x === "female" ? x : "";
+};
 
 const CheckItem = ({
   item,
@@ -272,7 +277,9 @@ const DriverInfo = () => {
   const [state, setState] = useState({
     first_name: nameParts.first,
     last_name: nameParts.last,
-    gender: user?.profile?.gender || user?.gender || "",
+    gender: normalizeGenderForEnum(
+      user?.profile?.gender || user?.gender || ""
+    ),
     vehicle_name: "",
     vehicle_year: "",
     vehicle_color: "",
@@ -353,7 +360,10 @@ const DriverInfo = () => {
       ...prev,
       first_name: first || prev.first_name,
       last_name: last || prev.last_name,
-      gender: user?.profile?.gender || user?.gender || prev.gender,
+      gender:
+        normalizeGenderForEnum(
+          user?.profile?.gender || user?.gender || ""
+        ) || prev.gender,
       state: user?.profile?.state || user?.state || prev.state,
     }));
   }, [nameFromParams, user?.profile?.name, user?.name, user?.profile?.gender, user?.gender, user?.profile?.state, user?.state]);
@@ -451,82 +461,124 @@ const DriverInfo = () => {
     }
   }, [state.vehicle_type_id]);
 
-  const handleSubmit = () => {
-    const data = new FormData();
-    Object.keys(state).forEach((key) => {
-      data.append(key, state[key]);
-    });
+  const mimeFromUri = (uri: string) => {
+    const ext = (uri.split(".").pop() || "jpg").toLowerCase();
+    if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+    if (ext === "png") return "image/png";
+    if (ext === "gif") return "image/gif";
+    if (ext === "heic" || ext === "heif") return "image/heic";
+    return `image/${ext}`;
+  };
 
-    console.log(data);
-
+  const handleSubmit = async () => {
     setLoading(true);
-    axios
-      .post(CREATE_DRIVER, data, apiConfigFormData)
-      .then(({ data }) => {
-        // console.log(data);
-        const successMessage = typeof data?.message === 'string' 
-          ? data.message 
-          : (data?.message?.message || 'Driver registration completed successfully');
-        showMessage({
-          type: "success",
-          message: successMessage,
-        });
+    try {
+      const data = new FormData();
 
-        // dispatch(updateUser({ type: "2" }));
-        router.navigate("/");
-      })
-      .catch((err) => {
-        console.log("Driver registration error:", err?.response?.data || err.message);
-        
-        // Handle validation errors (422)
-        if (err?.response?.status === 422 && err?.response?.data?.errors) {
-          const errors = err.response.data.errors;
-          // Get first error message from validation errors
-          const firstError = Object.values(errors)[0];
-          const errorMessage = Array.isArray(firstError) ? firstError[0] : firstError;
-          showMessage({
-            type: "danger",
-            message: typeof errorMessage === 'string' ? errorMessage : "Validation error. Please check your input.",
-          });
-        } else if (err?.response?.data?.message) {
-          // Ensure message is a string
-          const errorMessage = typeof err.response.data.message === 'string' 
-            ? err.response.data.message 
-            : String(err.response.data.message || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else if (err?.response?.data?.error) {
-          // Handle error object - extract message string
-          // In development, backend returns full error object with statusCode, status, isOperational, name, message
-          const errorData = err.response.data.error;
-          let errorMessage = 'An error occurred';
-          
-          if (typeof errorData === 'string') {
-            errorMessage = errorData;
-          } else if (errorData && typeof errorData === 'object') {
-            // Extract message from error object
-            errorMessage = errorData.message || errorData.error || errorData.name || 'An error occurred';
-          }
-          
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else if (err?.message) {
-          showMessage({
-            type: "danger",
-            message: typeof err.message === 'string' ? err.message : 'An error occurred. Please try again.',
-          });
-        } else {
-          showMessage({
-            type: "danger",
-            message: 'An error occurred. Please try again.',
-          });
+      const imageFields = [
+        "licence_image_name",
+        "id_card_image_name",
+        "image_name",
+        "vehicle_image_name",
+      ];
+      Object.keys(state).forEach((key) => {
+        if (
+          !imageFields.includes(key) &&
+          state[key as keyof typeof state] !== null &&
+          state[key as keyof typeof state] !== undefined
+        ) {
+          data.append(key, state[key as keyof typeof state] as string);
         }
-      })
-      .finally(() => setLoading(false));
+      });
+
+      const imageFieldMap = {
+        licence_image_name: "licence_image_name",
+        id_card_image_name: "id_card_image_name",
+        image_name: "image_name",
+        vehicle_image_name: "vehicle_image_name",
+      } as const;
+
+      for (const [stateKey, formKey] of Object.entries(imageFieldMap)) {
+        const img = state[stateKey as keyof typeof state] as {
+          uri?: string;
+        } | null;
+        if (img?.uri) {
+          const ext = img.uri.split(".").pop() || "jpg";
+          data.append(formKey, {
+            uri: img.uri,
+            type: mimeFromUri(img.uri),
+            name: `${formKey}.${ext}`,
+          } as unknown as Blob);
+        }
+      }
+
+      await axios.post(CREATE_DRIVER, data, {
+        ...apiConfigFormData,
+        timeout: 60000,
+        onUploadProgress: (progressEvent) => {
+          const percent = Math.round(
+            (progressEvent.loaded * 100) / (progressEvent.total || 1)
+          );
+          console.log(`Upload progress: ${percent}%`);
+        },
+      });
+
+      showMessage({
+        type: "success",
+        message: "Driver registration completed successfully",
+      });
+      router.navigate("/");
+    } catch (err: unknown) {
+      const e = err as {
+        response?: {
+          status?: number;
+          data?: {
+            message?: string;
+            errors?: Record<string, unknown>;
+            error?: { message?: string } | string;
+          };
+        };
+        message?: string;
+      };
+      console.log(
+        "Driver registration error:",
+        e?.response?.data || e?.message
+      );
+
+      let message: string =
+        "Registration failed. Please try again.";
+      if (e?.response?.status === 422 && e?.response?.data?.errors) {
+        const errors = e.response.data.errors;
+        const firstError = Object.values(errors)[0];
+        const extracted = Array.isArray(firstError)
+          ? firstError[0]
+          : firstError;
+        message =
+          typeof extracted === "string"
+            ? extracted
+            : "Validation error. Please check your input.";
+      } else {
+        const raw =
+          e?.response?.data?.message ||
+          (typeof e?.response?.data?.error === "object" &&
+          e?.response?.data?.error &&
+          "message" in e.response.data.error
+            ? e.response.data.error.message
+            : undefined) ||
+          (typeof e?.response?.data?.error === "string"
+            ? e.response.data.error
+            : undefined) ||
+          e?.message;
+        if (typeof raw === "string" && raw) message = raw;
+      }
+
+      showMessage({
+        type: "danger",
+        message,
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleValidate = useCallback(() => {
@@ -635,7 +687,9 @@ const DriverInfo = () => {
         }
       }
     } else {
-      handleSubmit();
+      if (handleValidate()) {
+        handleSubmit();
+      }
     }
   };
 
