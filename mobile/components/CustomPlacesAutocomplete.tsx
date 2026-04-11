@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { TextInput, View, Text, ActivityIndicator, Keyboard } from 'react-native';
+import { TextInput, View, Text, ActivityIndicator, Keyboard, Platform } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
 import { searchPlaces, searchPlacesWithLocation, getPlaceDetails, PlacePrediction } from '@/utils/placesApi';
 import apiClient from '@/utils/apiClient';
@@ -231,12 +231,18 @@ export default function CustomPlacesAutocomplete({
       clearTimeout(debounceRef.current);
       debounceRef.current = undefined;
     }
-    // Close list, clear suggestions, dismiss keyboard, blur input immediately
     setShowResults(false);
     setPredictions([]);
-    Keyboard.dismiss();
-    inputRef.current?.blur();
     setListClosedBySelection(true);
+    if (Platform.OS === 'ios') {
+      Keyboard.dismiss();
+      inputRef.current?.blur();
+    } else {
+      setTimeout(() => {
+        Keyboard.dismiss();
+        inputRef.current?.blur();
+      }, 50);
+    }
     const shortText = prediction.structured_formatting?.main_text || prediction.name;
     const fullDisplayText =
       prediction.structured_formatting?.main_text ||
@@ -386,12 +392,12 @@ export default function CustomPlacesAutocomplete({
             }
           }}
           onBlur={() => {
-            // Hide results when field loses focus - 800ms allows handleSelectPlace to finish before hiding
+            if (isSelectingPlaceRef.current) return;
             setTimeout(() => {
-              if (!loading && !isSelectingPlaceRef.current) {
+              if (!isSelectingPlaceRef.current) {
                 setShowResults(false);
               }
-            }, 800);
+            }, Platform.OS === 'android' ? 200 : 100);
           }}
         />
         

@@ -5,6 +5,7 @@ import {
 } from "@/constants";
 import {
   ActivityIndicator,
+  AppState,
   Image,
   Pressable,
   StatusBar,
@@ -27,7 +28,7 @@ import {
 } from "@/store/AppSlice";
 import MapView from "react-native-maps";
 import { HomeMap } from "@/components/map/HomeMap";
-import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useThrottledLocationUpdate } from "@/hooks/useThrottledLocationUpdate";
 import Svg, { Path } from "react-native-svg";
 import { TBooking, TRide } from "@/types";
@@ -84,6 +85,7 @@ interface ILocation {
 export type IARide = {
   screen:
     | "WAITING"
+    | "SUMMARY"
     | "REVIEW"
     | "SEARCH"
     | "DRIVERS"
@@ -108,6 +110,24 @@ export type IARide = {
 // Must match _customTab: pt-2.5 (10) + icon (52) + gap (4) + label (~14) + paddingBottom (8) = 88
 const TAB_BAR_CONTENT_HEIGHT = 88;
 const TAB_BAR_HEIGHT = TAB_BAR_CONTENT_HEIGHT; // alias for compatibility
+
+function parsePusherDataPayload(raw: unknown): Record<string, unknown> | null {
+  if (raw == null) return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === "string") {
+    try {
+      const v = JSON.parse(raw);
+      return v && typeof v === "object" && !Array.isArray(v)
+        ? (v as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -279,6 +299,7 @@ export default function HomeScreen() {
       })
     );
     dispatch(setRideData({ waiting: {}, origin: {}, destination: {} } as any));
+    dispatch(setRideUtils({ driverLiveLocation: null }));
     dispatch(setSubscriptionUtils({ chat: false }));
     
     // Animate map to default home region (user location or default). Use ref so async callbacks get latest location.
@@ -296,6 +317,26 @@ export default function HomeScreen() {
       logger.debug('✅ Map animated to default home region', defaultRegion);
     }
   }, [location.latitude, location.longitude, dispatch]);
+
+  const riderActiveRideStatusForMap = String(
+    temp?.status ?? (ride?.data?.waiting as any)?.status ?? ""
+  );
+
+  useEffect(() => {
+    const st = String(
+      temp?.status ?? (ride?.data?.waiting as any)?.status ?? ""
+    ).toLowerCase();
+    if (
+      st === "in-progress" ||
+      st === "in_progress" ||
+      st === "started" ||
+      st === "completed" ||
+      st === "cancelled" ||
+      st === "rejected"
+    ) {
+      dispatch(setRideUtils({ driverLiveLocation: null }));
+    }
+  }, [temp?.status, ride?.data?.waiting, dispatch]);
 
   // Milestone offer countdown: show one toast per session when rider is close or can claim
   useEffect(() => {
@@ -415,13 +456,10 @@ export default function HomeScreen() {
       .then(async ({ data }) => {
         const bookings = data?.data || [];
         if (Array.isArray(bookings) && bookings.length > 0) {
-          const dismissedId = await AsyncStorage.getItem('dismissedBookingId');
           const bookingData = bookings.find((candidate: any) => {
             const status = String(candidate?.status || candidate?.ride_status || '').toLowerCase();
-            const bookingId = candidate?.ride_id || candidate?._id || candidate?.booking_id;
             const isClosed = status === 'cancelled' || status === 'completed';
-            const isDismissed = !!dismissedId && dismissedId === bookingId;
-            return !isClosed && !isDismissed;
+            return !isClosed;
           });
 
           if (!bookingData) {
@@ -1098,9 +1136,27 @@ export default function HomeScreen() {
 
   // When user returns to home tab with valid location and no route, center map on current location
   const lastFocusedRef = useRef(false);
+  const appStateRef = useRef(AppState.currentState);
+  const focusLostToBackgroundRef = useRef(false);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (appStateRef.current === "active" && nextState.match(/inactive|background/)) {
+        focusLostToBackgroundRef.current = true;
+      }
+      if (nextState === "active") {
+        focusLostToBackgroundRef.current = false;
+      }
+      appStateRef.current = nextState;
+    });
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     if (!isFocused) {
-      lastFocusedRef.current = false;
+      if (!focusLostToBackgroundRef.current) {
+        lastFocusedRef.current = false;
+      }
       return;
     }
     if (!hasValidLocation || maps.origin.latitude !== 0 || maps.destination.latitude !== 0) return;
@@ -1118,19 +1174,6 @@ export default function HomeScreen() {
       });
     }
   }, [isFocused, hasValidLocation, location.latitude, location.longitude, maps.origin.latitude, maps.destination.latitude]);
-
-  // Update map when location accuracy improves significantly (e.g. GPS lock)
-  useEffect(() => {
-    if (!isFocused || !hasValidLocation || !mapRef.current) return;
-    if (maps.origin.latitude !== 0 || maps.destination.latitude !== 0) return;
-    if (location.accuracy == null || location.accuracy > 80) return;
-    mapRef.current.animateToRegion({
-      latitude: location.latitude,
-      longitude: location.longitude,
-      ...mapDelta,
-    }, 500);
-    logger.debug(`Map updated to precise location (accuracy: ${location.accuracy.toFixed(0)}m)`);
-  }, [isFocused, hasValidLocation, location.latitude, location.longitude, location.accuracy, maps.origin.latitude, maps.destination.latitude]);
 
   const CancelBooking = (
     booking_id: string,
@@ -1276,6 +1319,79 @@ export default function HomeScreen() {
       if (activeRideId) {
         logger.info(`Ride status update event received: ${event}`);
         // Refresh ride data when status changes
+        getActiveRide();
+      }
+    },
+  });
+
+  const riderPusherUserId =
+    user?.profile?.user_id ?? (user?.profile as { _id?: string } | undefined)?._id ?? null;
+
+  const riderUserChannel =
+    riderPusherUserId != null
+      ? `private-user-${String(riderPusherUserId)}`
+      : "private-user-off";
+
+  usePusherChannel({
+    channel: riderUserChannel,
+    visible: !!token && riderPusherUserId != null,
+    onEvent: (event: { eventName?: string; data?: unknown }) => {
+      const name = event?.eventName;
+      const payload = parsePusherDataPayload(event?.data);
+      if (!name || !payload) return;
+
+      const activeRiderRideId = String(
+        temp?.ride_id ??
+          (temp as any)?._id ??
+          (ride?.data?.waiting as any)?.ride_id ??
+          (ride?.data?.waiting as any)?._id ??
+          ""
+      );
+
+      if (name === "driver-location-update") {
+        const rideIdEvt = payload.rideId != null ? String(payload.rideId) : "";
+        if (rideIdEvt && activeRiderRideId && rideIdEvt !== activeRiderRideId) {
+          return;
+        }
+        const lat = Number(payload.lat);
+        const lng = Number(payload.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        const headingRaw = payload.heading;
+        const heading =
+          headingRaw != null && headingRaw !== "" && !Number.isNaN(Number(headingRaw))
+            ? Number(headingRaw)
+            : null;
+        dispatch(
+          setRideUtils({
+            driverLiveLocation: { lat, lng, heading },
+          })
+        );
+        return;
+      }
+
+      if (name === "driver-arrived") {
+        const dn = payload.driverName != null ? String(payload.driverName) : "Driver";
+        const vi = payload.vehicleInfo != null ? String(payload.vehicleInfo) : "";
+        const plate = payload.plateNumber != null ? String(payload.plateNumber) : "";
+        const desc = [vi, plate].filter(Boolean).join(" • ");
+        safeShowMessage({
+          type: "success",
+          message: `${dn} has arrived`,
+          ...(desc ? { description: desc } : {}),
+          duration: 8000,
+        });
+        getActiveRide();
+        return;
+      }
+
+      if (name === "payment-confirmed") {
+        const amt = Number(payload.amount ?? 0);
+        safeShowMessage({
+          type: "success",
+          message: "Payment confirmed",
+          description: `₦${Number.isFinite(amt) ? amt.toLocaleString() : String(payload.amount ?? "")} cash — thank you!`,
+          duration: 5000,
+        });
         getActiveRide();
       }
     },
@@ -1497,6 +1613,55 @@ export default function HomeScreen() {
     }
   }, [location?.longitude, location?.latitude, address?.formattedAddress, isFocused, updateLocation]);
 
+  const { showReturnToLiveRide, showDismissedBookingChip } = useMemo(() => {
+    const waitingData = ride?.data?.waiting as any;
+    const activeRideIdForPill =
+      temp?.ride_id ||
+      (temp as any)?._id ||
+      waitingData?.ride_id ||
+      waitingData?._id;
+    const activeRideStatus = String(
+      temp?.status ?? waitingData?.status ?? ""
+    ).toLowerCase();
+    const hasOngoingLiveRide =
+      !!activeRideIdForPill &&
+      !["completed", "cancelled", "rejected"].includes(activeRideStatus);
+
+    const bookingStatusLower = String(booking?.status ?? "").toLowerCase();
+    const bookingCardVisible =
+      Object.keys(booking).length > 0 &&
+      bookingStatusLower !== "cancelled" &&
+      bookingStatusLower !== "completed" &&
+      dismissedBookingId !== booking?.booking_id;
+
+    const bookingKey = String(
+      (booking as any)?.ride_id ?? booking?.booking_id ?? ""
+    );
+    const sameRideAsBookingCard =
+      bookingKey !== "" &&
+      String(activeRideIdForPill ?? "") === bookingKey;
+
+    return {
+      showReturnToLiveRide:
+        hasOngoingLiveRide && !(bookingCardVisible && sameRideAsBookingCard),
+      showDismissedBookingChip:
+        Object.keys(booking).length > 0 &&
+        bookingStatusLower !== "cancelled" &&
+        bookingStatusLower !== "completed" &&
+        dismissedBookingId != null &&
+        String(dismissedBookingId) === String(booking?.booking_id),
+    };
+  }, [ride?.data?.waiting, temp, booking, dismissedBookingId]);
+
+  const restoreDismissedBookingBanner = useCallback(async () => {
+    await AsyncStorage.removeItem("dismissedBookingId");
+    setDismissedBookingId(null);
+  }, []);
+
+  const openActiveRideSheet = useCallback(() => {
+    activeRideSheetRef?.current?.open();
+  }, []);
+
   return (
     <>
       <PaymentReceiptModal
@@ -1511,7 +1676,7 @@ export default function HomeScreen() {
             })
           );
           setPaymentReceipt(false);
-          setRide((prev) => ({ ...prev, screen: "REVIEW" }));
+          setRide((prev) => ({ ...prev, screen: "SUMMARY" }));
           activeRideSheetRef?.current?.open();
         }}
       />
@@ -1578,6 +1743,7 @@ export default function HomeScreen() {
           routeCoords={routeCoords}
           routeLoading={routeLoading}
           pauseDriverUpdates={isBooking}
+          riderActiveRideStatus={riderActiveRideStatusForMap || null}
           etaLabel={hasPickupAndDest && eta ? eta : null}
           arriveByLabel={hasPickupAndDest && routeArriveBy ? `Arrive by ${routeArriveBy}` : null}
           onRouteReady={(_coords) => {
@@ -1696,7 +1862,6 @@ export default function HomeScreen() {
                   if (bookingId) {
                     await AsyncStorage.setItem('dismissedBookingId', String(bookingId));
                     setDismissedBookingId(String(bookingId));
-                    setBooking({});
                     logger.debug('Booking dismissed by user', { bookingId: String(bookingId) });
                   }
                 }}
@@ -1940,6 +2105,108 @@ export default function HomeScreen() {
             },
           ]}
         >
+          {(showDismissedBookingChip || showReturnToLiveRide) && (
+            <View style={{ marginBottom: 8, gap: 8 }}>
+              {showDismissedBookingChip ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    void restoreDismissedBookingBanner();
+                  }}
+                  activeOpacity={0.85}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    backgroundColor: "#FFFFFF",
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: "#E5E7EB",
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    shadowColor: "#000",
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.08,
+                    shadowRadius: 6,
+                    elevation: 4,
+                  }}
+                >
+                  <View style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
+                    <MaterialCommunityIcons
+                      name="calendar-clock"
+                      size={22}
+                      color={tw.color("base-green") ?? "#2E7D52"}
+                      style={{ marginRight: 10 }}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={tw.style(`text-[14px] text-[#1A1A1A]`, {
+                          fontFamily: "RobotoBold",
+                        })}
+                      >
+                        Booking minimized
+                      </Text>
+                      <Text
+                        style={tw.style(`text-[12px] text-[#6B7280] mt-0.5`, {
+                          fontFamily: "RobotoRegular",
+                        })}
+                        numberOfLines={1}
+                      >
+                        Tap to show your scheduled ride again
+                      </Text>
+                    </View>
+                  </View>
+                  <AntDesign name="right" size={16} color="#6B7280" />
+                </TouchableOpacity>
+              ) : null}
+              {showReturnToLiveRide ? (
+                <TouchableOpacity
+                  onPress={openActiveRideSheet}
+                  activeOpacity={0.85}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    backgroundColor: tw.color("base-green") ?? "#2E7D52",
+                    borderRadius: 12,
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    shadowColor: "#000",
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.12,
+                    shadowRadius: 6,
+                    elevation: 4,
+                  }}
+                >
+                  <View style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
+                    <MaterialCommunityIcons name="car" size={22} color="#FFFFFF" style={{ marginRight: 10 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={{
+                          fontFamily: "RobotoBold",
+                          fontSize: 14,
+                          color: "#FFFFFF",
+                        }}
+                      >
+                        Ride in progress
+                      </Text>
+                      <Text
+                        style={{
+                          fontFamily: "RobotoRegular",
+                          fontSize: 12,
+                          color: "rgba(255,255,255,0.9)",
+                          marginTop: 2,
+                        }}
+                        numberOfLines={1}
+                      >
+                        Tap to open trip details
+                      </Text>
+                    </View>
+                  </View>
+                  <AntDesign name="right" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )}
           {/* Where are you going? — opens find-ride flow (unchanged); only schedule actions open Book a Ride sheet */}
           {!loading && (
             <TouchableOpacity
