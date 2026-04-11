@@ -217,8 +217,11 @@ export const verifyOTPCode = asyncHandler(async (req, res) => {
     throw new NotFoundError('User');
   }
 
-  user.isVerified = true;
-  await user.save();
+  await User.findByIdAndUpdate(
+    user._id,
+    { $set: { isVerified: true } },
+    { runValidators: false }
+  );
 
   res.json({
     status: 'success',
@@ -228,7 +231,7 @@ export const verifyOTPCode = asyncHandler(async (req, res) => {
         user_id: user._id,
         phone: user.phone,
         email: user.email,
-        isVerified: user.isVerified,
+        isVerified: true,
       },
     },
   });
@@ -266,18 +269,22 @@ export const loginWithOtp = asyncHandler(async (req, res) => {
     throw new AuthenticationError('Your account has been deactivated');
   }
 
-  user.isVerified = true;
-  if (device_id) user.deviceId = device_id;
-  if (device_token) user.deviceToken = device_token;
-  await user.save();
+  const authUpdateFields = { isVerified: true };
+  if (device_id) authUpdateFields.deviceId = device_id;
+  if (device_token) authUpdateFields.deviceToken = device_token;
+  await User.findByIdAndUpdate(user._id, { $set: authUpdateFields }, { runValidators: false });
+  // Re-fetch so formatUserResponse has current data
+  const freshUser = await User.findById(user._id);
 
   if (phone) await deleteOTP(phone, 'verification');
   if (email) await deleteOTP(email, 'verification');
 
-  const tokens = await issueTokenPairWithSession(user, req);
+  const tokens = await issueTokenPairWithSession(freshUser, req);
 
   const canBook =
-    user.onboardingStage === 'rider_complete' || user.onboardingStage === 'driver_complete' || user.isRegCompleted;
+    freshUser.onboardingStage === 'rider_complete' ||
+    freshUser.onboardingStage === 'driver_complete' ||
+    freshUser.isRegCompleted;
 
   res.json({
     status: 'success',
@@ -288,7 +295,7 @@ export const loginWithOtp = asyncHandler(async (req, res) => {
       type: 'bearer',
     },
     data: {
-      user: formatUserResponse(user),
+      user: formatUserResponse(freshUser),
       needs_onboarding: !canBook,
     },
   });

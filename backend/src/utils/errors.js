@@ -90,10 +90,18 @@ export const errorHandler = (err, req, res, next) => {
 
   // Mongoose validation error (distinct from our AppError ValidationError)
   if (err instanceof mongoose.Error.ValidationError) {
-    const messages = Object.values(err.errors).map((e) => e.message);
+    const messages = Object.values(err.errors).map((e) => {
+      if (e.kind === 'enum') {
+        return 'Your account has outdated data. Please contact support or try logging in again.';
+      }
+      if (e.kind === 'required') {
+        return `${e.path} is required`;
+      }
+      return e.message;
+    });
     return res.status(400).json({
       status: 'error',
-      message: messages.join(', '),
+      message: messages[0], // send first message, not a joined blob
     });
   }
 
