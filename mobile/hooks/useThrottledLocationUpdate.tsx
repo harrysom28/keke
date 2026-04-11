@@ -51,8 +51,9 @@ export const useThrottledLocationUpdate = () => {
       if (error?.response?.status === 429) {
         console.log('⏳ Rate limited, will retry later');
       } else if (error?.response?.status !== 401) {
-        // Don't log 401 errors (expected when not authenticated)
-        console.error('Location update failed:', error?.response?.data || error?.message);
+        if (__DEV__) {
+          console.warn('Location update failed (non-critical):', error?.response?.data || error?.message);
+        }
       }
     }
   }, []);

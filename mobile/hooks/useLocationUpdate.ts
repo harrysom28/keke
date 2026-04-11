@@ -153,7 +153,9 @@ export function useLocationUpdate(options: UseLocationUpdateOptions = {}) {
             console.log('⏳ Rate limited, will retry later');
           }
         } else {
-          console.error('❌ Location update failed:', error?.message);
+          if (__DEV__) {
+            console.warn('❌ Location update failed (non-critical):', error?.message);
+          }
           onError?.(error);
         }
       } finally {

@@ -14,6 +14,13 @@ import { addIncomingNotification, setLatestNotification, setUnreadCount } from "
 import { setAuthData } from "@/store/AuthSlice";
 import { getStoredTokens, setStoredTokens } from "@/utils/secureTokenStorage";
 import React, { useContext, useEffect, useState } from "react";
+import { AppState, LogBox, type AppStateStatus } from "react-native";
+
+LogBox.ignoreLogs([
+  "Location update failed",
+  "Non-serializable values were found in the navigation state",
+  "VirtualizedLists should never be nested",
+]);
 
 import FlashMessage from "react-native-flash-message";
 import apiClient from "@/utils/apiClient";
@@ -148,6 +155,18 @@ const NotificationBootstrap = () => {
       return;
     }
     notificationManager.registerFcmToken();
+  }, [token]);
+
+  // Re-register when returning to foreground (permission/token can change; iOS may rotate FCM token).
+  useEffect(() => {
+    if (!token) return;
+    const onChange = (state: AppStateStatus) => {
+      if (state === "active") {
+        notificationManager.registerFcmToken();
+      }
+    };
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
   }, [token]);
 
   useEffect(() => {
