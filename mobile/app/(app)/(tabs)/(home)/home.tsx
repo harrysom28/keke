@@ -107,10 +107,6 @@ export type IARide = {
     };
   };
 };
-// Must match _customTab: pt-2.5 (10) + icon (52) + gap (4) + label (~14) + paddingBottom (8) = 88
-const TAB_BAR_CONTENT_HEIGHT = 88;
-const TAB_BAR_HEIGHT = TAB_BAR_CONTENT_HEIGHT; // alias for compatibility
-
 function parsePusherDataPayload(raw: unknown): Record<string, unknown> | null {
   if (raw == null) return null;
   if (typeof raw === "object" && !Array.isArray(raw)) {
@@ -131,6 +127,7 @@ function parsePusherDataPayload(raw: unknown): Record<string, unknown> | null {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const TAB_BAR_HEIGHT = 88 + Math.max(insets.bottom, 0);
   const isFocused = useIsFocused();
   const refreshActiveRideOnFocus = useFocusRefresh(15_000);
   const refreshActiveBookingOnFocus = useFocusRefresh(30_000);
@@ -143,7 +140,14 @@ export default function HomeScreen() {
     rebook_dropoff_lat?: string;
     rebook_dropoff_lng?: string;
   }>();
-  const { isBooking, requestOpenBookRide, subscription, ride: reduxRide, unread_count } = useSelector(AppDetailsState);
+  const {
+    isBooking,
+    requestOpenBookRide,
+    subscription,
+    ride: reduxRide,
+    unread_count,
+    pendingOpenChatRideId,
+  } = useSelector(AppDetailsState);
   const { user, token } = useSelector(AuthState);
   const { getCurrentUser, apiConfig, notificationEvent } =
     useContext(AppContext);
@@ -162,12 +166,14 @@ export default function HomeScreen() {
   const { location, address, loading: locationLoading, locationError, getLocation: refreshLocation } = useCurrentLocation({ isFocused });
 
   locationRef.current = { latitude: location.latitude, longitude: location.longitude };
+  const tempRef = useRef<TRide>({} as TRide);
   const [booking, setBooking] = useState<Partial<TBooking>>({});
   const [viewbooking, setViewbooking] = useState<Partial<TBooking>>({});
   const [loading, setLoading] = useState(false);
   const [viewLoading, setViewLoading] = useState(false);
   const [paymentReceipt, setPaymentReceipt] = useState(false);
   const [tripCompleted, setTripCompleted] = useState(false);
+  const [chatOpenKick, setChatOpenKick] = useState(0);
   const [trigger, setTrigger] = useState(0);
   const [dismissedBookingId, setDismissedBookingId] = useState<string | null>(null);
   const [bookRideOpenVersion, setBookRideOpenVersion] = useState(0);
@@ -181,6 +187,9 @@ export default function HomeScreen() {
     }[]
   >([]);
   const [temp, setTemp] = useState<TRide>({} as TRide);
+  useEffect(() => {
+    tempRef.current = temp;
+  }, [temp]);
   const [ride, setRide] = useState<IARide>({
     screen: "",
     data: { waiting: {} },
@@ -317,6 +326,47 @@ export default function HomeScreen() {
       logger.debug('✅ Map animated to default home region', defaultRegion);
     }
   }, [location.latitude, location.longitude, dispatch]);
+
+  const openPostRideSummary = useCallback(
+    (snapshot: Partial<TRide> & Record<string, unknown>) => {
+      const merged = {
+        ...tempRef.current,
+        ...snapshot,
+        status: "completed",
+      } as TRide;
+      setTemp(merged);
+      setRide({
+        screen: "SUMMARY",
+        data: { waiting: merged as unknown as IARide["data"]["waiting"] },
+      });
+      dispatch(
+        setAppData({
+          isBooking: true,
+        })
+      );
+      setMaps({
+        origin: { latitude: 0, longitude: 0 },
+        destination: { latitude: 0, longitude: 0 },
+      });
+      setRouteKey((k) => k + 1);
+      setTripCompleted(false);
+      setTimeout(() => {
+        activeRideSheetRef?.current?.open();
+      }, 200);
+    },
+    [dispatch]
+  );
+
+  useEffect(() => {
+    if (!pendingOpenChatRideId) return;
+    const rid =
+      temp?.ride_id ||
+      (temp as { _id?: string })?._id ||
+      (ride?.data?.waiting as { ride_id?: string })?.ride_id;
+    if (!rid || String(rid) !== String(pendingOpenChatRideId)) return;
+    setChatOpenKick((k) => k + 1);
+    dispatch(setAppData({ pendingOpenChatRideId: null }));
+  }, [pendingOpenChatRideId, temp?.ride_id, ride?.data?.waiting, dispatch]);
 
   const riderActiveRideStatusForMap = String(
     temp?.status ?? (ride?.data?.waiting as any)?.status ?? ""
@@ -808,6 +858,16 @@ export default function HomeScreen() {
           ];
 
           if (terminalStatuses.includes(rideStatus)) {
+            if (rideStatus === "completed" && (rideData?.ride_id || rideData?._id)) {
+              openPostRideSummary({
+                ...(rideData as object),
+                ride_id: rideData?.ride_id || rideData?._id,
+                cost:
+                  rideData?.cost ??
+                  (rideData as { fare?: { totalFare?: number } })?.fare?.totalFare,
+              } as Partial<TRide> & Record<string, unknown>);
+              return;
+            }
             logger.debug("Ride is terminal, clearing ride state", { status: rideStatus });
             clearRideState();
             activeRideSheetRef?.current?.close();
@@ -881,6 +941,9 @@ export default function HomeScreen() {
         // Silently handle 404 errors (no active ride, etc.)
         if (status === 404) {
           logger.debug("No active ride found (404) - silently handling");
+          if (ride?.screen === "SUMMARY" || ride?.screen === "REVIEW") {
+            return;
+          }
           clearRideState();
           activeRideSheetRef?.current?.close();
           return;
@@ -927,12 +990,26 @@ export default function HomeScreen() {
         ? rideStatusRaw.toLowerCase()
         : String(rideStatusRaw ?? "").toLowerCase();
 
-    // Clear map if ride is cancelled, completed, or rejected
-    if (
-      rideStatus === "cancelled" ||
-      rideStatus === "completed" ||
-      rideStatus === "rejected"
-    ) {
+    if (rideStatus === "completed") {
+      if (ride?.screen === "SUMMARY" || ride?.screen === "REVIEW") {
+        return;
+      }
+      const src =
+        waitingData && Object.keys(waitingData).length > 0 ? waitingData : temp;
+      const sid = (src as { ride_id?: string; _id?: string })?.ride_id ||
+        (src as { _id?: string })?._id;
+      if (sid) {
+        logger.debug("Home: Showing post-ride summary", { status: rideStatus });
+        openPostRideSummary({
+          ...(src as object),
+          ride_id: sid,
+        } as Partial<TRide> & Record<string, unknown>);
+        return;
+      }
+    }
+
+    // Clear map if ride is cancelled or rejected
+    if (rideStatus === "cancelled" || rideStatus === "rejected") {
       logger.debug("Home: Clearing ride state - ride ended", { status: rideStatus });
       clearRideState();
       activeRideSheetRef?.current?.close();
@@ -1032,6 +1109,12 @@ export default function HomeScreen() {
     (ride?.data as any)?.destination?.long,
     (ride?.data as any)?.destination?.latitude,
     (ride?.data as any)?.destination?.longitude,
+    ride?.screen,
+    temp?.status,
+    temp?.ride_id,
+    openPostRideSummary,
+    clearRideState,
+    TAB_BAR_HEIGHT,
   ]);
 
   useEffect(() => {
@@ -1124,7 +1207,7 @@ export default function HomeScreen() {
       const distanceKm = haversineKm(o, d);
       if (distanceKm <= MAX_FIT_DISTANCE_KM && map.fitToCoordinates) {
         map.fitToCoordinates([o, d], {
-          edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
+          edgePadding: { top: 80, right: 60, bottom: TAB_BAR_HEIGHT + 12, left: 60 },
           animated: true,
         });
       } else if (map.animateToRegion) {
@@ -1132,7 +1215,7 @@ export default function HomeScreen() {
       }
     }, 150);
     return () => clearTimeout(id);
-  }, [isBooking, hasPickupAndDest, maps.origin.latitude, maps.origin.longitude, maps.destination.latitude, maps.destination.longitude]);
+  }, [isBooking, hasPickupAndDest, maps.origin.latitude, maps.origin.longitude, maps.destination.latitude, maps.destination.longitude, TAB_BAR_HEIGHT]);
 
   // When user returns to home tab with valid location and no route, center map on current location
   const lastFocusedRef = useRef(false);
@@ -1292,10 +1375,22 @@ export default function HomeScreen() {
     },
     onEvent: (event) => {
       logger.info(`Completed ride event received: ${event}`);
-      setTripCompleted(true);
+      const payload = parsePusherDataPayload(event?.data);
+      const fareRaw = payload?.fare;
+      const rideIdEvt =
+        payload?.ride_id != null ? String(payload.ride_id) : "";
+      const fareStr =
+        fareRaw != null && fareRaw !== ""
+          ? String(Math.round(Number(fareRaw)))
+          : undefined;
       invalidateRecentPlacesCache();
-      clearRideState();
-      activeRideSheetRef?.current?.close();
+      openPostRideSummary({
+        ride_id: rideIdEvt || (tempRef.current?.ride_id as string) || (tempRef.current as { _id?: string })?._id,
+        ...(fareStr ? { cost: fareStr } : {}),
+        ...(payload?.payment_status != null
+          ? { payment_status: payload.payment_status as string }
+          : {}),
+      } as Partial<TRide> & Record<string, unknown>);
     },
   });
 
@@ -1692,7 +1787,8 @@ export default function HomeScreen() {
             })
           );
           setTripCompleted(false);
-          // setRide((prev) => ({ ...prev, screen: "" }));
+          setRide((prev) => ({ ...prev, screen: "SUMMARY" }));
+          setTimeout(() => activeRideSheetRef?.current?.open(), 200);
         }}
         onClose={() => setTripCompleted(false)}
       />
@@ -1757,7 +1853,7 @@ export default function HomeScreen() {
             const distanceKm = haversineKm(o, d);
             if (distanceKm <= MAX_FIT_DISTANCE_KM) {
               mapRef.current.fitToCoordinates?.([o, d], {
-                edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
+                edgePadding: { top: 80, right: 60, bottom: TAB_BAR_HEIGHT + 12, left: 60 },
                 animated: true,
               });
             } else {
@@ -2327,6 +2423,7 @@ export default function HomeScreen() {
           bottomSheetRef={activeRideSheetRef}
           getActiveRide={getActiveRide}
           clearMap={clearRideState}
+          chatOpenSignal={chatOpenKick}
         />
       </Portal>
     </>

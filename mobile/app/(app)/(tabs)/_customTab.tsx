@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from "react-native";
 import React, { ReactElement } from "react";
 import Svg, { Path } from "react-native-svg";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 
 import { AntDesign } from "@expo/vector-icons";
@@ -167,6 +167,7 @@ const BottomTabBar = ({
   state?: { routes: { name: string }[]; index: number };
 }) => {
   const { i18n } = useTranslation();
+  const insets = useSafeAreaInsets();
   const routeName = state?.routes?.[state?.index ?? 0]?.name ?? "";
   if (!state?.routes?.length) {
     return null;
@@ -174,13 +175,13 @@ const BottomTabBar = ({
   return (
     <SafeAreaView
       key={i18n.language ?? "en"}
-      edges={["bottom"]}
+      edges={[]}
       style={tw.style(`bg-white`, { elevation: 32 })}
     >
       <View
         style={[
           tw.style(`flex-row justify-between rounded-t-[33px] items-end px-4 pt-2.5`),
-          { paddingBottom: 8 },
+          { paddingBottom: Math.max(insets.bottom, 8) },
         ]}
       >
         {RIDER_TAB_ITEMS.map((tab) => (
