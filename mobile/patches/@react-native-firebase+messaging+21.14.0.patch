@@ -1,0 +1,91 @@
+diff --git a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+AppDelegate.h b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+AppDelegate.h
+index 708ff24..64fc64b 100644
+--- a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+AppDelegate.h
++++ b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+AppDelegate.h
+@@ -16,7 +16,7 @@
+  */
+ 
+ #import <Foundation/Foundation.h>
+-#import <React/RCTBridgeModule.h>
++#import <RNFBApp/RNFBAppModule.h>
+ #import <UIKit/UIKit.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+diff --git a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+AppDelegate.m b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+AppDelegate.m
+index 9c3651d..79f5412 100644
+--- a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+AppDelegate.m
++++ b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+AppDelegate.m
+@@ -21,7 +21,7 @@
+ 
+ #import <RNFBApp/RNFBRCTEventEmitter.h>
+ #import <RNFBApp/RNFBSharedUtils.h>
+-#import <React/RCTConvert.h>
++#import <RNFBApp/RCTConvert+FIRApp.h>
+ 
+ #import "RNFBMessaging+AppDelegate.h"
+ #import "RNFBMessagingSerializer.h"
+diff --git a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+NSNotificationCenter.m b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+NSNotificationCenter.m
+index 1867f14..5f15446 100644
+--- a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+NSNotificationCenter.m
++++ b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessaging+NSNotificationCenter.m
+@@ -17,7 +17,7 @@
+ #import <Firebase/Firebase.h>
+ #import <RNFBApp/RNFBJSON.h>
+ #import <RNFBApp/RNFBRCTEventEmitter.h>
+-#import <React/RCTConvert.h>
++#import <RNFBApp/RCTConvert+FIRApp.h>
+ #import <React/RCTRootView.h>
+ 
+ #import "RNFBMessaging+AppDelegate.h"
+diff --git a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingModule.h b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingModule.h
+index 0a1c716..e2d3b87 100644
+--- a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingModule.h
++++ b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingModule.h
+@@ -16,7 +16,7 @@
+  */
+ 
+ #import <Foundation/Foundation.h>
+-#import <React/RCTBridgeModule.h>
++#import <RNFBApp/RNFBAppModule.h>
+ 
+ @interface RNFBMessagingModule : NSObject <RCTBridgeModule>
+ + (NSDictionary *_Nonnull)addCustomPropsToUserProps:(NSDictionary *_Nullable)userProps
+diff --git a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingModule.m b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingModule.m
+index dcc8e84..795d7ec 100644
+--- a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingModule.m
++++ b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingModule.m
+@@ -17,7 +17,7 @@
+ 
+ #import <Firebase/Firebase.h>
+ #import <RNFBApp/RNFBSharedUtils.h>
+-#import <React/RCTConvert.h>
++#import <RNFBApp/RCTConvert+FIRApp.h>
+ #import <React/RCTUtils.h>
+ 
+ #import "RNFBMessaging+AppDelegate.h"
+diff --git a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingSerializer.h b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingSerializer.h
+index 502da9a..6b06345 100644
+--- a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingSerializer.h
++++ b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingSerializer.h
+@@ -17,7 +17,7 @@
+ 
+ #import <Firebase/Firebase.h>
+ #import <Foundation/Foundation.h>
+-#import <React/RCTBridgeModule.h>
++#import <RNFBApp/RNFBAppModule.h>
+ 
+ @interface RNFBMessagingSerializer : NSObject
+ 
+diff --git a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingSerializer.m b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingSerializer.m
+index 7d75995..b520c4d 100644
+--- a/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingSerializer.m
++++ b/node_modules/@react-native-firebase/messaging/ios/RNFBMessaging/RNFBMessagingSerializer.m
+@@ -16,7 +16,7 @@
+  */
+ 
+ #import "RNFBMessagingSerializer.h"
+-#import <React/RCTConvert.h>
++#import <RNFBApp/RCTConvert+FIRApp.h>
+ 
+ @implementation RNFBMessagingSerializer
+ 

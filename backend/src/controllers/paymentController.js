@@ -1,6 +1,7 @@
 import Payment from '../models/Payment.js';
 import User from '../models/User.js';
 import UserWallet from '../models/UserWallet.js';
+import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
@@ -389,7 +390,7 @@ export const verifyWalletTopup = asyncHandler(async (req, res) => {
     const { sendToUser } = await import('../services/notificationService.js');
     await sendToUser(userId, user.role === 'driver' ? 'driver' : 'rider', {
       title: 'Wallet credited ✅',
-      message: `₦${amountNaira.toLocaleString()} has been added to your wallet. New balance: ₦${Number(updatedUser?.balance ?? 0).toLocaleString()}.`,
+      message: `Top-up: ₦${amountNaira.toLocaleString()} added. New balance: ₦${Number(updatedUser?.balance ?? 0).toLocaleString()}.`,
       type: 'alert',
       priority: 'high',
       screen: 'wallet',
@@ -474,7 +475,7 @@ export const topUpWallet = asyncHandler(async (req, res) => {
         const { sendToUser } = await import('../services/notificationService.js');
         await sendToUser(userId, user.role === 'driver' ? 'driver' : 'rider', {
           title: 'Wallet credited ✅',
-          message: `₦${Number(amount).toLocaleString()} has been added to your wallet. New balance: ₦${Number(user.balance).toLocaleString()}.`,
+          message: `Top-up: ₦${Number(amount).toLocaleString()} added. New balance: ₦${Number(user.balance).toLocaleString()}.`,
           type: 'alert',
           priority: 'high',
           screen: 'wallet',
@@ -769,7 +770,7 @@ export const confirmStripePayment = asyncHandler(async (req, res) => {
           const { sendToUser } = await import('../services/notificationService.js');
           await sendToUser(user._id, user.role === 'driver' ? 'driver' : 'rider', {
             title: 'Wallet credited ✅',
-            message: `₦${Number(payment.amount).toLocaleString()} has been added to your wallet. New balance: ₦${Number(user.balance).toLocaleString()}.`,
+            message: `Top-up: ₦${Number(payment.amount).toLocaleString()} added. New balance: ₦${Number(user.balance).toLocaleString()}.`,
             type: 'alert',
             priority: 'high',
             screen: 'wallet',
@@ -797,13 +798,23 @@ export const confirmStripePayment = asyncHandler(async (req, res) => {
   }
 });
 
+function paymentRideIdString(payment) {
+  const r = payment?.ride;
+  if (!r) return null;
+  if (typeof r === 'object' && r._id) return r._id.toString();
+  return String(r);
+}
+
 /**
  * Get payment history - GET /api/user/payments
+ * Includes Payment documents plus escrow wallet lines (fare_debit / service_charge)
+ * when no matching Payment exists for that ride, so ride charges always appear.
  */
 export const getPaymentHistory = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { page = 1, limit = 20, type } = req.query;
-
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 20;
+  const { type } = req.query;
   const skip = (page - 1) * limit;
 
   const filter = { user: userId };
@@ -817,23 +828,99 @@ export const getPaymentHistory = asyncHandler(async (req, res) => {
     filter.ride = { $ne: null };
   }
 
-  const payments = await Payment.find(filter)
-    .populate('ride', 'status fare pickupLocation dropoffLocation')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(parseInt(limit));
+  if (type === 'topup' || type === 'withdrawal') {
+    const [payments, total] = await Promise.all([
+      Payment.find(filter)
+        .populate('ride', 'status fare pickupLocation dropoffLocation')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Payment.countDocuments(filter),
+    ]);
 
-  const total = await Payment.countDocuments(filter);
+    return res.json({
+      status: 'success',
+      data: {
+        payments: payments.map((payment) => formatPaymentResponse(payment)),
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit) || 0,
+        },
+      },
+    });
+  }
+
+  const FETCH_CAP = 500;
+  const paymentFilter =
+    type === 'ride' ? { user: userId, ride: { $ne: null } } : { user: userId };
+
+  const [paymentDocs, ledgerDocs] = await Promise.all([
+    Payment.find(paymentFilter)
+      .populate('ride', 'status fare pickupLocation dropoffLocation')
+      .sort({ createdAt: -1 })
+      .limit(FETCH_CAP)
+      .lean(),
+    UserWalletTransaction.find({
+      userId,
+      type: { $in: ['fare_debit', 'service_charge'] },
+    })
+      .sort({ createdAt: -1 })
+      .limit(300)
+      .lean(),
+  ]);
+
+  const rideIdsWithFarePayment = new Set();
+  for (const p of paymentDocs) {
+    const rid = paymentRideIdString(p);
+    if (rid) rideIdsWithFarePayment.add(rid);
+  }
+
+  const paymentRows = paymentDocs.map((p) => formatPaymentResponse(p));
+
+  const ledgerRows = [];
+  for (const tx of ledgerDocs) {
+    if (!tx.rideId) continue;
+    const rid = tx.rideId.toString();
+    if (tx.type === 'fare_debit' && rideIdsWithFarePayment.has(rid)) {
+      continue;
+    }
+    ledgerRows.push({
+      payment_id: `ledger_${tx._id.toString()}`,
+      user_id: userId.toString(),
+      ride_id: rid,
+      amount: Math.abs(Number(tx.amount) || 0),
+      currency: 'NGN',
+      method: 'wallet',
+      status: tx.status || 'completed',
+      transaction_id: tx.idempotencyKey || null,
+      stripe_payment_intent_id: null,
+      refund_amount: 0,
+      created_at: tx.createdAt,
+      paid_at: tx.createdAt,
+      description:
+        tx.type === 'service_charge'
+          ? 'Service charge (ride)'
+          : 'Ride fare (wallet)',
+    });
+  }
+
+  const merged = [...paymentRows, ...ledgerRows].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  const paginated = merged.slice(skip, skip + limit);
 
   res.json({
     status: 'success',
     data: {
-      payments: payments.map((payment) => formatPaymentResponse(payment)),
+      payments: paginated,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit),
+        page,
+        limit,
+        total: merged.length,
+        pages: Math.ceil(merged.length / limit) || 0,
       },
     },
   });
@@ -843,10 +930,12 @@ export const getPaymentHistory = asyncHandler(async (req, res) => {
  * Format payment response
  */
 const formatPaymentResponse = (payment) => {
+  const ride_id = paymentRideIdString(payment);
+  const uid = payment.user?._id?.toString?.() || payment.user?.toString?.() || String(payment.user);
   return {
     payment_id: payment._id.toString(),
-    user_id: payment.user._id?.toString() || payment.user.toString(),
-    ride_id: payment.ride?._id?.toString() || null,
+    user_id: uid,
+    ride_id,
     amount: Math.abs(payment.amount),
     currency: payment.currency,
     method: payment.method,

@@ -50,6 +50,7 @@ import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusRefresh } from "@/hooks/useFocusRefresh";
+import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 
 interface PRProps {
   show: boolean;
@@ -189,6 +190,7 @@ const SharedProfileScreen = ({ type }: Props) => {
   const [showPaymentReceived, setShowPaymentReceived] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [bottomSheetError, setBottomSheetError] = useState(false);
+  const walletModalKeyboardInset = useKeyboardInset(modal);
   const isDriver = type === "driver";
   const profileData = (user?.profile || {}) as Record<string, any>;
   const formattedWalletBalance = (() => {
@@ -876,7 +878,10 @@ const SharedProfileScreen = ({ type }: Props) => {
             onPress={closeModalWithBlur}
           />
           <View
-            style={[tw`absolute bottom-0 left-0 right-0 bg-white rounded-t-[40px] px-4 pt-6 pb-8`, { maxHeight: '60%' }]}
+            style={[
+              tw`absolute bottom-0 left-0 right-0 bg-white rounded-t-[40px] px-4 pt-6 pb-8`,
+              { maxHeight: "60%", marginBottom: walletModalKeyboardInset },
+            ]}
           >
             <View
               style={tw.style(

@@ -431,6 +431,17 @@ export const validationRules = {
     body('address')
       .optional()
       .trim(),
+    body('heading')
+      .optional()
+      .isFloat({ min: 0, max: 360 })
+      .withMessage('heading must be between 0 and 360'),
+  ],
+
+  cancelRidePreviewQuery: [
+    query('rideId')
+      .notEmpty()
+      .isMongoId()
+      .withMessage('Valid rideId is required'),
   ],
 
   // Toggle availability
@@ -444,6 +455,14 @@ export const validationRules = {
 
   // Accept ride
   acceptRide: [
+    body('rideId')
+      .notEmpty()
+      .withMessage('Ride ID is required')
+      .isMongoId()
+      .withMessage('Invalid ride ID'),
+  ],
+
+  ackRideOffer: [
     body('rideId')
       .notEmpty()
       .withMessage('Ride ID is required')

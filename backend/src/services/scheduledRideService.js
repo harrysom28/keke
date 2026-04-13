@@ -54,7 +54,7 @@ class ScheduledRideService {
       // and haven't been assigned a driver yet
       const scheduledRides = await Ride.find({
         isScheduled: true,
-        status: { $in: ['requested', 'scheduled'] },
+        status: { $in: ['requested', 'searching', 'scheduled'] },
         scheduledAt: {
           $lte: fiveMinutesFromNow,
           $gte: now,
@@ -98,7 +98,7 @@ class ScheduledRideService {
       // Also check for scheduled rides that are past their time but still unassigned
       const overdueRides = await Ride.find({
         isScheduled: true,
-        status: { $in: ['requested', 'scheduled'] },
+        status: { $in: ['requested', 'searching', 'scheduled'] },
         scheduledAt: { $lt: now },
         driver: null,
       })
@@ -111,12 +111,25 @@ class ScheduledRideService {
           const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, 20, 10);
 
           if (matchedDrivers.length > 0) {
-            const rideDoc = await Ride.findById(ride._id)
-              .populate('rider', 'name phone deviceToken')
-              .populate('vehicleType');
-            if (rideDoc) {
-              await rideMatchingService.autoAssignDriver(rideDoc, matchedDrivers);
-            }
+            setImmediate(() => {
+              (async () => {
+                try {
+                  const rideDoc = await Ride.findById(ride._id)
+                    .populate('rider', 'name phone profileImage rating deviceToken')
+                    .populate('vehicleType');
+                  if (!rideDoc) return;
+
+                  const assignedDriverId = await offerRideToDrivers(rideDoc, matchedDrivers);
+                  if (!assignedDriverId) {
+                    await notifyNoDriverFound(rideDoc);
+                  }
+                } catch (err) {
+                  logger.error(
+                    `Overdue scheduled ride offerRideToDrivers failed for ${ride._id}: ${err.message}`
+                  );
+                }
+              })();
+            });
           } else {
             // Re-fetch as document (lean() returns plain object - no .save())
             const rideDoc = await Ride.findById(ride._id);

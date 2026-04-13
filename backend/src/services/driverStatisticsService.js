@@ -22,7 +22,7 @@ export const updateDriverAcceptanceRate = async (driverId) => {
     const totalAccepted = await Ride.countDocuments({
       driver: driverId,
       acceptedByDriver: true,
-      status: { $in: ['accepted', 'arrived', 'in-progress', 'completed'] },
+      status: { $in: ['accepted', 'driver_en_route', 'arrived', 'in-progress', 'completed'] },
     });
 
     // Calculate acceptance rate

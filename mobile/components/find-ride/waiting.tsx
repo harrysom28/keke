@@ -6,18 +6,12 @@ import {
   ActivityIndicator,
   StyleSheet,
   ScrollView,
+  Animated as RNAnimated,
 } from "react-native";
 import { AntDesign, Entypo, Ionicons } from "@expo/vector-icons";
 import { Defs, Line, LinearGradient, Path, Stop, Svg } from "react-native-svg";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { router } from "expo-router";
-import Animated, {
-  useAnimatedStyle,
-  useDerivedValue,
-  withRepeat,
-  withSequence,
-  withTiming,
-} from "react-native-reanimated";
 import { TouchableOpacity } from "react-native-gesture-handler";
 
 import { TRide } from "@/types";
@@ -52,33 +46,71 @@ export const WaitingView = ({
   const insets = useCombinedSafeInsets();
   const data = ride as TRide;
 
-  // Ensure we have at least an object
-  if (!data || typeof data !== 'object') {
-    console.warn('⚠️ WaitingView: Invalid ride data, using empty object');
-  }
-  
   const hasRideStarted = data?.is_ride_started || data?.isRideStarted || false;
   const hasDriver = data?.driver && typeof data.driver === 'object'
     ? Object.keys(data.driver).length > 0
     : false;
   const isAccepted = data?.accepted_by_driver || data?.acceptedByDriver || false;
-  const pulseScale = useDerivedValue(() => {
-    if (!isAccepted && !hasRideStarted) {
-      return withRepeat(
-        withSequence(
-          withTiming(1.1, { duration: 1000 }),
-          withTiming(1, { duration: 1000 })
-        ),
-        -1,
-        false
-      );
-    }
-    return withTiming(1, { duration: 200 });
-  }, [isAccepted, hasRideStarted]);
+  const rideStatusLower = String((data as any)?.status ?? "").toLowerCase();
+  const isDriverArrived =
+    rideStatusLower === "arrived" || rideStatusLower === "driver_arrived";
 
-  const pulseStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: pulseScale.value }],
-  }));
+  const searchPulseAnim = useRef(new RNAnimated.Value(1)).current;
+  const arrivedPulseAnim = useRef(new RNAnimated.Value(1)).current;
+
+  useEffect(() => {
+    if (isDriverArrived || hasRideStarted || isAccepted) {
+      searchPulseAnim.setValue(1);
+      return;
+    }
+    const loop = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(searchPulseAnim, {
+          toValue: 1.08,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        RNAnimated.timing(searchPulseAnim, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      searchPulseAnim.setValue(1);
+    };
+  }, [isDriverArrived, hasRideStarted, isAccepted, searchPulseAnim]);
+
+  useEffect(() => {
+    if (!isDriverArrived || hasRideStarted) {
+      arrivedPulseAnim.setValue(1);
+      return;
+    }
+    const loop = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(arrivedPulseAnim, {
+          toValue: 1.12,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        RNAnimated.timing(arrivedPulseAnim, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      arrivedPulseAnim.setValue(1);
+    };
+  }, [isDriverArrived, hasRideStarted, arrivedPulseAnim]);
+
+  const isCountdown = waitingSubtitleOverride?.includes("s)") ?? false;
 
   const formatCost = (cost: number | string | undefined) => {
     // Try multiple sources for cost
@@ -179,21 +211,89 @@ export const WaitingView = ({
         nestedScrollEnabled={true}
         bounces={false}
       >
-      {/* Status Header - Always show */}
-      <View style={styles.statusHeader}>
-        {!isAccepted && !hasRideStarted && (
-          <Animated.View style={[styles.loadingContainer, pulseStyle]}>
-            <ActivityIndicator size="large" color={tw.color("base-green") || "#3C8F7C"} />
-          </Animated.View>
-        )}
-        {isAccepted && (
-          <View style={styles.checkIconContainer}>
-            <AntDesign name="check-circle" size={36} color={tw.color("base-green") || "#3C8F7C"} />
+      {/* Status header: driver at pickup vs searching / en route */}
+      {isDriverArrived && !hasRideStarted ? (
+        <View style={styles.statusHeader}>
+          <View
+            style={tw`w-16 h-16 rounded-full bg-green-100 items-center justify-center mb-2`}
+          >
+            <RNAnimated.View
+              style={[
+                tw`w-10 h-10 rounded-full bg-base-green`,
+                { transform: [{ scale: arrivedPulseAnim }] },
+              ]}
+            />
           </View>
-        )}
-        <Text style={styles.statusTitle}>{statusText}</Text>
-        <Text style={styles.statusSubtext}>{statusSubtext}</Text>
-      </View>
+          <Text style={styles.statusTitle}>Your driver is outside</Text>
+          <Text
+            style={tw.style(`text-sm text-[#8F92A1] text-center mt-1 px-2`, {
+              fontFamily: "RobotoRegular",
+            })}
+          >
+            {`${(data as any)?.driver?.driver_name ?? (data as any)?.driver?.name ?? "Driver"} is waiting for you`}
+          </Text>
+          <View
+            style={tw`bg-[#F8F8F8] rounded-full px-4 py-2 flex-row items-center gap-x-2 mt-3`}
+          >
+            <Text style={tw.style(`text-sm text-black`, { fontFamily: "RobotoMedium" })}>
+              {[
+                (data as any)?.driver?.vehicle_color,
+                (data as any)?.driver?.vehicle_name,
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .trim() || "Keke"}
+            </Text>
+            <View style={tw`w-1 h-1 rounded-full bg-[#8F92A1]`} />
+            <Text style={tw.style(`text-sm text-[#8F92A1]`, { fontFamily: "RobotoMedium" })}>
+              {(data as any)?.driver?.licence_plate_number ?? ""}
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.statusHeader}>
+          {!isAccepted && !hasRideStarted && (
+            <RNAnimated.View
+              style={[
+                styles.loadingContainer,
+                { transform: [{ scale: searchPulseAnim }] },
+              ]}
+            >
+              <ActivityIndicator
+                size="large"
+                color={tw.color("base-green") || "#3C8F7C"}
+              />
+            </RNAnimated.View>
+          )}
+          {isAccepted && (
+            <View style={styles.checkIconContainer}>
+              <AntDesign
+                name="check-circle"
+                size={36}
+                color={tw.color("base-green") || "#3C8F7C"}
+              />
+            </View>
+          )}
+          <Text style={styles.statusTitle}>{statusText}</Text>
+          {!isAccepted && isCountdown ? (
+            <View style={tw`flex-row items-center justify-center gap-x-2 mt-2`}>
+              <ActivityIndicator
+                size="small"
+                color={tw.color("base-green") || "#3C8F7C"}
+              />
+              <Text
+                style={tw.style(`text-base-green text-sm`, {
+                  fontFamily: "RobotoMedium",
+                })}
+              >
+                {waitingSubtitleOverride}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.statusSubtext}>{statusSubtext}</Text>
+          )}
+        </View>
+      )}
 
       {/* Driver Card - Only show when driver is assigned */}
       {hasDriver && isAccepted && (

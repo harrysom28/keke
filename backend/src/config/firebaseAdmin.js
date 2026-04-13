@@ -95,3 +95,14 @@ export function getMessaging() {
   const app = getFirebaseAdmin();
   return app ? admin.messaging(app) : null;
 }
+
+/** Project ID from initialized Firebase Admin app (service account). */
+export function getFirebaseProjectId() {
+  const app = getFirebaseAdmin();
+  if (!app) return null;
+  try {
+    return app.options?.projectId || null;
+  } catch {
+    return null;
+  }
+}

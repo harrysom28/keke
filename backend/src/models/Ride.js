@@ -53,8 +53,10 @@ const rideSchema = new mongoose.Schema(
       type: String,
       enum: [
         'requested',
+        'searching',
         'scheduled',
         'accepted',
+        'driver_en_route',
         'arrived',
         'in-progress',
         'completed',
@@ -253,6 +255,18 @@ const rideSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    /** Per-offer ACK tracking (sent → delivered → accept) */
+    offerTracking: [
+      {
+        driver: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Driver',
+        },
+        sentAt: { type: Date, default: null },
+        deliveredAt: { type: Date, default: null },
+        acceptedAt: { type: Date, default: null },
+      },
+    ],
   },
   {
     timestamps: true,
@@ -347,7 +361,9 @@ rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee 
 rideSchema.statics.findActiveRideForRider = async function (riderId) {
   return this.findOne({
     rider: riderId,
-    status: { $in: ['requested', 'accepted', 'arrived', 'in-progress'] },
+    status: {
+      $in: ['requested', 'searching', 'accepted', 'driver_en_route', 'arrived', 'in-progress'],
+    },
   })
     .populate('driver', 'user vehicleDetails currentLocation')
     .populate('driver.user', 'name phone profileImage rating')
@@ -359,7 +375,7 @@ rideSchema.statics.findActiveRideForRider = async function (riderId) {
 rideSchema.statics.findActiveRideForDriver = async function (driverId) {
   return this.findOne({
     driver: driverId,
-    status: { $in: ['accepted', 'arrived', 'in-progress'] },
+    status: { $in: ['accepted', 'driver_en_route', 'arrived', 'in-progress'] },
   })
     .populate('rider', 'name phone profileImage rating')
     .populate('vehicleType')

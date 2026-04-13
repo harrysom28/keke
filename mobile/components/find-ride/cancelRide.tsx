@@ -12,8 +12,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import { useRef, useState } from "react";
+import { AntDesign, Ionicons, MaterialIcons } from "@expo/vector-icons";
+import { useEffect, useRef, useState } from "react";
 
 import Checkbox from "expo-checkbox";
 import FlashMessage from "react-native-flash-message";
@@ -24,6 +24,7 @@ import {
 } from "react-native-safe-area-context";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import tw from "@/lib/tailwind";
+import apiClient from "@/utils/apiClient";
 
 const Checks = [
   "Waiting for long time",
@@ -139,6 +140,7 @@ const CancelPrompt = ({
 interface CRProps {
   show: boolean;
   setShow: React.Dispatch<React.SetStateAction<boolean>>;
+  rideId?: string;
   action: (
     data: { reason: string; description: string },
     loading: React.Dispatch<React.SetStateAction<boolean>>,
@@ -149,17 +151,38 @@ interface CRProps {
 }
 
 function CancelRideModalInner({
+  show,
+  rideId,
   setShow,
   action,
   clear,
-}: Omit<CRProps, "show">) {
+}: CRProps) {
   const [checked, setChecked] = useState(Checks[0]);
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [prompt, setPrompt] = useState(false);
+  const [feeCheck, setFeeCheck] = useState<{
+    fee_applies: boolean;
+    fee_amount: number;
+    fee_reason?: string | null;
+  } | null>(null);
+  const [feeLoading, setFeeLoading] = useState(false);
 
   const fRef = useRef<FlashMessage>(null);
   const insets = useCombinedSafeInsets();
+
+  useEffect(() => {
+    if (!show || !rideId) {
+      setFeeCheck(null);
+      return;
+    }
+    setFeeLoading(true);
+    apiClient
+      .get(`booking/cancel-ride/preview?rideId=${encodeURIComponent(rideId)}`)
+      .then(({ data }) => setFeeCheck(data?.data ?? null))
+      .catch(() => setFeeCheck(null))
+      .finally(() => setFeeLoading(false));
+  }, [show, rideId]);
 
   const showError = (text: string) => {
     fRef.current?.showMessage({ type: "danger", message: text });
@@ -224,6 +247,40 @@ function CancelRideModalInner({
             Please select the reason of cancellation.
           </Text>
 
+          {feeLoading ? (
+            <View style={tw`mb-4 items-center py-2`}>
+              <ActivityIndicator size="small" color={tw.color("base-green")} />
+            </View>
+          ) : null}
+
+          {feeCheck?.fee_applies ? (
+            <View
+              style={tw`flex-row items-start gap-x-2 bg-red-50 border border-red-200 rounded-xl p-3 mb-4`}
+            >
+              <AntDesign
+                name="exclamationcircle"
+                size={16}
+                color="#E53E3E"
+                style={tw`mt-0.5`}
+              />
+              <View style={tw`flex-1`}>
+                <Text
+                  style={tw.style(`text-sm text-red-700`, { fontFamily: "RobotoMedium" })}
+                >
+                  Cancellation fee: ₦{feeCheck.fee_amount.toLocaleString()}
+                </Text>
+                <Text
+                  style={tw.style(`text-xs text-red-600 mt-0.5`, {
+                    fontFamily: "RobotoRegular",
+                  })}
+                >
+                  {feeCheck.fee_reason ||
+                    "The driver is already on the way to your location"}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           <View style={tw`flex-col gap-y-4`}>
             {Checks.map((item) => (
               <CheckItem
@@ -278,6 +335,7 @@ function CancelRideModalInner({
 export default function CancelRideModal({
   show,
   setShow,
+  rideId,
   action,
   clear,
 }: Readonly<CRProps>) {
@@ -290,7 +348,13 @@ export default function CancelRideModal({
       onRequestClose={() => setShow(false)}
     >
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-        <CancelRideModalInner setShow={setShow} action={action} clear={clear} />
+        <CancelRideModalInner
+          show={show}
+          rideId={rideId}
+          setShow={setShow}
+          action={action}
+          clear={clear}
+        />
       </SafeAreaProvider>
     </Modal>
   );

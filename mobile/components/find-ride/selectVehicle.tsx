@@ -34,6 +34,20 @@ interface VehicleWithPricing extends TVehicle {
   pickupTime?: string;
   name?: string;
   display_name?: string;
+  fareDetail?: {
+    baseFare: number;
+    distanceFare: number;
+    timeFare: number;
+    minimumFare: number;
+    preSurgeFare: number;
+    totalFare: number;
+    surgeMultiplier: number;
+    isSurged: boolean;
+    riderServiceCharge?: number;
+    riderTotal?: number;
+    currency?: string;
+  } | null;
+  surgeMultiplier?: number;
 }
 
 // Default vehicle types to use when API returns empty
@@ -307,19 +321,55 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
               const duration = rawDuration
                 ? { ...rawDuration, value: durationValue, text: `${durationValue} min` }
                 : { text: '4 min', value: 4, unit: 'minutes' };
+              const f = result?.fare;
+              const totalFareNum =
+                f?.totalFare != null && !Number.isNaN(Number(f.totalFare))
+                  ? Number(f.totalFare)
+                  : result?.cost != null
+                    ? parseFloat(String(result.cost))
+                    : NaN;
+              const fareDetail = f
+                ? {
+                    baseFare: Number(f.baseFare) || 0,
+                    distanceFare: Number(f.distanceFare) || 0,
+                    timeFare: Number(f.timeFare) || 0,
+                    minimumFare: Number(f.minimumFare) || 0,
+                    preSurgeFare:
+                      f.preSurgeFare != null && !Number.isNaN(Number(f.preSurgeFare))
+                        ? Number(f.preSurgeFare)
+                        : Number(f.totalFare) || 0,
+                    totalFare: Number.isFinite(totalFareNum) ? totalFareNum : 0,
+                    surgeMultiplier: Number(f.surgeMultiplier) >= 1 ? Number(f.surgeMultiplier) : 1,
+                    isSurged: !!f.isSurged,
+                    riderServiceCharge:
+                      f.riderServiceCharge != null && !Number.isNaN(Number(f.riderServiceCharge))
+                        ? Number(f.riderServiceCharge)
+                        : undefined,
+                    riderTotal:
+                      f.riderTotal != null && !Number.isNaN(Number(f.riderTotal))
+                        ? Number(f.riderTotal)
+                        : undefined,
+                    currency: typeof f.currency === 'string' ? f.currency : 'NGN',
+                  }
+                : null;
               return {
-                cost: result?.fare?.totalFare || result?.cost || 2000,
+                cost: Number.isFinite(totalFareNum) ? totalFareNum : null,
                 distance: result?.distance || { text: '0 km', value: 0, unit: 'km' },
                 duration,
+                fareDetail,
+                surgeMultiplier:
+                  fareDetail && fareDetail.surgeMultiplier > 1 ? fareDetail.surgeMultiplier : undefined,
               };
             },
             15000 // Cache pricing for 15 seconds
           ).catch((error) => {
             console.warn(`Failed to get pricing for vehicle ${vehicle.vehicle_id}:`, error?.message);
             return {
-              cost: 2000,
+              cost: null,
               distance: { text: '0 km', value: 0, unit: 'km' },
               duration: { text: '4 min', value: 4, unit: 'minutes' },
+              fareDetail: null as VehicleWithPricing['fareDetail'],
+              surgeMultiplier: undefined as number | undefined,
             };
           });
         });
@@ -330,14 +380,22 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
         // Combine vehicles with pricing
         limitedVehicles.forEach((vehicle: TVehicle, index: number) => {
           const pricing = pricingResults[index];
+          const costNum =
+            typeof pricing.cost === 'number'
+              ? pricing.cost
+              : pricing.cost != null
+                ? parseFloat(String(pricing.cost))
+                : null;
           vehiclesWithPricing.push({
             ...vehicle,
-            cost: parseFloat(String(pricing.cost)),
+            cost: Number.isFinite(costNum as number) ? (costNum as number) : null,
             distance: pricing.distance,
             duration: pricing.duration,
             capacity: (vehicle as any).capacity || 4,
             description: (vehicle as any).description || "Mid-size cars",
             pickupTime: pricing.duration?.text || (pricing.duration?.value != null ? `${Math.max(1, Math.round(pricing.duration.value))} min` : "4 min"),
+            fareDetail: pricing.fareDetail ?? null,
+            surgeMultiplier: pricing.surgeMultiplier,
           } as VehicleWithPricing);
         });
 
@@ -361,7 +419,7 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
       // Fallback to default vehicles
       const fallbackVehicles = DEFAULT_VEHICLES.map(v => ({ 
         ...v, 
-        cost: 2000,
+        cost: null,
         capacity: 4,
         description: "Mid-size cars",
         pickupTime: "4 min",
@@ -538,7 +596,7 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
   };
 
   const renderVehicleItem = useCallback(({ item: vehicle }: { item: VehicleWithPricing }) => {
-    const originalPrice = vehicle.cost || 2000;
+    const originalPrice = vehicle.cost ?? 0;
     const finalPrice = calculateDiscountedPrice(originalPrice);
     const hasDiscount = promoApplied && originalPrice !== finalPrice;
     const isSelected = selectedVehicle?.vehicle_id === vehicle.vehicle_id;
@@ -581,22 +639,22 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
             </View>
           </View>
 
-          {vehicle.cost !== null && vehicle.cost !== undefined && (
+          {vehicle.cost !== null && vehicle.cost !== undefined && vehicle.cost > 0 && (
             <TouchableOpacity
               style={styles.priceContainer}
               onPress={() => setShowFareBreakdown(true)}
               activeOpacity={0.7}
             >
-              {(vehicle as any).surgeMultiplier && (vehicle as any).surgeMultiplier > 1 && (
+              {vehicle.surgeMultiplier && vehicle.surgeMultiplier > 1 && (
                 <View style={styles.surgeBadge}>
                   <Text style={styles.surgeText}>
-                    {(vehicle as any).surgeMultiplier}x
+                    {vehicle.surgeMultiplier}x
                   </Text>
                 </View>
               )}
               <Text style={[
                 styles.price,
-                (vehicle as any).surgeMultiplier && (vehicle as any).surgeMultiplier > 1 && styles.surgePrice
+                vehicle.surgeMultiplier && vehicle.surgeMultiplier > 1 && styles.surgePrice
               ]}>
                 {formatPrice(finalPrice)}
               </Text>
@@ -765,24 +823,34 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
       )}
 
       {/* Fare Breakdown Modal */}
-      {selectedVehicle && selectedVehicle.cost !== null && (() => {
-        // Calculate pricing explicitly
-        const baseFare = selectedVehicle.cost || 0;
-        const promoDiscount = promoApplied ? baseFare * 0.1 : 0;
-        const finalPrice = baseFare - promoDiscount;
-        
+      {selectedVehicle && selectedVehicle.cost !== null && selectedVehicle.cost > 0 && (() => {
+        const fd = selectedVehicle.fareDetail;
+        const rideFare = fd?.totalFare ?? selectedVehicle.cost ?? 0;
+        const promoDiscount = promoApplied ? Math.round(rideFare * 0.1) : 0;
+        const rideAfterPromo = Math.max(0, rideFare - promoDiscount);
+        const svc = fd?.riderServiceCharge ?? 0;
+        const riderTotalShown =
+          fd?.riderTotal != null
+            ? Math.max(0, fd.riderTotal - promoDiscount)
+            : svc > 0
+              ? rideAfterPromo + svc
+              : undefined;
+
         return (
           <FareBreakdownModal
             visible={showFareBreakdown}
             onClose={() => setShowFareBreakdown(false)}
             fare={{
-              baseFare: baseFare * 0.3, // Estimate - should come from API
-              distanceFare: baseFare * 0.5,
-              timeFare: baseFare * 0.2,
-              surgeMultiplier: (selectedVehicle as any).surgeMultiplier || 1, // Should come from API
-              promoDiscount: promoDiscount,
-              totalFare: finalPrice, // ✅ Now properly defined
-              currency: '₦',
+              baseFare: fd?.baseFare,
+              distanceFare: fd?.distanceFare,
+              timeFare: fd?.timeFare && fd.timeFare > 0 ? fd.timeFare : undefined,
+              preSurgeFare: fd?.preSurgeFare,
+              surgeMultiplier: fd?.surgeMultiplier ?? 1,
+              promoDiscount: promoDiscount > 0 ? promoDiscount : undefined,
+              totalFare: rideAfterPromo,
+              riderServiceCharge: svc > 0 ? svc : undefined,
+              riderTotal: riderTotalShown,
+              currency: fd?.currency || 'NGN',
             }}
             distance={typeof selectedVehicle.distance === 'object' ? selectedVehicle.distance : undefined}
             duration={typeof selectedVehicle.duration === 'object' ? selectedVehicle.duration : undefined}

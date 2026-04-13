@@ -2,6 +2,8 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
+  AppStateStatus,
   Image,
   ImageBackground,
   Pressable,
@@ -14,7 +16,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AntDesign, MaterialCommunityIcons } from "@expo/vector-icons";
-import { AppDetailsState, setSubscriptionUtils } from "@/store/AppSlice";
+import { AppDetailsState, setAppData, setSubscriptionUtils } from "@/store/AppSlice";
 import {
   CLOSEST_BOOKING,
   DRIVER_ACTIVE_RIDE,
@@ -23,7 +25,7 @@ import {
   DRIVER_EARNINGS,
 } from "@/constants";
 import { Defs, Line, LinearGradient, Path, Stop, Svg } from "react-native-svg";
-import React, { useContext, useEffect, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { TBooking, TDriverActiveRide, TDriverStats } from "@/types";
 import {
   formatBookingDate,
@@ -50,7 +52,7 @@ import usePusherChannel from "@/hooks/usePusherChannel";
 
 const Home = () => {
   const insets = useSafeAreaInsets();
-  const { apiConfig, notificationEvent } = useContext(AppContext);
+  const { apiConfig, notificationEvent, getCurrentUser } = useContext(AppContext);
   const isFocused = useIsFocused();
   const { subscription, unread_count } = useSelector(AppDetailsState);
   const [activeRide, setActiveRide] = useState<Partial<TDriverActiveRide>>({});
@@ -83,6 +85,95 @@ const Home = () => {
     ).start();
   };
 
+  const normalizeDriverDashboard = useCallback((raw: unknown) => {
+    if (!raw || typeof raw !== "object") return {};
+    const r = raw as Record<string, unknown>;
+    const earnings = r.earnings as { today?: number; total?: number } | undefined;
+    const wallet = r.wallet as { todayEarnings?: number; totalBalance?: number } | undefined;
+    const earnedToday =
+      (r.earned_today as number) ??
+      wallet?.todayEarnings ??
+      earnings?.today ??
+      0;
+    return {
+      ...r,
+      earned_today: earnedToday,
+      total_earnings:
+        (r.total_earnings as number) ??
+        wallet?.totalBalance ??
+        earnings?.total ??
+        0,
+      time_online: (r.time_online as string) ?? "00h 00m 00s",
+    };
+  }, []);
+
+  // `getCurrentUser` can be re-created when context state changes; keep a stable ref
+  // to avoid effects re-running and creating update loops.
+  const getCurrentUserRef = useRef(getCurrentUser);
+  useEffect(() => {
+    getCurrentUserRef.current = getCurrentUser;
+  }, [getCurrentUser]);
+
+  const fetchDriverDashboard = useCallback(() => {
+    apiClient
+      .get("driver/earnings")
+      .then(({ data }) => {
+        setActivity(normalizeDriverDashboard(data?.data) as typeof activity);
+      })
+      .catch((err) => {
+        console.log("Driver earnings error:", err?.response?.data);
+        const status = err?.response?.status || err?.status;
+
+        if (status === 401) {
+          console.log("Authentication error (401) - token refresh should handle this");
+          return;
+        }
+
+        if (status === 404) {
+          console.log("Resource not found (404) - silently handling");
+          return;
+        }
+
+        const errorMessage = getErrorMessage(err);
+        safeShowMessage({
+          type: "danger",
+          message: errorMessage,
+        });
+      });
+  }, [normalizeDriverDashboard]);
+
+  const patchAvailability = useCallback(
+    (nextAvailable: boolean) => {
+      setAvailabilityLoading(true);
+      apiClient
+        .patch("driver/availability", { isAvailable: nextAvailable })
+        .then(({ data }) => {
+          const driver = data?.data?.driver;
+          setActivity((prev) => ({
+            ...prev,
+            is_online: driver?.is_online ?? prev?.is_online,
+            is_available: driver?.is_available ?? prev?.is_available,
+          }));
+          safeShowMessage({
+            type: "success",
+            message: driver?.is_available ? "You're now online" : "You're now offline",
+          });
+          fetchDriverDashboard();
+        })
+        .catch((err) => {
+          const status = err?.response?.status;
+          const message = err?.response?.data?.message;
+          const errorMessage =
+            status === 404 && (message?.toLowerCase().includes("driver") || !message)
+              ? "Driver profile not found. Complete your driver registration first."
+              : getErrorMessage(err);
+          safeShowMessage({ type: "danger", message: errorMessage });
+        })
+        .finally(() => setAvailabilityLoading(false));
+    },
+    [fetchDriverDashboard]
+  );
+
   const toggleAvailability = () => {
     if (availabilityLoading) return;
     if (!isVerified) {
@@ -92,65 +183,45 @@ const Home = () => {
       });
       return;
     }
-    setAvailabilityLoading(true);
-    apiClient
-      .patch("driver/availability", { isAvailable: !isOnline })
-      .then(({ data }) => {
-        const driver = data?.data?.driver;
-        setActivity((prev) => ({
-          ...prev,
-          is_online: driver?.is_online ?? prev?.is_online,
-          is_available: driver?.is_available ?? prev?.is_available,
-        }));
-        safeShowMessage({
-          type: "success",
-          message: driver?.is_available ? "You're now online" : "You're now offline",
-        });
-      })
-      .catch((err) => {
-        const status = err?.response?.status;
-        const message = err?.response?.data?.message;
-        const errorMessage =
-          status === 404 && (message?.toLowerCase().includes("driver") || !message)
-            ? "Driver profile not found. Complete your driver registration first."
-            : getErrorMessage(err);
-        safeShowMessage({ type: "danger", message: errorMessage });
-      })
-      .finally(() => setAvailabilityLoading(false));
+    if (isOnline) {
+      Alert.alert(
+        "Go offline?",
+        "You will stop receiving new ride requests until you go online again. Finish or decline any active offer first.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Go offline",
+            style: "destructive",
+            onPress: () => patchAvailability(false),
+          },
+        ]
+      );
+      return;
+    }
+    patchAvailability(true);
   };
 
   useEffect(() => {
-    if (isFocused) {
-      axios
-        .get(DRIVER_EARNINGS, apiConfig)
-        .then(({ data }) => {
-          setActivity(data?.data);
-        })
-        .catch((err) => {
-          console.log('Driver earnings error:', err?.response?.data);
-          const status = err?.response?.status || err?.status;
-          
-          // Silently handle 401 errors - token refresh should happen automatically via API client
-          if (status === 401) {
-            console.log('Authentication error (401) - token refresh should handle this');
-            return;
-          }
-          
-          // Silently handle 404 errors (driver profile not found, etc.)
-          if (status === 404) {
-            console.log('Resource not found (404) - silently handling');
-            return;
-          }
-          
-          // Use centralized error handler to extract safe string message
-          const errorMessage = getErrorMessage(err);
-          safeShowMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        });
-    }
-  }, [isFocused]);
+    if (!isFocused) return;
+    fetchDriverDashboard();
+    getCurrentUserRef.current?.();
+    const id = setInterval(() => {
+      fetchDriverDashboard();
+      getCurrentUserRef.current?.();
+    }, 10000);
+    return () => clearInterval(id);
+  }, [isFocused, fetchDriverDashboard]);
+
+  useEffect(() => {
+    if (!isFocused) return;
+    const sub = AppState.addEventListener("change", (next: AppStateStatus) => {
+      if (next === "active") {
+        fetchDriverDashboard();
+        getCurrentUserRef.current?.();
+      }
+    });
+    return () => sub.remove();
+  }, [isFocused, fetchDriverDashboard]);
 
   const getClosestBooking = () => {
     axios
@@ -200,7 +271,14 @@ const Home = () => {
     axios
       .get(DRIVER_ACTIVE_RIDE, apiConfig)
       .then(({ data }) => {
-        setActiveRide(data?.data);
+        const ridePayload = data?.data?.ride ?? data?.data ?? {};
+        const normalized =
+          ridePayload &&
+          typeof ridePayload === "object" &&
+          !Array.isArray(ridePayload)
+            ? ridePayload
+            : {};
+        setActiveRide(normalized as Partial<TDriverActiveRide>);
       })
       .catch((err) => {
         console.log('Active ride error:', err?.response?.data);
@@ -377,6 +455,47 @@ const Home = () => {
       .finally(() => setVLoading(false));
   };
 
+  const driverOfferChannel = useMemo(() => {
+    const id = user?.profile?.driver_id;
+    return id ? `private-driver-${id}` : "";
+  }, [user?.profile?.driver_id]);
+
+  usePusherChannel({
+    channel: driverOfferChannel || "private-driver-offer-miss",
+    visible: !!driverOfferChannel && isFocused,
+    onEvent: (event) => {
+      const ev = event as { eventName?: string; name?: string; data?: unknown };
+      const name = ev.eventName ?? ev.name;
+      if (name === "ONLINE_TIME_UPDATE") {
+        let raw: unknown = ev.data;
+        if (typeof raw === "string") {
+          try {
+            raw = JSON.parse(raw) as Record<string, unknown>;
+          } catch {
+            raw = {};
+          }
+        }
+        const label =
+          raw && typeof raw === "object" && raw !== null && "timeOnline" in raw
+            ? String((raw as { timeOnline?: string }).timeOnline)
+            : "";
+        if (label) {
+          setActivity((prev) => ({ ...prev, time_online: label }));
+        }
+        return;
+      }
+      if (name !== "ride-request") return;
+      dispatch(setAppData({ driverPendingRideOffer: true }));
+      Vibration.vibrate([0, 400, 200, 400]);
+      safeShowMessage({
+        type: "info",
+        message: "New ride request — opening map to respond.",
+        duration: 5000,
+      });
+      router.push("/(driver)/(tabs)/(dashboard)/home-map");
+    },
+  });
+
   usePusherChannel({
     channel: `private-passenger_cancelled`,
     visible: !subscription.passenger_cancelled,
@@ -395,15 +514,29 @@ const Home = () => {
   });
 
   // TASK 4: Driver foreground alerts - show toast + vibration for critical notifications
-  const DRIVER_ALERT_SUBTYPES = ["ride_requested", "ride_cancelled", "passenger_cancelled", "driver_cancelled"];
+  const DRIVER_ALERT_SUBTYPES = [
+    "ride_requested",
+    "ride_cancelled",
+    "passenger_cancelled",
+    "driver_cancelled",
+    "chat_message",
+  ];
   useEffect(() => {
     if (!notificationEvent?.body) return;
     const subType = notificationEvent?.data?.subType ?? notificationEvent?.data?.sub_type ?? "";
+    if (subType === "ride_requested") {
+      dispatch(setAppData({ driverPendingRideOffer: true }));
+      router.push("/(driver)/(tabs)/(dashboard)/home-map");
+    }
+    if (subType === "fare_received" || subType === "ride_completed") {
+      fetchDriverDashboard();
+      getCurrentUserRef.current?.();
+    }
     if (DRIVER_ALERT_SUBTYPES.includes(subType)) {
       safeShowMessage({ message: notificationEvent.body, type: "info" });
       Vibration.vibrate(300);
     }
-  }, [notificationEvent]);
+  }, [notificationEvent, dispatch, fetchDriverDashboard]);
 
   return (
     <>
@@ -511,7 +644,7 @@ const Home = () => {
                   fontFamily: "RobotoBlack",
                 })}
               >
-                ₦{activity?.earned_today}
+                ₦{Number(activity?.earned_today ?? 0).toLocaleString()}
               </Text>
             </View>
           </View>
@@ -542,7 +675,7 @@ const Home = () => {
                 fontFamily: "RobotoMedium",
               })}
             >
-              {activity?.time_online ?? "00h 00mins"}
+              {activity?.time_online ?? "00h 00m"}
             </Text>
           </View>
         </View>

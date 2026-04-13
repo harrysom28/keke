@@ -1,6 +1,8 @@
 import User from '../models/User.js';
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
+import UserSession from '../models/UserSession.js';
+import UserDevice from '../models/UserDevice.js';
 import { NotFoundError, ValidationError, ConflictError, AuthenticationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
@@ -393,30 +395,26 @@ export const deleteAccount = asyncHandler(async (req, res) => {
     }
   }
 
-  // If user is a driver, check for active rides
-  if (user.role === 'driver') {
-    const driver = await Driver.findOne({ user: userId });
-    if (driver) {
-      const activeRide = await Ride.findActiveRideForDriver(driver._id);
-      if (activeRide) {
-        throw new ConflictError('Cannot delete account while you have an active ride');
-      }
+  const driver = await Driver.findOne({ user: userId });
+  if (user.role === 'driver' && driver) {
+    const activeRide = await Ride.findActiveRideForDriver(driver._id);
+    if (activeRide) {
+      throw new ConflictError('Cannot delete account while you have an active ride');
     }
   }
-
-  // Soft delete user
-  await user.softDelete();
-
-  // Soft delete driver profile if exists
-  if (user.role === 'driver') {
-    const driver = await Driver.findOne({ user: userId });
-    if (driver) {
-      // Optionally mark driver as deleted or remove
-      // For now, we'll just keep it but mark user as deleted
-    }
+  if (driver) {
+    await Driver.findByIdAndDelete(driver._id);
   }
 
-  logger.info(`Account deleted for user ${userId}. Reason: ${reason || 'Not provided'}`);
+  await UserSession.deleteMany({ userId });
+  await UserDevice.deleteMany({ userId });
+
+  const deleted = await User.findByIdAndDelete(userId);
+  if (!deleted) {
+    throw new NotFoundError('User');
+  }
+
+  logger.info(`Account hard-deleted for user ${userId}. Reason: ${reason || 'Not provided'}`);
 
   res.json({
     status: 'success',

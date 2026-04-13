@@ -519,7 +519,21 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
     user.driver = driver;
   }
 
-  const formatted = formatUserResponse(user);
+  let formatted = formatUserResponse(user);
+
+  if (user.role === 'driver' && user.driver?._id) {
+    const { getOrCreateWallet, ensureWalletDayStats } = await import('../services/walletService.js');
+    const DriverWallet = (await import('../models/DriverWallet.js')).default;
+    await getOrCreateWallet(user.driver._id);
+    await ensureWalletDayStats(user.driver._id);
+    const w = await DriverWallet.findOne({ driverId: user.driver._id }).lean();
+    const walletTotal =
+      Math.round((Number(w?.availableBalance) || 0) + (Number(w?.pendingBalance) || 0)) || 0;
+    formatted = {
+      ...formatted,
+      balance: String(walletTotal),
+    };
+  }
 
   const uid = user._id.toString();
   const topupRef = user.walletAccountNumber || ('KEKE' + uid.slice(-8).toUpperCase());

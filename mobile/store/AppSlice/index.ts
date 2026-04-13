@@ -31,6 +31,12 @@ export interface IUtils {
   driver_id: string;
   driver: object;
   distanceTime: { cost: string; distance: string; duration: string };
+  /** Live driver GPS for rider map (accepted / arrived); cleared when trip starts */
+  driverLiveLocation?: {
+    lat: number;
+    lng: number;
+    heading: number | null;
+  } | null;
 }
 
 interface IState {
@@ -63,6 +69,10 @@ interface IState {
     related_payment_id?: string | null;
   }>;
   unread_count: number;
+  /** When set, rider/driver home opens in-ride chat for this ride (from notification deep link). */
+  pendingOpenChatRideId?: string | null;
+  /** Driver: show Home tab badge when a sequential ride offer is waiting on the map screen. */
+  driverPendingRideOffer?: boolean;
   latest_notification: null | {
     id?: string;
     notification_id: string;
@@ -99,6 +109,8 @@ const InitialState: IState = {
   },
   incomingNotifications: [],
   unread_count: 0,
+  pendingOpenChatRideId: null,
+  driverPendingRideOffer: false,
   latest_notification: null,
 };
 const AppSlice = createSlice({

@@ -46,7 +46,7 @@ const manuallyAcceptRide = async () => {
     logger.info(`   Vehicle Type: ${vehicleTypeId}`);
     logger.info(`   Driver: ${ride.driver || 'None'}\n`);
 
-    if (ride.status !== 'requested' || ride.driver) {
+    if (!['requested', 'searching'].includes(ride.status) || ride.driver) {
       logger.warn('⚠️  Ride already has a driver or is not in requested status');
       logger.info(`   Current status: ${ride.status}`);
       logger.info(`   Current driver: ${ride.driver || 'None'}\n`);

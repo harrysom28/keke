@@ -1,3 +1,6 @@
+// NOTE: This component contains hardcoded dummy data and is not used in production.
+// Do not import this in active screens. Candidate for removal.
+
 import { Image, Pressable, Text, TouchableOpacity } from "react-native";
 
 import { BottomSheetView } from "@gorhom/bottom-sheet";

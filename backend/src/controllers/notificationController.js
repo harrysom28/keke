@@ -6,6 +6,7 @@ import logger from '../utils/logger.js';
 import {
   getUnreadCount,
   getUserInbox,
+  inferNotificationCategory,
   markAllRead,
   markRead,
   previewTargeting,
@@ -42,6 +43,8 @@ const formatNotificationResponse = (userNotification) => {
       notification?.relatedPayment?._id?.toString?.() ||
       notification?.relatedPayment?.toString?.() ||
       null,
+    category: inferNotificationCategory(notification?.event_key),
+    event_key: notification?.event_key || 'general',
     is_read: Boolean(userNotification?.is_read),
     is_dismissed: Boolean(userNotification?.is_dismissed),
     read_at: userNotification?.opened_at || null,
@@ -55,8 +58,8 @@ const formatNotificationResponse = (userNotification) => {
  */
 export const getUserNotifications = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { page = 1, limit = 20 } = req.query;
-  const inbox = await getUserInbox(userId, page, limit);
+  const { page = 1, limit = 20, category = 'all' } = req.query;
+  const inbox = await getUserInbox(userId, page, limit, category);
 
   res.json({
     status: 'success',

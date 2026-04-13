@@ -15,7 +15,7 @@ export const calculateCancellationFee = (ride, cancelledBy) => {
     let feeReason = '';
 
     // If rider cancels before driver accepts, no fee
-    if (cancelledBy === 'rider' && ride.status === 'requested') {
+    if (cancelledBy === 'rider' && ['requested', 'searching'].includes(ride.status)) {
       cancellationFee = 0;
       feeReason = 'Cancelled before driver acceptance';
       return { cancellationFee, feeReason };
@@ -29,7 +29,7 @@ export const calculateCancellationFee = (ride, cancelledBy) => {
     }
 
     // Rider cancellation after driver acceptance
-    if (cancelledBy === 'rider' && ['accepted', 'arrived'].includes(ride.status)) {
+    if (cancelledBy === 'rider' && ['accepted', 'driver_en_route', 'arrived'].includes(ride.status)) {
       // Fee is 20% of base fare if cancelled within 5 minutes of acceptance
       if (ride.acceptedAt) {
         const timeSinceAcceptance = (now - ride.acceptedAt) / 1000 / 60; // minutes

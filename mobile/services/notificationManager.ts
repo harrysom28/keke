@@ -1,5 +1,7 @@
 import AppStore from "@/store";
+import { setAppData } from "@/store/AppSlice";
 import apiClient from "@/utils/apiClient";
+import logger from "@/utils/logger";
 import messaging from "@react-native-firebase/messaging";
 import { Pusher, PusherEvent } from "@pusher/pusher-websocket-react-native";
 import { router } from "expo-router";
@@ -246,6 +248,24 @@ export const handleNavigation = (payload: NotificationPayload): void => {
     payload.action_payload?.ride_id ||
     payload.ride_id;
 
+  if (
+    screen === "DriverHome" ||
+    screen === "driver_home" ||
+    screen === "ride_request" ||
+    screen === "DriverMap"
+  ) {
+    navigateToRoute("/(driver)/(tabs)/(dashboard)/home-map", rideId);
+    return;
+  }
+
+  if (screen === "RideChat" || screen === "ride_chat") {
+    if (rideId) {
+      AppStore.dispatch(setAppData({ pendingOpenChatRideId: String(rideId) }));
+    }
+    navigateToRoute(getRoleHomePath(), rideId);
+    return;
+  }
+
   if (screen === "ActiveRide" || screen === "ride") {
     navigateToRoute(getRoleHomePath(), rideId);
     return;
@@ -321,21 +341,35 @@ export const initFirebaseListeners = (): void => {
     foregroundUnsubscribe = null;
     backgroundOpenUnsubscribe = null;
     firebaseInitialized = false;
-    console.log("Firebase messaging unavailable, skipping listeners", error);
+    logger.warn("Firebase messaging unavailable, skipping listeners", {
+      message: String((error as Error)?.message || error),
+    });
   }
 };
 
 export const registerFcmToken = async (): Promise<void> => {
   try {
-    await messaging().requestPermission();
+    const authStatus = await messaging().requestPermission();
+    const ok =
+      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+    if (!ok) {
+      logger.warn("FCM: notification permission not granted", { authStatus });
+      return;
+    }
     const token = await messaging().getToken();
     if (!token) {
+      logger.warn("FCM: getToken() returned empty");
       return;
     }
     await apiClient.post("notifications/fcm-token", { token });
-    console.log("FCM token registered successfully");
+    logger.debug("FCM token registered with backend");
   } catch (error) {
-    console.log("FCM token registration failed", error);
+    logger.error(
+      "FCM token registration failed",
+      error instanceof Error ? error : undefined,
+      { detail: String(error) }
+    );
   }
 };
 

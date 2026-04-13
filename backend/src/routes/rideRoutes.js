@@ -15,6 +15,12 @@ router.get('/destination-details', validationRules.fareEstimateQuery, validate, 
 router.get('/find-driver', validationRules.findNearbyDriversQuery, validate, rideController.findNearbyDrivers);
 router.get('/active-ride', rideController.getActiveRide);
 router.post('/cancel-ride', validationRules.cancelRide, validate, rideController.cancelRide);
+router.get(
+  '/cancel-ride/preview',
+  validationRules.cancelRidePreviewQuery,
+  validate,
+  rideController.cancelRidePreview
+);
 router.get('/history', validationRules.rideHistoryQuery, validate, rideController.getRideHistory);
 router.get('/rides/:rideId', validationRules.rideIdParam, validate, rideController.getRideDetails);
 

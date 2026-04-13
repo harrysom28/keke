@@ -13,11 +13,15 @@ import React, {
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import MapView from "react-native-map-clustering";
 import { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import { useSelector } from "react-redux";
+
+import { LiveDriverMarker } from "@/components/find-ride/LiveDriverMarker";
 import { LocationEngine } from "@/src/engines/locationEngine";
 import { DriverEngine } from "@/src/engines/driverEngine";
 import { UserMarker } from "@/src/components/UserMarker";
 import { DriverMarker } from "@/src/components/DriverMarker";
 import { PickupPulseMarker } from "./PickupPulseMarker";
+import { AppDetailsState } from "@/store/AppSlice";
 import { isDriverNearby, haversineKm } from "@/utils/haversine";
 import type { LatLng } from "@/utils/polylineDecoder";
 import type { DriverMapItem } from "@/src/types/driver";
@@ -210,6 +214,8 @@ export interface HomeMapProps {
   onRouteReady?: (coords: LatLng[]) => void;
   children?: React.ReactNode;
   pauseDriverUpdates?: boolean;
+  /** Rider active-ride status from API (e.g. accepted, arrived) — used with Redux driverLiveLocation */
+  riderActiveRideStatus?: string | null;
 }
 
 function HomeMapComponent({
@@ -225,6 +231,7 @@ function HomeMapComponent({
   onRouteReady,
   children,
   pauseDriverUpdates = false,
+  riderActiveRideStatus = null,
 }: HomeMapProps) {
   const [engineLocation, setEngineLocation] = useState({
     latitude: 0,
@@ -233,6 +240,16 @@ function HomeMapComponent({
   });
   const [drivers, setDrivers] = useState<DriverMapItem[]>([]);
   const [mapReady, setMapReady] = useState(false);
+
+  const driverLiveLocation = useSelector(
+    (s) => AppDetailsState(s).ride?.utils?.driverLiveLocation ?? null
+  );
+  const riderStatusLower = String(riderActiveRideStatus ?? "").toLowerCase();
+  const showLiveAssignedDriver =
+    !!driverLiveLocation &&
+    typeof driverLiveLocation.lat === "number" &&
+    typeof driverLiveLocation.lng === "number" &&
+    (riderStatusLower === "accepted" || riderStatusLower === "arrived");
   const routeFittedRef = useRef(false);
   const lastDriverUpdateRef = useRef(0);
 
@@ -410,6 +427,13 @@ function HomeMapComponent({
           longitude={userLocation.longitude}
           heading={userHeading}
         />
+        {showLiveAssignedDriver ? (
+          <LiveDriverMarker
+            latitude={driverLiveLocation!.lat}
+            longitude={driverLiveLocation!.lng}
+            heading={driverLiveLocation!.heading}
+          />
+        ) : null}
         {visibleDrivers.map((d) => (
           <DriverMarker
             key={d.id}

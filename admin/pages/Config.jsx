@@ -397,7 +397,7 @@ function ConfigPage({ showToast, defaultTab }) {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 max-w-lg">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">KEKE ride pricing (₦)</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-            <strong>Formula:</strong> Total Fare = Base Fare + (Distance × Per KM Rate). If the result is less than the minimum fare, the minimum fare is charged. These values apply globally to all ride calculations.
+            <strong>Formula:</strong> Total Fare = Base Fare + (Distance × Per KM Rate). If the result is less than the minimum fare, the minimum fare is charged. These values apply globally to all ride calculations. Rider service charge is set under Fee settings.
           </p>
           {loading ? <C.Skeleton className="h-48 w-full" /> : pricing ? (
             <div className="space-y-4">

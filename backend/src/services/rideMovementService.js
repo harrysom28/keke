@@ -1,10 +1,9 @@
 /**
- * KEKE — Driver movement detection (abuse guard).
- * When driver location is updated after accepting a ride, record distance to pickup.
- * If after 5+ minutes driver hasn't moved meaningfully closer, flag ride so rider can cancel free.
+ * KEKE — Driver movement detection (abuse guard) + transition to driver_en_route on first GPS ping after accept.
  */
 
 import Ride from '../models/Ride.js';
+import Driver from '../models/Driver.js';
 import { calculateDistance } from '../utils/geolocation.js';
 import logger from '../utils/logger.js';
 
@@ -12,9 +11,6 @@ const APPROACH_THRESHOLD_MINUTES = 5;
 const NOT_APPROACHING_RATIO = 0.85;
 const MAX_HISTORY_LENGTH = 50;
 
-/**
- * Distance in meters from point to ride pickup.
- */
 function distanceToPickupMeters(ride, lat, lng) {
   const coords = ride.pickupLocation?.coordinates;
   if (!coords || coords.length < 2) return null;
@@ -24,19 +20,47 @@ function distanceToPickupMeters(ride, lat, lng) {
   return Math.round(km * 1000);
 }
 
-/**
- * Called when driver location is updated. If driver has an active ride in status 'accepted',
- * append to driverLocationHistory and set driverMovementFlag if not approaching after 5 min.
- * @param {string} driverId - Driver _id (Driver model)
- * @param {{ lat: number, lng: number }} driverLocation
- */
 export async function updateDriverLocationForAcceptedRide(driverId, driverLocation) {
-  const ride = await Ride.findOne({
+  let ride = await Ride.findOne({
     driver: driverId,
-    status: 'accepted',
+    status: { $in: ['accepted', 'driver_en_route'] },
   }).lean();
 
   if (!ride || !ride.pickupLocation?.coordinates?.length) return;
+
+  if (ride.status === 'accepted') {
+    const t = new Date();
+    const transitioned = await Ride.findOneAndUpdate(
+      { _id: ride._id, status: 'accepted' },
+      {
+        $set: { status: 'driver_en_route' },
+        $push: {
+          statusHistory: {
+            status: 'driver_en_route',
+            timestamp: t,
+            note: 'Driver en route (GPS)',
+          },
+        },
+      },
+      { new: true }
+    )
+      .populate('rider', 'name phone profileImage rating')
+      .populate('vehicleType');
+
+    if (transitioned) {
+      try {
+        const { getSocketService } = await import('./socketService.js');
+        const driverDoc = await Driver.findById(driverId).populate('user');
+        const socketService = getSocketService();
+        if (socketService && driverDoc) {
+          await socketService.emitRideStatusUpdate(transitioned, 'driver_en_route', driverDoc);
+        }
+      } catch (e) {
+        logger.warn(`driver_en_route socket emit: ${e.message}`);
+      }
+      ride = transitioned.toObject ? transitioned.toObject() : transitioned;
+    }
+  }
 
   const distanceMeters = distanceToPickupMeters(ride, driverLocation.lat, driverLocation.lng);
   if (distanceMeters == null) return;

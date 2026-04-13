@@ -12,6 +12,7 @@ import { DriverInfoView } from "@/components/find-ride/driverInfo";
 import { DriverView } from "@/components/find-ride/driver";
 import { IARide } from "../home";
 import ReviewSheet from "@/components/find-ride/feedbackReview";
+import { RideSummaryView } from "@/components/find-ride/rideSummary";
 import { SearchView } from "@/components/find-ride/search";
 import { TRide } from "@/types";
 import { WaitingView } from "@/components/find-ride/waiting";
@@ -28,6 +29,8 @@ interface Props {
   getActiveRide: () => void;
   temp: TRide;
   clearMap?: () => void;
+  /** Increment (e.g. from notification deep link) to open the driver chat modal. */
+  chatOpenSignal?: number;
 }
 
 const ActiveRideSheet = ({
@@ -37,6 +40,7 @@ const ActiveRideSheet = ({
   getActiveRide,
   temp,
   clearMap,
+  chatOpenSignal = 0,
 }: Props) => {
   const dispatch = useDispatch();
   const screenHeight = Dimensions.get("window").height;
@@ -46,6 +50,7 @@ const ActiveRideSheet = ({
   const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
   const lastAppliedSheetHeightRef = useRef<number | null>(null);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastChatKickRef = useRef(0);
 
   const rideDataForWaiting = useMemo(() => {
     if (currentView?.data?.waiting && Object.keys(currentView.data.waiting).length > 0) {
@@ -100,6 +105,9 @@ const ActiveRideSheet = ({
       case "DRIVER":
         h += 280;
         break;
+      case "SUMMARY":
+        h += 520;
+        break;
       case "REVIEW":
         h += 340;
         break;
@@ -136,6 +144,12 @@ const ActiveRideSheet = ({
     },
     [applySheetHeight]
   );
+
+  useEffect(() => {
+    if (!chatOpenSignal || chatOpenSignal === lastChatKickRef.current) return;
+    lastChatKickRef.current = chatOpenSignal;
+    setChatModal(true);
+  }, [chatOpenSignal]);
 
   const handleBack = () => {
     bottomSheetRef?.current?.close();
@@ -288,7 +302,6 @@ const ActiveRideSheet = ({
     apiClient
       .post('booking/cancel-ride', { rideId, reason })
       .then(({ data }) => {
-        console.log(data);
         executable();
         // Clear ride state completely - this handles map, markers, polylines, and all state
         if (clearMap) {
@@ -299,7 +312,6 @@ const ActiveRideSheet = ({
         getActiveRide();
       })
       .catch((err) => {
-        console.log(err?.response?.data);
         let errorMessage = 'An unexpected error occurred.';
 
         if (err?.response?.data?.message) {
@@ -386,7 +398,6 @@ const ActiveRideSheet = ({
               setCurrentView((prev) => ({ ...prev, screen: "SEARCH" }));
             }}
             info={(driver_id) => {
-              console.log(driver_id);
               dispatch(
                 setRideUtils({
                   driver_id,
@@ -425,6 +436,16 @@ const ActiveRideSheet = ({
                 });
               }
             }}
+          />
+        );
+      case "SUMMARY":
+        return (
+          <RideSummaryView
+            ride={temp as any}
+            onContinue={() =>
+              setCurrentView((prev) => ({ ...prev, screen: "REVIEW" }))
+            }
+            onDone={handleBack}
           />
         );
       case "REVIEW":
@@ -488,7 +509,6 @@ const ActiveRideSheet = ({
                 setCurrentView((prev) => ({ ...prev, screen: "SEARCH" }));
               }}
               info={(driver_id) => {
-                console.log(driver_id);
                 dispatch(setRideUtils({ driver_id }));
                 setCurrentView((prev) => ({ ...prev, screen: "DRIVER" }));
               }}
@@ -544,7 +564,7 @@ const ActiveRideSheet = ({
   ]);
 
   // Fallback poll for ride status (Pusher in home.tsx is primary; poll rarely to reduce load)
-  const POLL_INTERVAL_MS = 90000; // 90s fallback
+  const POLL_INTERVAL_MS = 25000; // backup when Pusher misses an event
   useEffect(() => {
     const rideData = currentView?.data?.waiting || temp;
     const rideId = rideData?.ride_id || (rideData as any)?._id;
@@ -663,6 +683,13 @@ const ActiveRideSheet = ({
       <CancelRideModal
         show={modal}
         setShow={setModal}
+        rideId={
+          rideIdForHook ||
+          (currentView?.data?.waiting as any)?.ride_id ||
+          (currentView?.data?.waiting as any)?.rideId ||
+          (temp as any)?.ride_id ||
+          (temp as any)?.rideId
+        }
         action={(data, loading, executable, showError) =>
           CancelRide(data, loading, executable, showError)
         }

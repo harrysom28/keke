@@ -34,13 +34,15 @@ function escapeRegex(str) {
 /** Allowed admin ride status transitions. Prevents invalid state (e.g. completed -> accepted). */
 const RIDE_STATUS_TRANSITIONS = {
   requested: ['accepted', 'cancelled', 'no-driver-found'],
-  scheduled: ['requested', 'cancelled'],
-  accepted: ['arrived', 'cancelled'],
+  searching: ['accepted', 'cancelled', 'no-driver-found'],
+  scheduled: ['requested', 'searching', 'cancelled'],
+  accepted: ['arrived', 'cancelled', 'driver_en_route'],
+  driver_en_route: ['arrived', 'cancelled'],
   arrived: ['in-progress', 'cancelled'],
   'in-progress': ['completed', 'cancelled'],
   completed: [],
   cancelled: [],
-  'no-driver-found': ['requested'],
+  'no-driver-found': ['requested', 'searching'],
 };
 function canTransitionRideStatus(fromStatus, toStatus) {
   const allowed = RIDE_STATUS_TRANSITIONS[fromStatus];
@@ -227,7 +229,9 @@ export const getDashboardStats = asyncHandler(async (req, res) => {
       { $match: { status: 'completed', amount: { $gt: 0 }, createdAt: { $gte: thisMonth } } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]),
-    Ride.countDocuments({ status: { $in: ['requested', 'accepted', 'in-progress'] } }),
+    Ride.countDocuments({
+      status: { $in: ['requested', 'searching', 'accepted', 'driver_en_route', 'in-progress'] },
+    }),
     Driver.countDocuments({ verificationStatus: 'pending' }),
     SupportTicket.countDocuments({ status: { $in: ['open', 'in_progress'] } }),
   ]);
@@ -269,13 +273,13 @@ export const getDashboardLive = asyncHandler(async (req, res) => {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
   const [pendingRides, activeRides, recentRides, newUsers, newDrivers, newTickets] = await Promise.all([
-    Ride.find({ status: 'requested' })
+    Ride.find({ status: { $in: ['requested', 'searching'] } })
       .populate('rider', 'name phone')
       .populate('vehicleType', 'displayName')
       .sort({ createdAt: 1 })
       .limit(50)
       .lean(),
-    Ride.find({ status: { $in: ['accepted', 'arrived', 'in-progress'] } })
+    Ride.find({ status: { $in: ['accepted', 'driver_en_route', 'arrived', 'in-progress'] } })
       .populate('rider', 'name phone')
       .populate({ path: 'driver', select: 'currentLocation', populate: { path: 'user', select: 'name phone' } })
       .populate('vehicleType', 'displayName')
@@ -656,10 +660,16 @@ export const getAnalytics = asyncHandler(async (req, res) => {
   ]);
 
   // Conversion: requested vs completed vs cancelled in period
-  const requestedCount = await Ride.countDocuments({ createdAt: { $gte: startDate }, status: 'requested' });
+  const requestedCount = await Ride.countDocuments({
+    createdAt: { $gte: startDate },
+    status: { $in: ['requested', 'searching'] },
+  });
   const completedInPeriod = await Ride.countDocuments({ createdAt: { $gte: startDate }, status: 'completed' });
   const cancelledInPeriod = await Ride.countDocuments({ createdAt: { $gte: startDate }, status: 'cancelled' });
-  const acceptedOrProgress = await Ride.countDocuments({ createdAt: { $gte: startDate }, status: { $in: ['accepted', 'in-progress', 'arrived'] } });
+  const acceptedOrProgress = await Ride.countDocuments({
+    createdAt: { $gte: startDate },
+    status: { $in: ['accepted', 'driver_en_route', 'in-progress', 'arrived'] },
+  });
   const totalRidesInPeriod = await Ride.countDocuments({ createdAt: { $gte: startDate } });
   const conversion_rate = totalRidesInPeriod > 0 ? Math.round((completedInPeriod / totalRidesInPeriod) * 1000) / 10 : 0;
 
@@ -849,6 +859,13 @@ export const updateUser = asyncHandler(async (req, res) => {
       driver.verificationStatus = 'approved';
       driver.documentsVerified = true;
       driver.rejectionReason = null;
+      driver.isAvailable = true;
+      driver.isOnline = true;
+      driver.lastActiveAt = new Date();
+      const dayKey = new Date().toISOString().slice(0, 10);
+      driver.statsDate = dayKey;
+      driver.todayOnlineMs = 0;
+      driver.onlineSessionStartedAt = new Date();
       await driver.save();
       try {
         provisionDvaAsync(id);
@@ -1159,6 +1176,14 @@ export const verifyDriver = asyncHandler(async (req, res) => {
 
   driver.documentsVerified = true;
   driver.verificationStatus = 'approved';
+  driver.rejectionReason = null;
+  driver.isAvailable = true;
+  driver.isOnline = true;
+  driver.lastActiveAt = new Date();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  driver.statsDate = dayKey;
+  driver.todayOnlineMs = 0;
+  driver.onlineSessionStartedAt = new Date();
   await driver.save();
 
   // Update user role if needed
@@ -1352,9 +1377,19 @@ async function syncDriverVerificationStatus(userId) {
     await user.save();
   }
   if (driver) {
+    const newlyApproved = bothVerified && driver.verificationStatus !== 'approved';
     driver.documentsVerified = bothVerified;
     driver.verificationStatus = bothVerified ? 'approved' : 'pending';
     if (!bothVerified) driver.rejectionReason = null;
+    if (newlyApproved) {
+      driver.isAvailable = true;
+      driver.isOnline = true;
+      driver.lastActiveAt = new Date();
+      const dayKey = new Date().toISOString().slice(0, 10);
+      driver.statsDate = dayKey;
+      driver.todayOnlineMs = 0;
+      driver.onlineSessionStartedAt = new Date();
+    }
     await driver.save();
   }
   if (bothVerified && user && !user.topupAccountNumber) {
@@ -1630,7 +1665,7 @@ export const assignRideDriver = asyncHandler(async (req, res) => {
     throw new NotFoundError('Ride');
   }
 
-  const allowedStatuses = ['requested', 'no-driver-found'];
+  const allowedStatuses = ['requested', 'searching', 'no-driver-found'];
   if (!allowedStatuses.includes(ride.status)) {
     throw new ValidationError(`Cannot assign driver: ride status is "${ride.status}". Only requested or no-driver-found rides can be assigned.`);
   }

@@ -150,7 +150,7 @@ export const calculateFare = (distanceKm, durationMinutes, vehicleTypeId = null,
  * Apply surge pricing multiplier
  */
 export const applySurgePricing = (baseFare, surgeMultiplier = 1.0) => {
-  const maxSurge = parseFloat(process.env.SURGE_MULTIPLIER_MAX || '3.0');
+  const maxSurge = parseFloat(process.env.SURGE_MULTIPLIER_MAX || '1.3');
   const multiplier = Math.min(Math.max(surgeMultiplier, 1.0), maxSurge);
   const surgedFare = baseFare * multiplier;
 

@@ -13,6 +13,7 @@ import {
   DRIVER_ACCEPT_RIDE,
   DRIVER_COMPLETE_RIDE,
   DRIVER_CONFIRM_PAYMENT,
+  DRIVER_MARK_PICKUP_ARRIVED,
   DRIVER_PAY_CHANGE,
   DRIVER_REJECT_RIDE,
   DRIVER_START_RIDE,
@@ -39,11 +40,24 @@ import { getErrorMessage } from "@/utils/errorHandler";
 import tw from "@/lib/tailwind";
 import { useFocusEffect } from "expo-router";
 
+const handleRideApiError = (err: unknown) => {
+  showMessage({
+    type: "danger",
+    message: getErrorMessage(err, "An error occurred. Please try again."),
+  });
+};
+
 interface Props {
   bottomSheetRef: RefObject<BottomSheetMethods>;
   data: Partial<TDriverActiveRide>;
-  isActive: boolean;
   getActiveRide: () => void;
+  /** ETA/distance from live route (driver → pickup or → dropoff). */
+  routeEta?: string;
+  routeDistance?: string;
+  /** Increment to open the chat modal (notification deep link). */
+  chatOpenSignal?: number;
+  /** Clear “new offer” tab badge after accept/reject. */
+  onOfferResolved?: () => void;
   /** Wall-clock ms when the sequential offer expires (Bolt-style window). */
   offerDeadlineMs?: number | null;
   onOfferExpired?: () => void;
@@ -52,8 +66,11 @@ interface Props {
 const NewRide = ({
   bottomSheetRef,
   data,
-  isActive,
   getActiveRide,
+  routeEta = "",
+  routeDistance = "",
+  chatOpenSignal = 0,
+  onOfferResolved,
   offerDeadlineMs = null,
   onOfferExpired,
 }: Props) => {
@@ -61,12 +78,24 @@ const NewRide = ({
   const [loading, setLoading] = useState({
     accept: false,
     start: false,
+    arrived: false,
     reject: false,
     complete: false,
     confirm: false,
     change: false,
   });
   const hasRideStarted = data?.is_ride_started;
+  const accepted = !!data?.accepted_by_driver;
+  const statusLower = String(data?.status ?? "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "");
+  const atPickup =
+    accepted &&
+    !hasRideStarted &&
+    (statusLower === "arrived" || statusLower === "driverarrived");
+  const headingToPickup =
+    accepted && !hasRideStarted && !atPickup;
+  const lastChatKickRef = useRef(0);
   const [show, setShow] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
   const rideId = data?.ride_id ?? data?.rideId ?? '';
@@ -147,41 +176,25 @@ const NewRide = ({
     }
   }, [hasRideStarted]);
 
+  useEffect(() => {
+    if (!chatOpenSignal || chatOpenSignal === lastChatKickRef.current) return;
+    lastChatKickRef.current = chatOpenSignal;
+    setChatModal(true);
+  }, [chatOpenSignal]);
+
+  const arrivalTimeLabel = routeEta || data?.arrival_time || "";
+  const arrivalDistLabel = routeDistance || data?.arrival_distance || "";
+
   const AcceptRide = () => {
     setLoading((prev) => ({ ...prev, accept: true }));
     axios
       .post(DRIVER_ACCEPT_RIDE, { rideId }, apiConfig)
       .then(({ data }) => {
-        console.log(data);
+        onOfferResolved?.();
         getActiveRide();
         showMessage({ type: "success", message: data?.message });
       })
-      .catch((err) => {
-        console.log(err?.response?.data);
-        const errorMessage = typeof err?.response?.data?.message === 'string' 
-          ? err.response.data.message 
-          : String(err.response.data.message || 'An error occurred');
-        if (errorMessage && errorMessage !== 'An error occurred') {
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else if (err?.response?.data?.error) {
-          const errorData = err.response.data.error;
-          const extractedErrorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: extractedErrorMessage,
-          });
-        } else {
-          showMessage({
-            type: "danger",
-            message: 'An error occurred. Please try again.',
-          });
-        }
-      })
+      .catch(handleRideApiError)
       .finally(() => setLoading((prev) => ({ ...prev, accept: false })));
   };
   const RejectRide = () => {
@@ -189,74 +202,35 @@ const NewRide = ({
     axios
       .post(DRIVER_REJECT_RIDE, { rideId }, apiConfig)
       .then(({ data }) => {
-        console.log(data);
+        onOfferResolved?.();
         handleBack();
         showMessage({ type: "success", message: data?.message });
         getActiveRide();
       })
-      .catch((err) => {
-        console.log(err?.response?.data);
-        const errorMessage = typeof err?.response?.data?.message === 'string' 
-          ? err.response.data.message 
-          : String(err.response.data.message || 'An error occurred');
-        if (errorMessage && errorMessage !== 'An error occurred') {
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else if (err?.response?.data?.error) {
-          const errorData = err.response.data.error;
-          const extractedErrorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: extractedErrorMessage,
-          });
-        } else {
-          showMessage({
-            type: "danger",
-            message: 'An error occurred. Please try again.',
-          });
-        }
-      })
+      .catch(handleRideApiError)
       .finally(() => setLoading((prev) => ({ ...prev, reject: false })));
   };
+  const MarkPickupArrived = () => {
+    setLoading((prev) => ({ ...prev, arrived: true }));
+    axios
+      .post(DRIVER_MARK_PICKUP_ARRIVED, { rideId }, apiConfig)
+      .then(({ data }) => {
+        getActiveRide();
+        showMessage({ type: "success", message: data?.message });
+      })
+      .catch(handleRideApiError)
+      .finally(() => setLoading((prev) => ({ ...prev, arrived: false })));
+  };
+
   const StartRide = () => {
     setLoading((prev) => ({ ...prev, start: true }));
     axios
       .post(DRIVER_START_RIDE, { rideId }, apiConfig)
       .then(({ data }) => {
-        console.log(data);
         getActiveRide();
         showMessage({ type: "success", message: data?.message });
       })
-      .catch((err) => {
-        console.log(err?.response?.data);
-        const errorMessage = typeof err?.response?.data?.message === 'string' 
-          ? err.response.data.message 
-          : String(err.response.data.message || 'An error occurred');
-        if (errorMessage && errorMessage !== 'An error occurred') {
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else if (err?.response?.data?.error) {
-          const errorData = err.response.data.error;
-          const extractedErrorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: extractedErrorMessage,
-          });
-        } else {
-          showMessage({
-            type: "danger",
-            message: 'An error occurred. Please try again.',
-          });
-        }
-      })
+      .catch(handleRideApiError)
       .finally(() => setLoading((prev) => ({ ...prev, start: false })));
   };
   const CompleteRide = () => {
@@ -271,32 +245,7 @@ const NewRide = ({
         }
         getActiveRide();
       })
-      .catch((err) => {
-        console.log(err?.response?.data);
-        const errorMessage = typeof err?.response?.data?.message === 'string' 
-          ? err.response.data.message 
-          : String(err.response.data.message || 'An error occurred');
-        if (errorMessage && errorMessage !== 'An error occurred') {
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else if (err?.response?.data?.error) {
-          const errorData = err.response.data.error;
-          const extractedErrorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: extractedErrorMessage,
-          });
-        } else {
-          showMessage({
-            type: "danger",
-            message: 'An error occurred. Please try again.',
-          });
-        }
-      })
+      .catch(handleRideApiError)
       .finally(() => setLoading((prev) => ({ ...prev, complete: false })));
   };
   const ConfirmPayment = () => {
@@ -304,37 +253,11 @@ const NewRide = ({
     axios
       .post(DRIVER_CONFIRM_PAYMENT, { rideId }, apiConfig)
       .then(({ data }) => {
-        console.log(data);
         handleBack();
         showMessage({ type: "success", message: data?.message });
         getActiveRide();
       })
-      .catch((err) => {
-        console.log(err?.response?.data);
-        const errorMessage = typeof err?.response?.data?.message === 'string' 
-          ? err.response.data.message 
-          : String(err.response.data.message || 'An error occurred');
-        if (errorMessage && errorMessage !== 'An error occurred') {
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else if (err?.response?.data?.error) {
-          const errorData = err.response.data.error;
-          const extractedErrorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: extractedErrorMessage,
-          });
-        } else {
-          showMessage({
-            type: "danger",
-            message: 'An error occurred. Please try again.',
-          });
-        }
-      })
+      .catch(handleRideApiError)
       .finally(() => setLoading((prev) => ({ ...prev, confirm: false })));
   };
 
@@ -343,23 +266,14 @@ const NewRide = ({
     axios
       .post(DRIVER_PAY_CHANGE, { rideId, amount }, apiConfig)
       .then(({ data }) => {
-        console.log(data);
         showMessage({ type: "success", message: data?.message });
         setShow(false);
       })
       .catch((err) => {
-        console.log(DRIVER_PAY_CHANGE, err?.response?.data);
-        // Silently handle 404 errors (driver profile not found, etc.)
-        if (err?.response?.status === 404) {
-          console.log('Resource not found (404) - silently handling');
+        if ((err as { response?: { status?: number } })?.response?.status === 404) {
           return;
         }
-        // Use centralized error handler to extract safe string message
-        const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
-        showMessage({
-          type: "danger",
-          message: errorMessage,
-        });
+        handleRideApiError(err);
       })
       .finally(() => setLoading((prev) => ({ ...prev, change: false })));
   };
@@ -429,7 +343,7 @@ const NewRide = ({
         </View>
 
         <View style={tw`items-end`}>
-          {offerSecondsLeft != null && offerSecondsLeft > 0 && !isActive ? (
+          {offerSecondsLeft != null && offerSecondsLeft > 0 && !accepted ? (
             <Text
               style={tw.style(`text-xs text-amber-300 mb-1`, {
                 fontFamily: "RobotoMedium",
@@ -469,6 +383,15 @@ const NewRide = ({
             >
               {data?.origin?.name}
             </Text>
+            {headingToPickup && (arrivalDistLabel || arrivalTimeLabel) ? (
+              <Text
+                style={tw.style(`text-xs text-base-green mt-1`, {
+                  fontFamily: "RobotoMedium",
+                })}
+              >
+                {[arrivalDistLabel, arrivalTimeLabel].filter(Boolean).join(" · ")}
+              </Text>
+            ) : null}
           </View>
           <View>
             <View style={tw`flex-row justify-between`}>
@@ -484,7 +407,7 @@ const NewRide = ({
                   fontFamily: "RobotoMedium",
                 })}
               >
-                {data?.arrival_distance}
+                {headingToPickup ? "" : arrivalDistLabel}
               </Text>
             </View>
             <Text
@@ -509,14 +432,14 @@ const NewRide = ({
                 fontFamily: "RobotoMedium",
               })}
             >
-              {data?.arrival_distance}
+              {arrivalDistLabel}
             </Text>
             <Text
               style={tw.style(`text-[14px] text-black`, {
                 fontFamily: "RobotoMedium",
               })}
             >
-              {data?.arrival_time}
+              {arrivalTimeLabel}
             </Text>
           </View>
           <View style={tw`relative`}>
@@ -596,7 +519,14 @@ const NewRide = ({
       <View style={tw`flex-row items-center justify-center gap-x-8 my-3`}>
         <TouchableOpacity
           onPress={() => {
-            let num = data?.passenger?.passenger_phone_number as string;
+            const p = data?.passenger as
+              | { passenger_phone_number?: string; phone?: string }
+              | undefined;
+            const num = (p?.passenger_phone_number || p?.phone || "") as string;
+            if (!num) {
+              showMessage({ type: "warning", message: "Phone number not available" });
+              return;
+            }
             if (num.startsWith("0")) {
               Linking.openURL(`tel:${num}`);
             } else {
@@ -649,6 +579,19 @@ const NewRide = ({
           )}
         </TouchableOpacity>
       </View>
+
+      {headingToPickup ? (
+        <View style={tw`mb-3 px-1`}>
+          <Text
+            style={tw.style(`text-center text-sm text-[#3C8F7C]`, {
+              fontFamily: "RobotoMedium",
+            })}
+          >
+            Head to the pickup pin. When you reach the rider, tap I’ve arrived, then
+            start the trip.
+          </Text>
+        </View>
+      ) : null}
 
       <View style={tw`flex-col mt-5 gap-y-4`}>
         {hasRideStarted ? (
@@ -707,23 +650,42 @@ const NewRide = ({
               </TouchableOpacity>
             )}
           </>
-        ) : isActive ? (
-          <TouchableOpacity
-            onPress={StartRide}
-            style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[8px]`}
-          >
-            {loading.start ? (
-              <ActivityIndicator color="white" />
-            ) : (
-              <Text
-                style={tw.style(`text-base text-white uppercase`, {
-                  fontFamily: "RobotoBold",
-                })}
-              >
-                Start Ride
-              </Text>
-            )}
-          </TouchableOpacity>
+        ) : accepted ? (
+          atPickup ? (
+            <TouchableOpacity
+              onPress={StartRide}
+              style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[8px]`}
+            >
+              {loading.start ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text
+                  style={tw.style(`text-base text-white uppercase`, {
+                    fontFamily: "RobotoBold",
+                  })}
+                >
+                  Start Ride
+                </Text>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={MarkPickupArrived}
+              style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[8px]`}
+            >
+              {loading.arrived ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text
+                  style={tw.style(`text-base text-white uppercase`, {
+                    fontFamily: "RobotoBold",
+                  })}
+                >
+                  {"I've arrived"}
+                </Text>
+              )}
+            </TouchableOpacity>
+          )
         ) : (
           <>
             <TouchableOpacity

@@ -1,8 +1,14 @@
 import Driver from '../models/Driver.js';
-import Ride from '../models/Ride.js';
 import { calculateDistance } from '../utils/geolocation.js';
 import logger from '../utils/logger.js';
 import { getSocketService } from './socketService.js';
+
+/** Normalize VehicleType ref whether stored as ObjectId or populated document (same as findNearbyDrivers filter). */
+function getVehicleTypeId(ref) {
+  if (ref == null) return null;
+  if (typeof ref === 'object' && ref._id != null) return ref._id.toString();
+  return ref.toString();
+}
 
 /**
  * Ride matching service with intelligent algorithm
@@ -28,13 +34,22 @@ class RideMatchingService {
         return [];
       }
 
-      // Filter by vehicle type
-      const matchingDrivers = nearbyDrivers.filter(
-        (driver) => driver.vehicleDetails.vehicleType.toString() === ride.vehicleType.toString()
-      );
+      const rideVehicleTypeId = getVehicleTypeId(ride.vehicleType);
+
+      // Filter by vehicle type (must not use .toString() on mixed ObjectId vs populated refs)
+      const matchingDrivers = nearbyDrivers.filter((driver) => {
+        const driverVehicleTypeId = getVehicleTypeId(driver.vehicleDetails?.vehicleType);
+        return (
+          rideVehicleTypeId &&
+          driverVehicleTypeId &&
+          driverVehicleTypeId === rideVehicleTypeId
+        );
+      });
 
       if (matchingDrivers.length === 0) {
-        logger.warn(`No drivers with matching vehicle type for ride ${ride._id}`);
+        logger.warn(
+          `No drivers with matching vehicle type for ride ${ride._id} (ride vehicleType: ${rideVehicleTypeId})`
+        );
         return [];
       }
 
@@ -128,97 +143,6 @@ class RideMatchingService {
       // For now, return null and let the system handle it
       // In production, you'd set up an event listener here
     });
-  }
-
-  /**
-   * Auto-assign driver if first driver doesn't respond
-   */
-  async autoAssignDriver(ride, drivers) {
-    if (!drivers || drivers.length === 0) {
-      logger.warn(`No drivers available for auto-assignment for ride ${ride._id}`);
-      return null;
-    }
-
-    // Get the top driver - handle both { driver, score } format and direct driver objects
-    const topMatch = drivers[0];
-    const topDriver = topMatch.driver || topMatch;
-    const driverId = topDriver._id || topDriver;
-    
-    if (!driverId) {
-      logger.error(`Invalid driver reference in auto-assignment for ride ${ride._id}`);
-      return null;
-    }
-    
-    try {
-      // Refresh driver from DB to ensure we have latest data
-      const driverDoc = await Driver.findById(driverId).populate('user');
-      if (!driverDoc) {
-        logger.warn(`Driver ${driverId} not found in database for auto-assignment`);
-        return null;
-      }
-      
-      if (!driverDoc.isAvailable || !driverDoc.isOnline) {
-        logger.warn(`Driver ${driverId} is not available (isAvailable: ${driverDoc.isAvailable}, isOnline: ${driverDoc.isOnline}), skipping auto-assignment`);
-        return null;
-      }
-      
-      // Verify vehicle type matches
-      const driverVehicleType = driverDoc.vehicleDetails?.vehicleType?.toString();
-      const rideVehicleType = ride.vehicleType?._id?.toString() || ride.vehicleType?.toString();
-      if (driverVehicleType !== rideVehicleType) {
-        logger.warn(`Driver ${driverId} vehicle type (${driverVehicleType}) doesn't match ride vehicle type (${rideVehicleType})`);
-        return null;
-      }
-
-      // Ensure ride is fresh from DB before updating
-      const freshRide = await Ride.findById(ride._id).populate('rider vehicleType');
-      if (!freshRide) {
-        logger.error(`Ride ${ride._id} not found during auto-assignment`);
-        return null;
-      }
-      
-      if (freshRide.status !== 'requested' || freshRide.driver) {
-        logger.info(`Ride ${ride._id} already has driver or status changed (status: ${freshRide.status}, driver: ${freshRide.driver ? 'assigned' : 'none'})`);
-        return null;
-      }
-      
-      // Update ride with driver assignment
-      freshRide.driver = driverDoc._id;
-      freshRide.status = 'accepted';
-      freshRide.acceptedByDriver = true;
-      freshRide.acceptedAt = new Date();
-      freshRide.statusHistory.push({
-        status: 'accepted',
-        timestamp: new Date(),
-        note: `Auto-assigned to driver ${driverDoc._id}`,
-      });
-      
-      await freshRide.save();
-      
-      // Populate ride with related data
-      await freshRide.populate('rider', 'name phone profileImage rating');
-      await freshRide.populate('driver.user', 'name phone profileImage rating');
-
-      // Make driver unavailable
-      driverDoc.isAvailable = false;
-      await driverDoc.save();
-
-      // Emit notifications (if socket service available)
-      const socketService = getSocketService();
-      if (socketService) {
-        socketService.emitRideAccepted(freshRide, driverDoc);
-        socketService.emitRideStatusUpdate(freshRide, 'accepted', driverDoc);
-      } else {
-        logger.warn('Socket service not available, skipping real-time notifications');
-      }
-
-      logger.info(`✅ Ride ${freshRide._id} auto-assigned to driver ${driverDoc._id} (${driverDoc.user?.name || 'Unknown'})`);
-      return driverDoc;
-    } catch (error) {
-      logger.error(`❌ Error auto-assigning driver for ride ${ride._id}: ${error.message}`);
-      logger.error(error.stack);
-      return null;
-    }
   }
 
   /**

@@ -430,6 +430,11 @@ const startServer = async () => {
           scheduledRideService.start();
           startOrphanedRideRecovery();
         }
+        import('./services/socketService.js')
+          .then(({ getSocketService }) => {
+            getSocketService()?.startOnlineTimeBroadcast?.();
+          })
+          .catch(() => {});
       });
     };
 
@@ -446,6 +451,16 @@ startServer();
 // Graceful shutdown: stop accepting connections, then close DB
 async function gracefulShutdown(signal) {
   logger.info(`${signal} received. Shutting down gracefully...`);
+  try {
+    const { getSocketService } = await import('./services/socketService.js');
+    const svc = getSocketService();
+    if (svc?._onlineTimeInterval) {
+      clearInterval(svc._onlineTimeInterval);
+      svc._onlineTimeInterval = null;
+    }
+  } catch (_) {
+    /* ignore */
+  }
   scheduledRideService.stop();
   stopOrphanedRideRecovery();
   server.close(() => {

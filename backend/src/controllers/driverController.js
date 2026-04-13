@@ -4,6 +4,8 @@ import { existsSync, mkdirSync } from 'fs';
 import { writeFile } from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import Driver from '../models/Driver.js';
+import DriverWallet from '../models/DriverWallet.js';
+import Transaction from '../models/Transaction.js';
 import DriverKyc from '../models/DriverKyc.js';
 import DriverVehicle from '../models/DriverVehicle.js';
 import User from '../models/User.js';
@@ -17,6 +19,15 @@ import { calculateDistance } from '../utils/geolocation.js';
 import { learnFromRide } from '../services/placeIntelligence.js';
 import { getFileUrl, uploadToCloudinary } from '../services/fileUploadService.js';
 import { cache } from '../config/redis.js';
+import { logRideLifecycle, mapRideStatusForClientApi } from '../utils/rideStatus.js';
+import rideMatchingService from '../services/rideMatchingService.js';
+import { ensureWalletDayStats, getOrCreateWallet } from '../services/walletService.js';
+import { formatOnlineDurationMs } from '../utils/driverOnlineTime.js';
+import {
+  offerRideToDrivers,
+  notifyNoDriverFound,
+  cancelUnacceptedRide,
+} from '../services/driverNotificationService.js';
 
 /**
  * Map multipart field name from mobile / driver create to upload category.
@@ -424,7 +435,7 @@ export const updateDriverProfile = asyncHandler(async (req, res) => {
  */
 export const updateLocation = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { latitude, longitude, address } = req.body;
+  const { latitude, longitude, address, heading } = req.body;
 
   if (!latitude || !longitude) {
     throw new ValidationError('Latitude and longitude are required');
@@ -455,6 +466,23 @@ export const updateLocation = asyncHandler(async (req, res) => {
         if (activeRide) {
           await socketService.emitDriverLocationUpdate(activeRide, driver);
         }
+      }
+
+      try {
+        const { getPusherService } = await import('../services/pusherService.js');
+        const pusherSvc = getPusherService();
+        const headingNum =
+          heading != null && heading !== '' && !Number.isNaN(Number(heading))
+            ? Number(heading)
+            : null;
+        await pusherSvc.emitDriverLiveLocationToRider(
+          driver._id,
+          Number(latitude),
+          Number(longitude),
+          headingNum
+        );
+      } catch (err) {
+        logger.warn(`Pusher driver-location-update skipped: ${err.message}`);
       }
 
       logger.info(`Driver location updated for driver ${driver._id}`);
@@ -591,6 +619,47 @@ export const getNearbyDriverCount = asyncHandler(async (req, res) => {
   return res.json({ count, label });
 });
 
+const utcDayKey = (d = new Date()) => d.toISOString().slice(0, 10);
+
+function resetDriverDayStatsIfNeeded(driver) {
+  const today = utcDayKey();
+  if (!driver.statsDate) {
+    driver.statsDate = today;
+    return true;
+  }
+  if (driver.statsDate !== today) {
+    driver.todayOnlineMs = 0;
+    driver.statsDate = today;
+    if (driver.onlineSessionStartedAt) {
+      driver.onlineSessionStartedAt = new Date();
+    }
+    return true;
+  }
+  return false;
+}
+
+function startOfUtcWeek() {
+  const d = new Date();
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = x.getUTCDay() || 7;
+  if (day !== 1) x.setUTCDate(x.getUTCDate() - (day - 1));
+  x.setUTCHours(0, 0, 0, 0);
+  return x;
+}
+
+function startOfUtcMonth() {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+}
+
+async function sumRideEarningsSince(driverId, since) {
+  const r = await Transaction.aggregate([
+    { $match: { driverId, type: 'ride_earning', createdAt: { $gte: since } } },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  return Math.round(r[0]?.total || 0);
+}
+
 /**
  * Toggle driver availability - PATCH /api/driver/availability
  */
@@ -615,19 +684,33 @@ export const toggleAvailability = asyncHandler(async (req, res) => {
     throw new ConflictError('Cannot go offline with an active ride');
   }
 
+  const dayRolled = resetDriverDayStatsIfNeeded(driver);
+
   driver.isAvailable = isAvailable === true || isAvailable === 'true';
-  
+
   if (driver.isAvailable) {
     driver.isOnline = true;
     driver.lastActiveAt = new Date();
+    driver.todayOnlineMs = driver.todayOnlineMs || 0;
+    if (!driver.onlineSessionStartedAt) {
+      driver.onlineSessionStartedAt = new Date();
+    }
   } else {
-    // When going offline, also set online to false if no active ride
+    if (driver.onlineSessionStartedAt) {
+      const started = new Date(driver.onlineSessionStartedAt).getTime();
+      driver.todayOnlineMs = (driver.todayOnlineMs || 0) + (Date.now() - started);
+      driver.onlineSessionStartedAt = null;
+    }
     if (!activeRide) {
       driver.isOnline = false;
     }
   }
 
   await driver.save();
+
+  if (dayRolled) {
+    logger.debug(`Driver ${driver._id} stats rolled to new UTC day`);
+  }
 
   logger.info(`Driver availability toggled: ${driver.isAvailable} for driver ${driver._id}`);
 
@@ -661,12 +744,25 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
         is_available: false,
         verification_status: 'pending',
         documents_verified: false,
+        earned_today: 0,
+        total_earnings: 0,
+        time_online: formatOnlineDurationMs(0),
+        wallet: {
+          todayEarnings: 0,
+          totalBalance: 0,
+          availableBalance: 0,
+          pendingBalance: 0,
+          totalEarned: 0,
+        },
+        in_app_payment: 0,
+        total_balance: '0',
         earnings: {
           total: 0,
           today: 0,
           thisWeek: 0,
           thisMonth: 0,
           period: 0,
+          totalEarnedLifetime: 0,
           currency: 'NGN',
         },
         statistics: {
@@ -681,14 +777,40 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
     });
   }
 
-  let earnings = driver.earnings.total;
-  if (period === 'today') {
-    earnings = driver.earnings.today;
-  } else if (period === 'week') {
-    earnings = driver.earnings.thisWeek;
-  } else if (period === 'month') {
-    earnings = driver.earnings.thisMonth;
+  const rolled = resetDriverDayStatsIfNeeded(driver);
+  if (rolled) {
+    await driver.save();
   }
+
+  await getOrCreateWallet(driver._id);
+  await ensureWalletDayStats(driver._id);
+  const walletDoc = await DriverWallet.findOne({ driverId: driver._id }).lean();
+
+  const earnedToday = Math.round(Number(walletDoc?.todayEarnings) || 0);
+  const totalWalletBalance = Math.round(
+    (Number(walletDoc?.availableBalance) || 0) + (Number(walletDoc?.pendingBalance) || 0)
+  );
+  const lifetimeEarned = Math.round(Number(walletDoc?.totalEarned) || 0);
+
+  const [earningsWeek, earningsMonth] = await Promise.all([
+    sumRideEarningsSince(driver._id, startOfUtcWeek()),
+    sumRideEarningsSince(driver._id, startOfUtcMonth()),
+  ]);
+
+  let periodEarnings = lifetimeEarned;
+  if (period === 'today') {
+    periodEarnings = earnedToday;
+  } else if (period === 'week') {
+    periodEarnings = earningsWeek;
+  } else if (period === 'month') {
+    periodEarnings = earningsMonth;
+  }
+
+  let onlineMs = driver.todayOnlineMs || 0;
+  if (driver.onlineSessionStartedAt) {
+    onlineMs += Date.now() - new Date(driver.onlineSessionStartedAt).getTime();
+  }
+  const timeOnlineLabel = formatOnlineDurationMs(onlineMs);
 
   // Get recent transactions
   const recentRides = await Ride.find({
@@ -707,12 +829,25 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
       is_available: driver.isAvailable,
       verification_status: driver.verificationStatus || 'pending',
       documents_verified: !!driver.documentsVerified,
+      earned_today: earnedToday,
+      total_earnings: totalWalletBalance,
+      time_online: timeOnlineLabel,
+      wallet: {
+        todayEarnings: earnedToday,
+        totalBalance: totalWalletBalance,
+        availableBalance: walletDoc?.availableBalance ?? 0,
+        pendingBalance: walletDoc?.pendingBalance ?? 0,
+        totalEarned: lifetimeEarned,
+      },
+      in_app_payment: earnedToday,
+      total_balance: String(totalWalletBalance),
       earnings: {
-        total: driver.earnings.total,
-        today: driver.earnings.today,
-        thisWeek: driver.earnings.thisWeek,
-        thisMonth: driver.earnings.thisMonth,
-        period: earnings,
+        total: totalWalletBalance,
+        today: earnedToday,
+        thisWeek: earningsWeek,
+        thisMonth: earningsMonth,
+        period: periodEarnings,
+        totalEarnedLifetime: lifetimeEarned,
         currency: 'NGN',
       },
       statistics: {
@@ -922,7 +1057,7 @@ export const getPendingRides = asyncHandler(async (req, res) => {
   // Find rides that match driver's vehicle type and are not assigned
   const rides = await Ride.find({
     vehicleType: driver.vehicleDetails.vehicleType,
-    status: 'requested',
+    status: { $in: ['searching', 'requested'] },
     driver: null,
   })
     .populate('rider', 'name phone profileImage rating')
@@ -933,7 +1068,7 @@ export const getPendingRides = asyncHandler(async (req, res) => {
 
   const total = await Ride.countDocuments({
     vehicleType: driver.vehicleDetails.vehicleType,
-    status: 'requested',
+    status: { $in: ['searching', 'requested'] },
     driver: null,
   });
 
@@ -948,6 +1083,38 @@ export const getPendingRides = asyncHandler(async (req, res) => {
         pages: Math.ceil(total / limit),
       },
     },
+  });
+});
+
+/**
+ * ACK ride offer received (client confirms socket/push delivery) — POST /api/driver/rides/ack-request
+ */
+export const ackRideOffer = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { rideId } = req.body;
+  const driver = await Driver.findOne({ user: userId });
+  if (!driver) {
+    throw new NotFoundError('Driver profile');
+  }
+  const deliveredAt = new Date();
+  const result = await Ride.updateOne(
+    {
+      _id: rideId,
+      offerTracking: { $elemMatch: { driver: driver._id } },
+    },
+    { $set: { 'offerTracking.$[elem].deliveredAt': deliveredAt } },
+    { arrayFilters: [{ 'elem.driver': driver._id }] }
+  );
+  if (result.matchedCount === 0) {
+    return res.json({
+      status: 'success',
+      data: { acknowledged: false, reason: 'no_matching_offer' },
+    });
+  }
+  logger.info(`Ride offer ACK: ride ${rideId} driver ${driver._id} delivered_at=${deliveredAt.toISOString()}`);
+  res.json({
+    status: 'success',
+    data: { acknowledged: true, delivered_at: deliveredAt.toISOString() },
   });
 });
 
@@ -976,7 +1143,7 @@ export const acceptRide = asyncHandler(async (req, res) => {
 
   const acceptedAt = new Date();
   const ride = await Ride.findOneAndUpdate(
-    { _id: rideId, status: 'requested', driver: null },
+    { _id: rideId, status: { $in: ['searching', 'requested'] }, driver: null },
     {
       $set: {
         driver: driver._id,
@@ -996,8 +1163,15 @@ export const acceptRide = asyncHandler(async (req, res) => {
   );
 
   if (!ride) {
-    throw new ConflictError('Ride already accepted');
+    throw new ConflictError('Ride is no longer available or already assigned');
   }
+
+  await Ride.updateOne(
+    { _id: ride._id, 'offerTracking.driver': driver._id },
+    { $set: { 'offerTracking.$.acceptedAt': acceptedAt } }
+  ).catch(() => {});
+
+  logRideLifecycle(logger, ride, { event: 'driver_accept', driverUserId: userId.toString() });
 
   await cache.set(`ride_accepted:${rideId}`, driver._id.toString(), 30);
 
@@ -1044,180 +1218,8 @@ export const acceptRide = asyncHandler(async (req, res) => {
   driver.isAvailable = false;
   await driver.save();
 
-  // AUTOMATED RIDE FLOW: Schedule automatic state transitions
-  // This automatically progresses: accepted → arrived → in-progress → completed
-  // Enable with AUTOMATE_RIDES=true or in development mode
-  // Added 15 seconds delay to arrival time and all subsequent steps
-  logger.info(`🔧 NODE_ENV: ${process.env.NODE_ENV}, AUTOMATE_RIDES: ${process.env.AUTOMATE_RIDES}`);
-
-  // Automation disabled - rides must be manually progressed by driver
-  const shouldAutomate = false; // process.env.NODE_ENV === 'development' || process.env.AUTOMATE_RIDES === 'true';
-
-  // IMPORTANT: Always clear any existing automation timers for this ride
-  // This prevents old timers from running even if automation is disabled
-  if (global.automationTimers && global.automationTimers.has(rideId)) {
-    const existingTimers = global.automationTimers.get(rideId);
-    existingTimers.forEach(timer => clearTimeout(timer));
-    global.automationTimers.delete(rideId);
-    logger.info(`🧹 Cleared existing automation timers for ride ${rideId} (automation is disabled)`);
-  }
-
-  // CRITICAL: Clear ALL automation timers on server start or when accepting rides
-  // This ensures no old timers from previous server instances are running
-  if (global.automationTimers && global.automationTimers.size > 0) {
-    logger.warn(`⚠️ Found ${global.automationTimers.size} existing automation timers - clearing all to prevent conflicts`);
-    global.automationTimers.forEach((timers, rid) => {
-      timers.forEach(timer => clearTimeout(timer));
-      logger.info(`🧹 Cleared timers for ride ${rid}`);
-    });
-    global.automationTimers.clear();
-  }
-
-  if (!shouldAutomate) {
-    logger.info(`🚫 Automation is DISABLED - ride ${rideId} must be manually progressed by driver`);
-  } else {
-    logger.warn(`⚠️ WARNING: Automation is ENABLED - this should not happen in production!`);
-  }
-
-  if (shouldAutomate) {
-    logger.info(`🚀 Starting automated ride flow for ride ${rideId}`);
-
-    // Store automation timers to avoid conflicts
-    if (!global.automationTimers) {
-      global.automationTimers = new Map();
-    }
-
-    // Clear any existing timers for this ride
-    if (global.automationTimers.has(rideId)) {
-      const existingTimers = global.automationTimers.get(rideId);
-      existingTimers.forEach(timer => clearTimeout(timer));
-    }
-
-    const timers = [];
-    const ARRIVAL_DELAY_MS = 15000; // 15 seconds delay after arrival before starting ride
-    const ARRIVE_TIME_MS = 30000; // 30 seconds to arrive
-    const START_TIME_MS = 60000; // 60 seconds to start (from accepted)
-    const COMPLETE_TIME_MS = 90000; // 90 seconds to complete (from accepted)
-
-    // After 30 seconds: Driver arrives
-    const arriveTimer = setTimeout(async () => {
-      try {
-        logger.info(`⏰ ${ARRIVE_TIME_MS / 1000}s timer triggered for ride ${rideId} - moving to arrived`);
-        const freshRide = await Ride.findById(rideId);
-
-        if (freshRide && freshRide.status === 'accepted') {
-          freshRide.status = 'arrived';
-          freshRide.arrivedAt = new Date();
-          freshRide.statusHistory.push({
-            status: 'arrived',
-            timestamp: new Date(),
-            note: 'Driver arrived (automated)',
-          });
-
-          await freshRide.save();
-          logger.info(`✅ Ride ${rideId} automatically transitioned to 'arrived' - will wait ${ARRIVAL_DELAY_MS / 1000}s before starting`);
-
-          // Send real-time notification
-          const { getSocketService } = await import('../services/socketService.js');
-          const socketService = getSocketService();
-          if (socketService) {
-            socketService.emitRideStatusUpdate(freshRide, 'arrived', driver);
-          }
-        } else {
-          logger.info(`⚠️ Ride ${rideId} status is ${freshRide?.status}, skipping arrived transition`);
-        }
-      } catch (error) {
-        logger.error(`❌ Error auto-arriving ride ${rideId}:`, error.message);
-      }
-    }, ARRIVE_TIME_MS);
-    timers.push(arriveTimer);
-
-    // After 30s (arrive) + 15s delay = 45s: Start ride (15 seconds after arriving)
-    const startTimer = setTimeout(async () => {
-      try {
-        logger.info(`⏰ ${(ARRIVE_TIME_MS + ARRIVAL_DELAY_MS) / 1000}s timer triggered for ride ${rideId} - moving to in-progress (${ARRIVAL_DELAY_MS / 1000}s after arrival)`);
-        const freshRide = await Ride.findById(rideId);
-
-        if (freshRide && (freshRide.status === 'accepted' || freshRide.status === 'arrived')) {
-          freshRide.status = 'in-progress';
-          freshRide.isRideStarted = true;
-          freshRide.startedAt = new Date();
-          freshRide.statusHistory.push({
-            status: 'in-progress',
-            timestamp: new Date(),
-            note: 'Ride started (automated)',
-          });
-
-          await freshRide.save();
-          await freshRide.populate('rider', 'name phone profileImage rating');
-          await freshRide.populate('vehicleType');
-
-          logger.info(`✅ Ride ${rideId} automatically transitioned to 'in-progress'`);
-
-          // Send real-time notification
-          const { getSocketService } = await import('../services/socketService.js');
-          const socketService = getSocketService();
-          if (socketService) {
-            socketService.emitRideStarted(freshRide, driver);
-            socketService.emitRideStatusUpdate(freshRide, 'in-progress', driver);
-          }
-        } else {
-          logger.info(`⚠️ Ride ${rideId} status is ${freshRide?.status}, skipping in-progress transition`);
-        }
-      } catch (error) {
-        logger.error(`❌ Error auto-starting ride ${rideId}:`, error.message);
-      }
-    }, ARRIVE_TIME_MS + ARRIVAL_DELAY_MS);
-    timers.push(startTimer);
-
-    // After 90 seconds: Complete ride (from accepted time)
-    const completeTimer = setTimeout(async () => {
-      try {
-        logger.info(`⏰ ${COMPLETE_TIME_MS / 1000}s timer triggered for ride ${rideId} - moving to completed`);
-        const freshRide = await Ride.findById(rideId);
-
-        if (freshRide && freshRide.status === 'in-progress') {
-          freshRide.status = 'completed';
-          freshRide.dropOffCompleted = true;
-          freshRide.completedAt = new Date();
-          freshRide.paymentStatus = 'completed';
-          freshRide.statusHistory.push({
-            status: 'completed',
-            timestamp: new Date(),
-            note: 'Ride completed (automated)',
-          });
-
-          await freshRide.save();
-
-          // Make driver available again
-          driver.isAvailable = true;
-          await driver.save();
-
-          logger.info(`✅ Ride ${rideId} automatically completed`);
-
-          // Send real-time notification
-          const { getSocketService } = await import('../services/socketService.js');
-          const socketService = getSocketService();
-          if (socketService) {
-            socketService.emitRideCompleted(freshRide, driver);
-          }
-        } else {
-          logger.info(`⚠️ Ride ${rideId} status is ${freshRide?.status}, skipping completed transition`);
-        }
-
-        // Clean up timers
-        global.automationTimers.delete(rideId);
-      } catch (error) {
-        logger.error(`❌ Error auto-completing ride ${rideId}:`, error.message);
-        // Still clean up timers on error
-        global.automationTimers.delete(rideId);
-      }
-    }, COMPLETE_TIME_MS);
-    timers.push(completeTimer);
-
-    // Store timers for cleanup
-    global.automationTimers.set(rideId, timers);
-  }
+  await driver.populate('user', 'name phone profileImage rating');
+  await ride.populate('driver.user', 'name phone profileImage rating');
 
   // Send real-time notification to rider via Socket.io
   const { getSocketService } = await import('../services/socketService.js');
@@ -1274,29 +1276,20 @@ export const rejectRide = asyncHandler(async (req, res) => {
     throw new ValidationError('Ride cannot be cancelled');
   }
 
-  // If ride is just accepted, we can reject it
-  if (ride.status === 'accepted') {
+  // If ride is assigned but trip not started, driver can bail — return ride to matching pool
+  if (ride.status === 'accepted' || ride.status === 'driver_en_route') {
     ride.driver = null;
-    ride.status = 'requested';
+    ride.status = 'searching';
     ride.acceptedByDriver = false;
     ride.acceptedAt = null;
     ride.statusHistory.push({
-      status: 'requested',
+      status: 'searching',
       timestamp: new Date(),
       note: `Rejected by driver: ${reason || 'No reason provided'}`,
     });
 
-    // Make driver available again
     driver.isAvailable = true;
     await driver.save();
-
-    // Cancel any automation timers for this ride
-    if (global.automationTimers && global.automationTimers.has(rideId)) {
-      const timers = global.automationTimers.get(rideId);
-      timers.forEach(timer => clearTimeout(timer));
-      global.automationTimers.delete(rideId);
-      logger.info(`🧹 Cancelled automation timers for rejected ride ${rideId}`);
-    }
   } else {
     // If ride is in progress, cancel it
     await ride.cancelRide('driver', reason, 0);
@@ -1306,18 +1299,35 @@ export const rejectRide = asyncHandler(async (req, res) => {
 
   await ride.save();
 
-  // Find and notify other drivers (if ride is still requested)
-  if (ride.status === 'requested') {
-    try {
-      const { getSocketService } = await import('../services/socketService.js');
-      const socketService = getSocketService();
-      if (socketService) {
-        // Emit ride request again to notify other drivers
-        socketService.emitRideRequest(ride);
-      }
-    } catch (error) {
-      logger.error(`Failed to notify other drivers: ${error.message}`);
-    }
+  if (ride.status === 'searching') {
+    setImmediate(() => {
+      (async () => {
+        try {
+          const rideDoc = await Ride.findById(ride._id)
+            .populate('rider', 'name phone profileImage rating deviceToken')
+            .populate('vehicleType');
+          if (!rideDoc) return;
+          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(rideDoc, 10, 5);
+          if (matchedDrivers.length > 0) {
+            const assignedDriverId = await offerRideToDrivers(rideDoc, matchedDrivers);
+            if (!assignedDriverId) {
+              const fresh = await Ride.findById(ride._id).populate('rider');
+              if (fresh && (fresh.status === 'searching' || fresh.status === 'requested') && !fresh.driver) {
+                await cancelUnacceptedRide(fresh._id);
+                const after = await Ride.findById(ride._id).populate('rider');
+                if (after) await notifyNoDriverFound(after);
+              }
+            }
+          } else {
+            await cancelUnacceptedRide(rideDoc._id);
+            const after = await Ride.findById(ride._id).populate('rider');
+            if (after) await notifyNoDriverFound(after);
+          }
+        } catch (error) {
+          logger.error(`Re-offer after driver reject failed: ${error.message}`);
+        }
+      })();
+    });
   }
 
   try {
@@ -1378,8 +1388,8 @@ export const markArrived = asyncHandler(async (req, res) => {
     throw new ValidationError('You are not assigned to this ride');
   }
 
-  if (ride.status !== 'accepted') {
-    throw new ValidationError('Ride must be in accepted state to mark arrived');
+  if (ride.status !== 'accepted' && ride.status !== 'driver_en_route') {
+    throw new ValidationError('Ride must be accepted or en route to mark arrived');
   }
 
   const { getSettings } = await import('../services/settingsService.js');
@@ -1423,10 +1433,11 @@ export const markArrived = asyncHandler(async (req, res) => {
     socketService.emitRideStatusUpdate(ride, 'arrived', driver);
   }
 
+  const driverUserForArrived = await User.findById(userId).select('name').lean();
+  const driverName = driverUserForArrived?.name || 'Your driver';
+
   try {
     const { sendToUser } = await import('../services/notificationService.js');
-    const driverUser = await User.findById(userId).select('name').lean();
-    const driverName = driverUser?.name || 'Your driver';
     await sendToUser(ride.rider._id, 'rider', {
       title: 'Driver arrived! 📍',
       message: `${driverName} is at your pickup point. Please come out now.`,
@@ -1441,6 +1452,27 @@ export const markArrived = asyncHandler(async (req, res) => {
     });
   } catch (err) {
     logger.error(`Ride arrived notification failed: ${err.message}`);
+  }
+
+  try {
+    const { getPusherService } = await import('../services/pusherService.js');
+    const ps = getPusherService();
+    const riderId = ride.rider?._id?.toString?.() ?? ride.rider?.toString?.();
+    if (ps?.pusher && riderId) {
+      const vd = driver.vehicleDetails;
+      const vehicleInfo =
+        vd?.color && vd?.make
+          ? `${vd.color} ${vd.make}`
+          : vd?.make || vd?.model || '';
+      await ps.pusher.trigger(`private-user-${riderId}`, 'driver-arrived', {
+        rideId: ride._id.toString(),
+        driverName,
+        vehicleInfo,
+        plateNumber: vd?.plateNumber ?? '',
+      });
+    }
+  } catch (err) {
+    logger.warn(`Pusher driver-arrived failed: ${err.message}`);
   }
 
   logger.info(`Ride ${rideId} marked arrived by driver ${driver._id}`);
@@ -1476,7 +1508,7 @@ export const startRide = asyncHandler(async (req, res) => {
     throw new ValidationError('You are not assigned to this ride');
   }
 
-  if (ride.status !== 'accepted' && ride.status !== 'arrived') {
+  if (!['accepted', 'driver_en_route', 'arrived'].includes(ride.status)) {
     throw new ValidationError('Ride cannot be started in current status');
   }
 
@@ -1637,15 +1669,27 @@ export const completeRide = asyncHandler(async (req, res) => {
       data: { subType: 'ride_completed', rideId: ride._id.toString() },
     });
 
+    const walletDoc = await DriverWallet.findOne({ driverId: driver._id }).lean();
+    const pendingBal = Math.round(Number(walletDoc?.pendingBalance ?? 0));
+    const availableBal = Math.round(Number(walletDoc?.availableBalance ?? 0));
+
     await sendToUser(userId, 'driver', {
-      title: 'Fare received 💰',
-      message: `₦${driverEarnings.toLocaleString()} has been added to your wallet.`,
+      title: `₦${driverEarnings.toLocaleString()} earned from completed trip`,
+      message: `Driver wallet — Pending: ₦${pendingBal.toLocaleString()} · Available: ₦${availableBal.toLocaleString()}.`,
       type: 'alert',
       priority: 'high',
-      screen: 'home',
+      screen: 'wallet',
       ride_id: ride._id,
+      action_type: 'navigate',
+      action_payload: { screen: 'wallet', rideId: ride._id.toString() },
       event_key: 'fare_received',
-      data: { subType: 'fare_received', rideId: ride._id.toString() },
+      data: {
+        subType: 'fare_received',
+        rideId: ride._id.toString(),
+        amountNaira: String(driverEarnings),
+        pendingBalance: String(pendingBal),
+        availableBalance: String(availableBal),
+      },
     });
   } catch (err) {
     logger.error(`Ride completion notification failed: ${err.message}`);
@@ -1772,6 +1816,26 @@ export const confirmPayment = asyncHandler(async (req, res) => {
   }
 
   logger.info(`Payment confirmed for ride ${rideId}`);
+
+  try {
+    const method = String(ride.paymentMethod || '').toLowerCase();
+    if (method === 'cash') {
+      const { getPusherService } = await import('../services/pusherService.js');
+      const ps = getPusherService();
+      const riderRef = ride.rider;
+      const riderId = riderRef?._id?.toString?.() ?? riderRef?.toString?.();
+      if (ps?.pusher && riderId) {
+        const amount = ride.fare?.totalFare ?? 0;
+        await ps.pusher.trigger(`private-user-${riderId}`, 'payment-confirmed', {
+          rideId: ride._id.toString(),
+          amount,
+          method: 'cash',
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn(`Pusher payment-confirmed failed: ${err.message}`);
+  }
 
   res.json({
     status: 'success',
@@ -1952,12 +2016,17 @@ const formatDriverResponse = (driver) => {
  * Format ride response for driver
  */
 const formatRideForDriver = (ride) => {
+  const clientStatus = mapRideStatusForClientApi(ride.status);
   return {
     ride_id: ride._id.toString(),
     passenger: ride.rider ? {
       user_id: ride.rider._id.toString(),
       name: ride.rider.name,
       phone: ride.rider.phone,
+      passenger_phone_number: ride.rider.phone,
+      passenger_name: ride.rider.name,
+      passenger_image: ride.rider.profileImage,
+      passenger_id: ride.rider._id.toString(),
       image: ride.rider.profileImage,
       rating: ride.rider.rating || 0,
     } : null,
@@ -1973,7 +2042,8 @@ const formatRideForDriver = (ride) => {
       name: ride.dropoffLocation.name || ride.dropoffLocation.address,
       address: ride.dropoffLocation.address,
     },
-    status: ride.status,
+    status: clientStatus,
+    internal_status: ride.status,
     fare: ride.fare?.totalFare || 0,
     payment_method: ride.paymentMethod,
     payment_status: ride.paymentStatus,

@@ -7,8 +7,10 @@ import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import { processCancellation } from './escrowWalletService.js';
+import { MATCHING_STATUSES } from '../utils/rideStatus.js';
 
-const OFFER_WINDOW_MS = 20_000;
+const OFFER_WINDOW_MS = 15_000;
+const MAX_PARALLEL_OFFERS = 2;
 const MAX_TTL_MS = 90_000;
 
 function buildRidePayload(ride) {
@@ -37,9 +39,26 @@ function buildRidePayload(ride) {
   };
 }
 
-async function pushOfferToDriver(driver, ridePayload) {
+async function recordOfferSent(rideId, driverId) {
+  try {
+    await Ride.findByIdAndUpdate(rideId, {
+      $push: {
+        offerTracking: {
+          driver: driverId,
+          sentAt: new Date(),
+        },
+      },
+    });
+  } catch (err) {
+    logger.warn(`recordOfferSent failed for ride ${rideId}: ${err.message}`);
+  }
+}
+
+async function pushOfferToDriver(driver, ridePayload, rideId) {
   const driverId = driver._id.toString();
   const driverUserId = driver.user?._id?.toString() || driver.user?.toString();
+
+  await recordOfferSent(rideId, driver._id);
 
   const fareLabel = Math.round(Number(ridePayload.fare) || 0).toLocaleString();
 
@@ -87,44 +106,58 @@ async function pushOfferToDriver(driver, ridePayload) {
   });
 }
 
-function waitForAcceptance(rideId, driverId, timeoutMs) {
+/**
+ * Poll until any driver accepts, ride is cancelled/no-driver, or deadline.
+ * @param {string[]} driverIds
+ */
+function waitForAnyAccept(rideId, driverIds, timeoutMs) {
+  const idSet = new Set(driverIds.map(String));
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs;
-    let lastMongoCheckAt = 0;
 
     const interval = setInterval(async () => {
       try {
-        // 1) Fast-path: Redis signal layer
         const acceptedDriverId = await cache.get(`ride_accepted:${rideId}`);
-        if (acceptedDriverId) {
+        if (acceptedDriverId && idSet.has(String(acceptedDriverId))) {
           await cache.del(`ride_accepted:${rideId}`);
           clearInterval(interval);
-          resolve(String(acceptedDriverId) === String(driverId));
+          resolve(true);
           return;
         }
-
-        // 2) Fallback: Mongo check every 5 seconds
-        let doc = null;
-        if (Date.now() - lastMongoCheckAt >= 5000) {
-          lastMongoCheckAt = Date.now();
-          doc = await Ride.findById(rideId).select('status driver').lean();
-        }
-
-        if (doc === null) {
+        if (acceptedDriverId && !idSet.has(String(acceptedDriverId))) {
+          await cache.del(`ride_accepted:${rideId}`);
           clearInterval(interval);
           resolve(false);
           return;
         }
 
-        if (doc && doc.status === 'cancelled') {
+        const doc = await Ride.findById(rideId).select('status driver').lean();
+
+        if (!doc) {
           clearInterval(interval);
           resolve(false);
           return;
         }
 
-        if (doc && doc.driver?.toString() === driverId && doc.status === 'accepted') {
+        if (doc.status === 'cancelled' || doc.status === 'no-driver-found') {
+          clearInterval(interval);
+          resolve(false);
+          return;
+        }
+
+        if (
+          doc.driver &&
+          idSet.has(doc.driver.toString()) &&
+          ['accepted', 'driver_en_route', 'arrived', 'in-progress'].includes(doc.status)
+        ) {
           clearInterval(interval);
           resolve(true);
+          return;
+        }
+
+        if (doc.driver && !idSet.has(doc.driver.toString())) {
+          clearInterval(interval);
+          resolve(false);
           return;
         }
 
@@ -134,16 +167,16 @@ function waitForAcceptance(rideId, driverId, timeoutMs) {
         }
       } catch (err) {
         clearInterval(interval);
-        logger.error(`waitForAcceptance poll error: ${err.message}`);
+        logger.error(`waitForAnyAccept poll error: ${err.message}`);
         resolve(false);
       }
-    }, 500);
+    }, 400);
   });
 }
 
-async function cancelUnacceptedRide(rideId) {
+async function finalizeNoDriverFound(rideId) {
   const ride = await Ride.findById(rideId).populate('rider');
-  if (!ride || ride.status !== 'requested' || ride.driver) {
+  if (!ride || ride.driver || !MATCHING_STATUSES.includes(ride.status)) {
     return;
   }
 
@@ -168,46 +201,59 @@ async function cancelUnacceptedRide(rideId) {
     }
   }
 
-  await ride.cancelRide('system', 'No driver accepted', 0, isEscrow ? 'beforeAccept' : null);
+  ride.status = 'no-driver-found';
+  ride.statusHistory.push({
+    status: 'no-driver-found',
+    timestamp: new Date(),
+    note: 'No driver accepted within offer window',
+  });
+  await ride.save();
 }
 
 /**
- * Sequential offer queue: one driver at a time, OFFER_WINDOW_MS per driver.
- * @returns {Promise<import('mongoose').Types.ObjectId|null>} assigned driver id or null
+ * Sequential batches of up to MAX_PARALLEL_OFFERS drivers; first explicit accept wins (atomic on server).
+ * @returns {Promise<import('mongoose').Types.ObjectId|null>}
  */
 export async function offerRideToDrivers(ride, matchedDrivers) {
   const ridePayload = buildRidePayload(ride);
   const startTime = Date.now();
+  let offset = 0;
 
-  for (const match of matchedDrivers) {
-    if (Date.now() - startTime > MAX_TTL_MS) {
-      logger.warn(`Ride ${ride._id} exceeded max TTL, stopping offers`);
-      break;
-    }
+  while (offset < matchedDrivers.length && Date.now() - startTime < MAX_TTL_MS) {
+    const batch = matchedDrivers.slice(offset, offset + MAX_PARALLEL_OFFERS);
+    offset += batch.length;
 
-    const driver = await Driver.findById(match.driver?._id || match.driver).populate(
-      'user',
-      'name deviceToken fcm_token'
+    const driverDocs = await Promise.all(
+      batch.map((m) => Driver.findById(m.driver?._id || m.driver).populate('user', 'name deviceToken fcm_token'))
     );
 
-    if (!driver?.isAvailable || !driver?.isOnline) {
-      logger.info(`Driver ${driver?._id} no longer available, skipping`);
+    const valid = driverDocs.filter((d) => d?.isAvailable && d?.isOnline);
+    if (valid.length === 0) {
+      logger.info(`Batch skipped — no online/available drivers for ride ${ride._id}`);
       continue;
     }
 
-    await pushOfferToDriver(driver, ridePayload);
+    await Promise.all(valid.map((d) => pushOfferToDriver(d, ridePayload, ride._id)));
+
     logger.info(
-      `Ride ${ride._id} offered to driver ${driver._id}, waiting ${OFFER_WINDOW_MS / 1000}s`
+      `Ride ${ride._id} offered to ${valid.length} driver(s), waiting ${OFFER_WINDOW_MS / 1000}s for accept`
     );
 
-    const accepted = await waitForAcceptance(ride._id.toString(), driver._id.toString(), OFFER_WINDOW_MS);
+    const accepted = await waitForAnyAccept(
+      ride._id.toString(),
+      valid.map((d) => d._id.toString()),
+      OFFER_WINDOW_MS
+    );
 
     if (accepted) {
-      logger.info(`Ride ${ride._id} accepted by driver ${driver._id}`);
-      return driver._id;
+      const assigned = await Ride.findById(ride._id).select('driver').lean();
+      if (assigned?.driver) {
+        logger.info(`Ride ${ride._id} accepted by driver ${assigned.driver}`);
+        return assigned.driver;
+      }
     }
 
-    logger.info(`Driver ${driver._id} did not accept ride ${ride._id} in time`);
+    logger.info(`No accept in window for batch on ride ${ride._id}`);
   }
 
   logger.warn(`No driver accepted ride ${ride._id}`);
@@ -241,7 +287,11 @@ export async function notifyNoDriverFound(ride) {
       ride_id: ride._id.toString(),
       message: 'No driver found',
     });
+    socket.io.to(`user:${riderId}`).emit('NO_DRIVER_FOUND', {
+      ride_id: ride._id.toString(),
+      message: 'No driver found',
+    });
   }
 }
 
-export { cancelUnacceptedRide };
+export { finalizeNoDriverFound as cancelUnacceptedRide };

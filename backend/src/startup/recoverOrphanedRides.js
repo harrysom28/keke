@@ -12,7 +12,7 @@ export async function recoverOrphanedRides() {
   const ageMs = Number(process.env.ORPHANED_RIDE_AGE_MS) || 3 * 60 * 1000;
   const cutoff = new Date(Date.now() - ageMs);
   const stuck = await Ride.find({
-    status: 'requested',
+    status: { $in: ['requested', 'searching'] },
     isScheduled: false,
     driver: null,
     createdAt: { $lt: cutoff },
@@ -26,7 +26,7 @@ export async function recoverOrphanedRides() {
     try {
       await cancelUnacceptedRide(ride._id);
       const after = await Ride.findById(ride._id).populate('rider', 'name phone');
-      if (after?.status === 'cancelled') {
+      if (after?.status === 'no-driver-found') {
         await notifyNoDriverFound(after);
         logger.info(`Recovered orphaned ride ${ride._id}`);
       }

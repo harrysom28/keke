@@ -185,6 +185,21 @@ const driverSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    /** When current online session started (null if offline / between sessions). */
+    onlineSessionStartedAt: {
+      type: Date,
+      default: null,
+    },
+    /** UTC date key (YYYY-MM-DD) for todayOnlineMs rollover. */
+    statsDate: {
+      type: String,
+      default: null,
+    },
+    /** Milliseconds online today (excludes current open session; add live delta in API). */
+    todayOnlineMs: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

@@ -41,6 +41,17 @@ const driverWalletSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    /** Gross ride credits credited today (UTC day); rolled in ensureWalletDayStats. */
+    todayEarnings: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    /** UTC date key (YYYY-MM-DD) for todayEarnings rollover. */
+    statsDate: {
+      type: String,
+      default: null,
+    },
     currency: {
       type: String,
       default: 'NGN',

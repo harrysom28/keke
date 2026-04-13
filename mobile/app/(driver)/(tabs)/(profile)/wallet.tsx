@@ -29,6 +29,7 @@ import apiClient from "@/utils/apiClient";
 import * as Clipboard from "expo-clipboard";
 import * as WebBrowser from "expo-web-browser";
 import { Linking } from "react-native";
+import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 
 interface Transaction {
   payment_id: string;
@@ -56,6 +57,8 @@ const WalletScreen = () => {
   const [withdrawDetails, setWithdrawDetails] = useState<any>({});
   const topupAmountRef = useRef<TextInput>(null);
   const withdrawAmountRef = useRef<TextInput>(null);
+  const topupKeyboardInset = useKeyboardInset(topupModal);
+  const withdrawKeyboardInset = useKeyboardInset(withdrawModal);
 
   const closeTopupModal = () => {
     topupAmountRef.current?.blur();
@@ -121,11 +124,13 @@ const WalletScreen = () => {
             : payment.amount > 0
             ? "topup"
             : "withdrawal",
-          description: payment.ride_id
-            ? "Ride Payment"
-            : payment.amount > 0
-            ? "Wallet Top-up"
-            : "Withdrawal",
+          description:
+            payment.description ||
+            (payment.ride_id
+              ? "Ride Payment"
+              : payment.amount > 0
+              ? "Wallet Top-up"
+              : "Withdrawal"),
         }));
         setTransactions(transformed);
       }
@@ -406,7 +411,13 @@ const WalletScreen = () => {
               fontFamily: "RobotoBold",
             })}
           >
-            ₦{(withdrawDetails?.earnings?.total ?? user?.profile?.balance ?? 0).toLocaleString()}
+            ₦{(
+              withdrawDetails?.wallet?.totalBalance ??
+              withdrawDetails?.total_earnings ??
+              withdrawDetails?.earnings?.total ??
+              user?.profile?.balance ??
+              0
+            ).toLocaleString()}
           </Text>
           <View style={tw`flex-row gap-x-3`}>
             <TouchableOpacity
@@ -522,7 +533,10 @@ const WalletScreen = () => {
             onPress={closeTopupModal}
           />
           <View
-            style={[tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8`, { maxHeight: '85%' }]}
+            style={[
+              tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8`,
+              { maxHeight: "85%", marginBottom: topupKeyboardInset },
+            ]}
           >
             <View
               style={tw`flex-row items-center justify-between mb-5`}
@@ -744,7 +758,10 @@ const WalletScreen = () => {
             onPress={closeWithdrawModal}
           />
           <View
-            style={tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8 max-h-[70%]`}
+            style={[
+              tw`bg-white rounded-t-[40px] px-4 pt-6 pb-8 max-h-[70%]`,
+              { marginBottom: withdrawKeyboardInset },
+            ]}
           >
             <View
               style={tw`flex-row items-center justify-between mb-5`}

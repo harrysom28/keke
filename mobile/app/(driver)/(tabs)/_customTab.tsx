@@ -2,8 +2,10 @@ import { Pressable, Text, View } from "react-native";
 import React, { ReactElement } from "react";
 import Svg, { Path } from "react-native-svg";
 import { useTranslation } from "react-i18next";
+import { useSelector } from "react-redux";
 
 import { router } from "expo-router";
+import { AppDetailsState } from "@/store/AppSlice";
 import tw from "@/lib/tailwind";
 
 interface ITabs {
@@ -125,9 +127,10 @@ const DRIVER_TAB_ITEMS: ITabs[] = [
 interface TProps {
   item: ITabs;
   currentRouteName: string;
+  showOfferBadge?: boolean;
 }
 
-const TabItem = ({ item, currentRouteName }: TProps) => {
+const TabItem = ({ item, currentRouteName, showOfferBadge }: TProps) => {
   const { t } = useTranslation();
   const { path, icon, routeMatch, labelKey } = item;
   const isFocused = currentRouteName.toLowerCase().includes(routeMatch);
@@ -142,12 +145,29 @@ const TabItem = ({ item, currentRouteName }: TProps) => {
     >
       <View
         style={tw.style(
+          `relative`,
           isFocused
             ? `flex-col items-center justify-center h-[52px] w-[52px] bg-base-green rounded-full`
             : `bg-transparent`
         )}
       >
         {icon(isFocused)}
+        {showOfferBadge ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              top: -2,
+              right: -2,
+              minWidth: 10,
+              height: 10,
+              borderRadius: 5,
+              backgroundColor: "#FF3B30",
+              borderWidth: 2,
+              borderColor: "#fff",
+            }}
+          />
+        ) : null}
       </View>
       {!isFocused && (
         <Text
@@ -169,6 +189,7 @@ const BottomTabBar = ({
   state?: { routes: { name: string }[]; index: number };
 }) => {
   const { i18n } = useTranslation();
+  const { driverPendingRideOffer } = useSelector(AppDetailsState);
   const routeName = state?.routes?.[state?.index ?? 0]?.name ?? "";
   if (!state?.routes?.length) {
     return null;
@@ -186,6 +207,9 @@ const BottomTabBar = ({
           key={tab.routeMatch}
           item={tab}
           currentRouteName={routeName}
+          showOfferBadge={
+            tab.routeMatch === "home" && Boolean(driverPendingRideOffer)
+          }
         />
       ))}
     </View>

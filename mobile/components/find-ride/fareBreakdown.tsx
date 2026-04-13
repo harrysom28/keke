@@ -10,9 +10,14 @@ interface FareBreakdownProps {
     baseFare?: number;
     distanceFare?: number;
     timeFare?: number;
+    /** Pre-surge ride subtotal from server (for surge line). */
+    preSurgeFare?: number;
     surgeMultiplier?: number;
     promoDiscount?: number;
+    /** Ride fare (after surge; after promo if promoDiscount set). */
     totalFare: number;
+    riderServiceCharge?: number;
+    riderTotal?: number;
     currency?: string;
   };
   distance?: { text: string; value: number };
@@ -20,6 +25,12 @@ interface FareBreakdownProps {
 }
 
 export const FareBreakdownModal = ({ visible, onClose, fare, distance, duration }: FareBreakdownProps) => {
+  const rideBeforePromo = (fare.totalFare ?? 0) + (fare.promoDiscount ?? 0);
+  const surgeExtra =
+    fare.preSurgeFare != null && fare.surgeMultiplier && fare.surgeMultiplier > 1
+      ? Math.max(0, Math.round(rideBeforePromo - fare.preSurgeFare))
+      : 0;
+
   const currency = (() => {
     const normalized = String(fare.currency || 'NGN').toUpperCase();
     if (normalized === 'NGN') return '₦';
@@ -66,7 +77,7 @@ export const FareBreakdownModal = ({ visible, onClose, fare, distance, duration 
               </View>
             )}
 
-            {fare.timeFare !== undefined && (
+            {fare.timeFare !== undefined && fare.timeFare > 0 && (
               <View style={styles.row}>
                 <Text style={styles.label}>
                   Time ({String(duration?.text || '0 min')})
@@ -75,14 +86,12 @@ export const FareBreakdownModal = ({ visible, onClose, fare, distance, duration 
               </View>
             )}
 
-            {fare.surgeMultiplier && fare.surgeMultiplier > 1 && (
+            {surgeExtra > 0 && (
               <View style={styles.row}>
                 <Text style={[styles.label, styles.surgeLabel]}>
-                  Surge Pricing ({String(fare.surgeMultiplier)}x)
+                  Surge ({String(fare.surgeMultiplier)}×)
                 </Text>
-                <Text style={[styles.value, styles.surgeValue]}>
-                  +{formatPrice((fare.totalFare / fare.surgeMultiplier) * (fare.surgeMultiplier - 1))}
-                </Text>
+                <Text style={[styles.value, styles.surgeValue]}>+{formatPrice(surgeExtra)}</Text>
               </View>
             )}
 
@@ -100,9 +109,25 @@ export const FareBreakdownModal = ({ visible, onClose, fare, distance, duration 
             <View style={styles.divider} />
 
             <View style={[styles.row, styles.totalRow]}>
-              <Text style={styles.totalLabel}>Total</Text>
+              <Text style={styles.totalLabel}>
+                {fare.riderServiceCharge != null ? 'Ride fare' : 'Total'}
+              </Text>
               <Text style={styles.totalValue}>{formatPrice(fare.totalFare)}</Text>
             </View>
+
+            {fare.riderServiceCharge != null && fare.riderServiceCharge > 0 && (
+              <View style={styles.row}>
+                <Text style={styles.label}>Service charge</Text>
+                <Text style={styles.value}>{formatPrice(fare.riderServiceCharge)}</Text>
+              </View>
+            )}
+
+            {fare.riderTotal != null && (
+              <View style={[styles.row, styles.totalRow]}>
+                <Text style={styles.totalLabel}>Estimated total</Text>
+                <Text style={styles.totalValue}>{formatPrice(fare.riderTotal)}</Text>
+              </View>
+            )}
           </View>
         </View>
       </View>

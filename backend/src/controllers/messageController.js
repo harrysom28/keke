@@ -177,16 +177,40 @@ export const sendMessage = asyncHandler(async (req, res) => {
     });
   }
 
-  // Create notification for receiver
-  const Notification = (await import('../models/Notification.js')).default;
-  await Notification.createNotification(
-    { _id: receiverId },
-    'general',
-    'New Message',
-    `You have a new message for ride ${rideId}`,
-    { rideId, messageId: newMessage._id.toString() },
-    rideId
-  );
+  try {
+    const { getPusherService } = await import('../services/pusherService.js');
+    const ps = getPusherService();
+    if (ps?.pusher) {
+      await ps.pusher.trigger(`private.ride.${rideId}`, 'new-message', {
+        message: formatMessageResponse(newMessage, receiverId.toString()),
+        ride_id: rideId.toString(),
+      });
+    }
+  } catch (err) {
+    logger.warn(`Pusher new-message failed: ${err.message}`);
+  }
+
+  const preview =
+    message.trim().length > 90 ? `${message.trim().slice(0, 87)}…` : message.trim();
+  const senderFirst = newMessage.sender?.name?.trim?.()?.split(/\s+/)?.[0] || 'Your contact';
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    const receiverRole = isRider ? 'driver' : 'rider';
+    await sendToUser(receiverId, receiverRole, {
+      title: `Message from ${senderFirst}`,
+      message: preview,
+      type: 'alert',
+      priority: 'high',
+      screen: 'RideChat',
+      ride_id: rideId,
+      action_type: 'navigate',
+      action_payload: { screen: 'RideChat', rideId: rideId.toString() },
+      event_key: 'chat_message',
+      data: { subType: 'chat_message', rideId: rideId.toString() },
+    });
+  } catch (err) {
+    logger.error(`Chat push notification failed: ${err.message}`);
+  }
 
   logger.info(`Message sent for ride ${rideId} from user ${userId} to user ${receiverId}`);
 

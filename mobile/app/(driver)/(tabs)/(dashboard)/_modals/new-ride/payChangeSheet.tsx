@@ -23,6 +23,7 @@ import tw from "@/lib/tailwind";
 import { useDispatch } from "react-redux";
 import { useFocusEffect } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
+import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 
 interface LProps {
   label: string;
@@ -77,6 +78,7 @@ const RequestChangeModal = ({
   const { apiConfig } = useContext(AppContext);
   const isFocused = useIsFocused();
   const [amount, setAmount] = useState<string>("0");
+  const keyboardInset = useKeyboardInset(show);
 
   const balance = parseFloat(amount) - parseFloat(data?.cost);
 
@@ -88,7 +90,12 @@ const RequestChangeModal = ({
       onRequestClose={onClose}
     >
       <View style={tw`flex-1 flex-col justify-end bg-[#1919194D]`}>
-        <View style={tw`bg-white px-6 py-10 h-[68%] rounded-t-[40px]`}>
+        <View
+          style={[
+            tw`bg-white px-6 py-10 h-[68%] rounded-t-[40px]`,
+            { marginBottom: keyboardInset },
+          ]}
+        >
           <View
             style={tw.style(
               `flex-row items-center justify-between bg-[#F6F6F6] w-[99%] py-3 px-4 mb-6 rounded-t-[16px]`,

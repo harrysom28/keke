@@ -42,63 +42,6 @@ interface Props {
 
 type ModeType = "date" | "time" | "datetime" | "countdown";
 
-// Calculate distance between two coordinates (Haversine formula)
-const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-  const R = 6371; // Radius of the Earth in km
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; // Distance in km
-};
-
-// Calculate estimated fare based on distance and vehicle type
-const calculateFare = (distanceKm: number, vehicleType: string): number => {
-  const baseFare = 200; // Base fare in Naira
-  const perKmRate: { [key: string]: number } = {
-    Keke: 50,
-    Okada: 40,
-    Taxi: 80,
-    Bike: 40,
-    Car: 80,
-  };
-  
-  const rate = perKmRate[vehicleType] || 50;
-  const total = baseFare + distanceKm * rate;
-  return Math.round(total);
-};
-
-const RIDER_SERVICE_CHARGE = 100;
-
-const getFareBreakdown = (distanceKm: number, vehicleType: string) => {
-  const baseFare = 200;
-  const perKmRate: { [key: string]: number } = {
-    Keke: 50,
-    Okada: 40,
-    Taxi: 80,
-    Bike: 40,
-    Car: 80,
-  };
-
-  const rate = perKmRate[vehicleType] || 50;
-  const rideFare = Math.round(baseFare + distanceKm * rate);
-  const serviceCharge = RIDER_SERVICE_CHARGE;
-  const totalFare = rideFare + serviceCharge;
-
-  return {
-    rideFare,
-    serviceCharge,
-    totalFare,
-    distanceKm,
-    rate,
-  };
-};
-
 const MIN_SCHEDULE_LEAD_MINUTES = 60;
 
 const getMinimumScheduledDateTime = (now = new Date()) => {
@@ -187,7 +130,14 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
   const [vehicleTypesLoading, setVehicleTypesLoading] = useState(true);
   const [vehicleTypesError, setVehicleTypesError] = useState<string | null>(null);
-  const [estimatedFare, setEstimatedFare] = useState<number | null>(null);
+  const [fareEstimate, setFareEstimate] = useState<{
+    distance?: { value?: number; text?: string };
+    fare?: {
+      totalFare?: number;
+      riderServiceCharge?: number;
+      riderTotal?: number;
+    };
+  } | null>(null);
   const [pickupCoords, setPickupCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [cashPaymentEnabled, setCashPaymentEnabled] = useState(false); // Admin approval required
@@ -293,7 +243,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
     });
     setSelectedDate(nextSelection.dayOffset);
     setSelectedTime(nextSelection.time);
-    setEstimatedFare(null);
+    setFareEstimate(null);
     setPickupCoords(null);
     setDropoffCoords(null);
     bottomSheetRef?.current?.close();
@@ -401,24 +351,37 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
     );
   }, [pickupCoords?.lat, pickupCoords?.lng, dropoffCoords?.lat, dropoffCoords?.lng, state.pickup_location, state.dropoff_location, dispatch]);
 
-  // Calculate fare when locations and vehicle type change
+  // Fare from server (admin pricing + surge + fee settings)
   useEffect(() => {
-    if (pickupCoords && dropoffCoords && state.vehicle_type_name) {
-      const distance = calculateDistance(
-        pickupCoords.lat,
-        pickupCoords.lng,
-        dropoffCoords.lat,
-        dropoffCoords.lng
-      );
-      const fare = calculateFare(distance, state.vehicle_type_name);
-      setEstimatedFare(fare);
-    } else if (pickupCoords && state.vehicle_type_name) {
-      // Show placeholder fare even without destination
-      setEstimatedFare(0);
-    } else {
-      setEstimatedFare(null);
+    if (!pickupCoords || !dropoffCoords || !state.vehicle_type_id) {
+      setFareEstimate(null);
+      return;
     }
-  }, [pickupCoords, dropoffCoords, state.vehicle_type_name]);
+    let cancelled = false;
+    apiClient
+      .get("booking/destination-details", {
+        params: {
+          pickupLocation: JSON.stringify({ lat: pickupCoords.lat, lng: pickupCoords.lng }),
+          dropoffLocation: JSON.stringify({ lat: dropoffCoords.lat, lng: dropoffCoords.lng }),
+          vehicleTypeId: state.vehicle_type_id,
+        },
+      })
+      .then(({ data }) => {
+        if (!cancelled) setFareEstimate(data?.data ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setFareEstimate(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    pickupCoords?.lat,
+    pickupCoords?.lng,
+    dropoffCoords?.lat,
+    dropoffCoords?.lng,
+    state.vehicle_type_id,
+  ]);
 
   useFocusEffect(
     useCallback(() => {
@@ -542,17 +505,19 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   );
 
   const fareSummary = useMemo(() => {
-    if (!pickupCoords || !dropoffCoords || !state.vehicle_type_name) return null;
-
-    const distanceKm = calculateDistance(
-      pickupCoords.lat,
-      pickupCoords.lng,
-      dropoffCoords.lat,
-      dropoffCoords.lng
-    );
-
-    return getFareBreakdown(distanceKm, state.vehicle_type_name);
-  }, [pickupCoords, dropoffCoords, state.vehicle_type_name]);
+    const f = fareEstimate?.fare;
+    if (!f || f.totalFare == null) return null;
+    const rideFare = Number(f.totalFare);
+    const serviceCharge = Number(f.riderServiceCharge ?? 0);
+    const riderTotal =
+      f.riderTotal != null ? Number(f.riderTotal) : rideFare + serviceCharge;
+    return {
+      rideFare,
+      serviceCharge,
+      totalFare: riderTotal,
+      distanceKm: fareEstimate?.distance?.value ?? 0,
+    };
+  }, [fareEstimate]);
 
   const canShowFinanceSummary = Boolean(
     state.pickup_location &&

@@ -140,6 +140,7 @@ export const DRIVER_AVAILABILITY = `${SERVER_URL}driver/availability`;
 export const DRIVER_PENDING_RIDE = `${SERVER_URL}driver/rides/pending`;
 export const DRIVER_ACCEPT_RIDE = `${SERVER_URL}driver/rides/accept`;
 export const DRIVER_START_RIDE = `${SERVER_URL}driver/rides/start`;
+export const DRIVER_MARK_PICKUP_ARRIVED = `${SERVER_URL}driver/rides/arrived`;
 export const DRIVER_REJECT_RIDE = `${SERVER_URL}driver/rides/cancel`;
 export const DRIVER_COMPLETE_RIDE = `${SERVER_URL}driver/rides/complete`;
 export const DRIVER_CONFIRM_PAYMENT = `${SERVER_URL}driver/ride/confirm-payment`;

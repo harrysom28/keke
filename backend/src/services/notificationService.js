@@ -7,7 +7,8 @@ import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 import UserWallet from '../models/UserWallet.js';
 import UserNotification from '../models/UserNotification.js';
-import { getMessaging } from '../config/firebaseAdmin.js';
+import mongoose from 'mongoose';
+import { getMessaging, getFirebaseProjectId } from '../config/firebaseAdmin.js';
 import { getPusherService } from './pusherService.js';
 
 // ---------------------------------------------------------------------------
@@ -89,10 +90,19 @@ const normalizeTargetRole = (role) => {
   return normalizeUserRole(role);
 };
 
-const shouldSendPushForNotification = (notification) =>
-  notification?.type === 'push' ||
-  notification?.priority === 'critical' ||
-  notification?.priority === 'high';
+/**
+ * Whether to send a device push (FCM / Expo). Inbox/banner-only items stay in-app unless
+ * they are ride-critical (screen ride) so background riders still get alerts.
+ * Previously only high/critical/push fired — e.g. ride_started (alert + normal) never pushed.
+ */
+const shouldSendPushForNotification = (notification) => {
+  if (!notification) return false;
+  const { type, priority, screen } = notification;
+  if (type === 'push') return true;
+  if (priority === 'critical' || priority === 'high') return true;
+  if (screen === 'ride' && (type === 'alert' || type === 'banner')) return true;
+  return false;
+};
 
 const notificationToRealtimePayload = (notification, userNotification) => ({
   id: userNotification._id.toString(),
@@ -110,6 +120,33 @@ const notificationToRealtimePayload = (notification, userNotification) => ({
   delivered_at: userNotification.delivered_at.toISOString(),
   event_key: notification.event_key || 'general',
 });
+
+/** Maps notification.event_key to inbox tabs (API + clients). */
+export const inferNotificationCategory = (eventKey) => {
+  const e = String(eventKey || 'general');
+  if (e === 'chat_message') return 'messages';
+  if (e === 'wallet_funded' || e === 'fare_received') return 'earnings';
+  return 'trips';
+};
+
+const EARNINGS_KEYS = ['wallet_funded', 'fare_received'];
+const MESSAGE_KEYS = ['chat_message'];
+
+const buildCategoryEventFilter = (category) => {
+  const c = String(category || 'all').toLowerCase();
+  if (!c || c === 'all') return null;
+  if (c === 'earnings') return { 'n.event_key': { $in: EARNINGS_KEYS } };
+  if (c === 'messages') return { 'n.event_key': { $in: MESSAGE_KEYS } };
+  if (c === 'trips') {
+    return {
+      $nor: [
+        { 'n.event_key': { $in: EARNINGS_KEYS } },
+        { 'n.event_key': 'chat_message' },
+      ],
+    };
+  }
+  return null;
+};
 
 const coerceActionPayloadString = (value) => {
   try {
@@ -448,6 +485,22 @@ const sendExpoPushNotification = async (expoToken, title, body, data = {}, userI
 const sendFcmViaFirebaseAdmin = async (deviceToken, title, body, data = {}, userId = null) => {
   const messaging = getMessaging();
   if (!messaging) return { success: false };
+
+  const expectedProject =
+    process.env.EXPECTED_FIREBASE_PROJECT_ID ||
+    process.env.FIREBASE_ANDROID_PROJECT_ID ||
+    process.env.FIREBASE_PROJECT_ID;
+  const actualProject = getFirebaseProjectId();
+  if (expectedProject && actualProject && expectedProject !== actualProject) {
+    logger.error(
+      `FCM Firebase project mismatch: Admin SDK is using project_id="${actualProject}" but EXPECTED_FIREBASE_PROJECT_ID / FIREBASE_PROJECT_ID="${expectedProject}". Push may fail for client tokens registered to the other project. Align service account JSON or env vars with the mobile app Firebase project.`
+    );
+  } else if (expectedProject && !actualProject) {
+    logger.error(
+      `FCM: EXPECTED_FIREBASE_PROJECT_ID is set (${expectedProject}) but Firebase Admin failed to initialize — cannot validate project_id.`
+    );
+  }
+
   try {
     const channelId = (data.priority === 'high') ? 'rides' : (data.type === 'payment' ? 'payments' : 'general');
     const message = {
@@ -812,7 +865,22 @@ export const dispatchToUser = async (notification, userId, userRole, fcmToken = 
       logger.error(`Failed to dispatch realtime notification: ${error.message}`);
     }
 
-    if (shouldSendPushForNotification(notification) && typeof fcmToken === 'string' && fcmToken.trim()) {
+    try {
+      const { getSocketService } = await import('./socketService.js');
+      const socketSvc = getSocketService();
+      socketSvc?.emitNewNotification?.(userId, realtimePayload);
+    } catch (error) {
+      logger.debug(`Socket NEW_NOTIFICATION skip: ${error.message}`);
+    }
+
+    const wantsPush = shouldSendPushForNotification(notification);
+    if (wantsPush && (!fcmToken || !String(fcmToken).trim())) {
+      logger.warn(
+        `Push not sent: user ${userId} has no FCM/Expo token (${notification.event_key || notification.title || 'notification'})`
+      );
+    }
+
+    if (wantsPush && typeof fcmToken === 'string' && fcmToken.trim()) {
       const firebasePayload = {
         notification: {
           title: notification.title,
@@ -994,21 +1062,87 @@ export const getUnreadCount = async (userId) => {
   }
 };
 
-export const getUserInbox = async (userId, page = 1, limit = 20) => {
+export const getUserInbox = async (userId, page = 1, limit = 20, category = 'all') => {
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
   const skip = (safePage - 1) * safeLimit;
+  const uid = mongoose.Types.ObjectId.isValid(userId)
+    ? new mongoose.Types.ObjectId(userId)
+    : userId;
+  const cat = String(category || 'all').toLowerCase();
+  const eventFilter = buildCategoryEventFilter(cat);
 
   try {
-    const [items, total, unreadCount] = await Promise.all([
-      UserNotification.find({ user_id: userId, is_dismissed: false })
-        .populate('notification_id')
-        .sort({ delivered_at: -1 })
-        .skip(skip)
-        .limit(safeLimit),
-      UserNotification.countDocuments({ user_id: userId, is_dismissed: false }),
+    if (!eventFilter) {
+      const [items, total, unreadCount] = await Promise.all([
+        UserNotification.find({ user_id: userId, is_dismissed: false })
+          .populate('notification_id')
+          .sort({ delivered_at: -1 })
+          .skip(skip)
+          .limit(safeLimit),
+        UserNotification.countDocuments({ user_id: userId, is_dismissed: false }),
+        getUnreadCount(userId),
+      ]);
+
+      return {
+        notifications: items,
+        unread_count: unreadCount,
+        total,
+        page: safePage,
+        pages: Math.ceil(total / safeLimit) || 1,
+      };
+    }
+
+    const baseMatch = { user_id: uid, is_dismissed: false };
+    const pipelineCount = [
+      { $match: baseMatch },
+      {
+        $lookup: {
+          from: 'notifications',
+          localField: 'notification_id',
+          foreignField: '_id',
+          as: 'n',
+        },
+      },
+      { $unwind: { path: '$n', preserveNullAndEmptyArrays: false } },
+      { $match: eventFilter },
+      { $count: 'c' },
+    ];
+    const pipelineItems = [
+      { $match: baseMatch },
+      {
+        $lookup: {
+          from: 'notifications',
+          localField: 'notification_id',
+          foreignField: '_id',
+          as: 'n',
+        },
+      },
+      { $unwind: { path: '$n', preserveNullAndEmptyArrays: false } },
+      { $match: eventFilter },
+      { $sort: { delivered_at: -1 } },
+      { $skip: skip },
+      { $limit: safeLimit },
+      { $project: { _id: 1 } },
+    ];
+
+    const [countAgg, idRows, unreadCount] = await Promise.all([
+      UserNotification.aggregate(pipelineCount),
+      UserNotification.aggregate(pipelineItems),
       getUnreadCount(userId),
     ]);
+
+    const total = countAgg?.[0]?.c ?? 0;
+    const orderedIds = idRows.map((r) => r._id);
+    const fetched = await UserNotification.find({ _id: { $in: orderedIds } })
+      .populate('notification_id')
+      .lean();
+    const orderMap = new Map(orderedIds.map((id, i) => [id.toString(), i]));
+    fetched.sort(
+      (a, b) =>
+        (orderMap.get(a._id.toString()) ?? 0) - (orderMap.get(b._id.toString()) ?? 0)
+    );
+    const items = fetched;
 
     return {
       notifications: items,
@@ -1093,4 +1227,5 @@ export default {
   previewTargeting,
   registerFcmTokenForUser,
   buildStandardPushData,
+  inferNotificationCategory,
 };

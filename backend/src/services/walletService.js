@@ -9,10 +9,31 @@ function generateTransactionId(prefix = 'TXN') {
   return `${prefix}-${Date.now()}-${mongoose.Types.ObjectId().toString().slice(-8)}`;
 }
 
+const utcDayKey = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * Roll over todayEarnings when UTC day changes. Call before reads/credits.
+ */
+export async function ensureWalletDayStats(driverId) {
+  const today = utcDayKey();
+  let w = await DriverWallet.findOne({ driverId });
+  if (!w) {
+    w = await DriverWallet.create({ driverId, statsDate: today, todayEarnings: 0 });
+    return w;
+  }
+  if (w.statsDate === today) return w;
+  return DriverWallet.findOneAndUpdate(
+    { driverId },
+    { $set: { statsDate: today, todayEarnings: 0 } },
+    { new: true }
+  );
+}
+
 async function getOrCreateWallet(driverId, currency = 'NGN') {
+  const today = utcDayKey();
   let wallet = await DriverWallet.findOne({ driverId });
   if (wallet) return wallet;
-  wallet = await DriverWallet.create({ driverId, currency });
+  wallet = await DriverWallet.create({ driverId, currency, statsDate: today, todayEarnings: 0 });
   logger.info(`DriverWallet created for driver ${driverId}`);
   return wallet;
 }
@@ -33,6 +54,9 @@ async function creditRideEarning(driverId, driverNetAmount, commissionAmount, ri
     if (!w) throw new Error('Wallet not found in session');
   }
 
+  await ensureWalletDayStats(driverId);
+  wallet = await DriverWallet.findOne({ driverId }).session(session || null);
+  if (!wallet) throw new Error('Wallet not found');
   const balanceBeforePending = wallet.pendingBalance;
   const balanceAfterPending = balanceBeforePending + driverNetAmount;
   const availableAt = new Date(Date.now() + PENDING_HOURS * 60 * 60 * 1000);
@@ -41,7 +65,11 @@ async function creditRideEarning(driverId, driverNetAmount, commissionAmount, ri
   wallet = await DriverWallet.findOneAndUpdate(
     { driverId },
     {
-      $inc: { pendingBalance: driverNetAmount, totalEarned: driverNetAmount },
+      $inc: {
+        pendingBalance: driverNetAmount,
+        totalEarned: driverNetAmount,
+        todayEarnings: driverNetAmount,
+      },
       $push: { pendingCredits: { amount: driverNetAmount, availableAt, rideId } },
     },
     { new: true, ...opts }
@@ -279,4 +307,5 @@ export {
   debitRefund,
   PENDING_HOURS,
   generateTransactionId,
+  utcDayKey,
 };

@@ -88,6 +88,14 @@ export type TDriverStats = {
   driver_bank_name: string;
   driver_referrals_earned: number;
   earned_today: number;
+  total_earnings?: number;
+  wallet?: {
+    todayEarnings?: number;
+    totalBalance?: number;
+    availableBalance?: number;
+    pendingBalance?: number;
+    totalEarned?: number;
+  };
   in_app_payment: number;
   time_online: string;
   total_balance: string;

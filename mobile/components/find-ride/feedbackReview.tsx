@@ -24,6 +24,7 @@ import { TRide } from "@/types";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
+import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { useDispatch } from "react-redux";
 
 interface LProps {
@@ -43,6 +44,7 @@ const TextModal = ({
 }: LProps) => {
   const screenHeight = Dimensions.get("window").height;
   const modalMaxHeight = Math.min(screenHeight * 0.7, screenHeight - 140);
+  const keyboardInset = useKeyboardInset(show);
 
   return (
     <Modal
@@ -57,6 +59,7 @@ const TextModal = ({
           <View
             style={tw.style(`bg-white px-6 py-11 rounded-t-[40px]`, {
               maxHeight: modalMaxHeight,
+              marginBottom: keyboardInset,
             })}
           >
             <View
@@ -235,7 +238,7 @@ const ReviewSheet = ({ temp, action }: Props) => {
                 fontFamily: "RobotoMedium",
               })}
             >
-              Give some tips to Sergio Ramasis
+              {`Give some tips to ${temp?.driver?.driver_name ?? "your driver"}`}
             </Text>
 
             <View style={tw`flex-row justify-between items-center my-5`}>

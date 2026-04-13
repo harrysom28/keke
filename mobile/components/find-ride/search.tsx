@@ -69,6 +69,9 @@ export const SearchView = ({ action, back }: Props) => {
                         waitingData?.vehicle_id ||
                         (rideData as any)?.vehicleTypeId ||
                         (waitingData as any)?.vehicleTypeId;
+    const normalizedVehicleTypeId =
+      typeof vehicleTypeId === "string" ? vehicleTypeId : String(vehicleTypeId ?? "");
+    const shouldSendVehicleTypeId = /^[a-f0-9]{24}$/i.test(normalizedVehicleTypeId);
 
     if (!origin?.lat || !origin?.long) {
       console.warn('⚠️ No origin location for driver search');
@@ -83,14 +86,14 @@ export const SearchView = ({ action, back }: Props) => {
     
     console.log('🔍 Searching for drivers with:', {
       origin: { lat: origin.lat, long: origin.long },
-      vehicleTypeId: vehicleTypeId || 'any',
+      vehicleTypeId: shouldSendVehicleTypeId ? normalizedVehicleTypeId : 'any',
       hasRideData: !!rideData,
       hasWaitingData: !!waitingData,
     });
 
     try {
       // Create cache key based on location and vehicle type
-      const cacheKey = `find-drivers-${origin.lat}-${origin.long}-${vehicleTypeId || 'any'}`;
+      const cacheKey = `find-drivers-${origin.lat}-${origin.long}-${shouldSendVehicleTypeId ? normalizedVehicleTypeId : 'any'}`;
 
       const data = await requestManager.execute(
         cacheKey,
@@ -100,9 +103,9 @@ export const SearchView = ({ action, back }: Props) => {
             loc_long: origin.long,
           };
           
-          // Only include vehicleTypeId if it's defined
-          if (vehicleTypeId) {
-            params.vehicleTypeId = vehicleTypeId;
+          // Only include vehicleTypeId when it's a valid Mongo ObjectId
+          if (shouldSendVehicleTypeId) {
+            params.vehicleTypeId = normalizedVehicleTypeId;
           }
           
           console.log('📤 Calling find-driver API with params:', params);
@@ -273,6 +276,9 @@ export const SearchView = ({ action, back }: Props) => {
                         (rideData as any)?.vehicleTypeId || 
                         (waitingData as any)?.vehicleTypeId ||
                         "1";
+    const normalizedVehicleTypeId =
+      typeof vehicleTypeId === "string" ? vehicleTypeId : String(vehicleTypeId ?? "");
+    const shouldSendVehicleTypeId = /^[a-f0-9]{24}$/i.test(normalizedVehicleTypeId);
 
     if (!origin || !destination) {
       // No route info, just search for drivers
@@ -294,7 +300,7 @@ export const SearchView = ({ action, back }: Props) => {
       }
 
       // Create cache key for destination details
-      const cacheKey = `destination-${originLat}-${originLng}-${destLat}-${destLng}-${vehicleTypeId}`;
+      const cacheKey = `destination-${originLat}-${originLng}-${destLat}-${destLng}-${shouldSendVehicleTypeId ? normalizedVehicleTypeId : 'any'}`;
 
       const data = await requestManager.execute(
         cacheKey,
@@ -303,7 +309,7 @@ export const SearchView = ({ action, back }: Props) => {
             params: {
               pickupLocation: JSON.stringify({ lat: originLat, lng: originLng }),
               dropoffLocation: JSON.stringify({ lat: destLat, lng: destLng }),
-              vehicleTypeId: vehicleTypeId,
+              ...(shouldSendVehicleTypeId ? { vehicleTypeId: normalizedVehicleTypeId } : {}),
             },
           });
           return response.data;

@@ -72,6 +72,7 @@ router.post(
 
 // Ride management
 router.get('/rides/pending', driverController.getPendingRides);
+router.post('/rides/ack-request', requireDriverKycVerified, validationRules.ackRideOffer, validate, driverController.ackRideOffer);
 router.post('/rides/accept', requireDriverKycVerified, validationRules.acceptRide, validate, driverController.acceptRide);
 router.post('/rides/cancel', validationRules.rejectRide, validate, driverController.rejectRide);
 router.post('/rides/arrived', validationRules.markArrived, validate, driverController.markArrived);

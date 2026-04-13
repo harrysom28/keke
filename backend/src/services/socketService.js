@@ -1,4 +1,6 @@
 import logger from '../utils/logger.js';
+import { mapRideStatusForClientApi, getLifecycleStatus } from '../utils/rideStatus.js';
+import { formatOnlineDurationMs } from '../utils/driverOnlineTime.js';
 
 /**
  * Socket.io service for real-time events
@@ -6,6 +8,53 @@ import logger from '../utils/logger.js';
 class SocketService {
   constructor(io) {
     this.io = io;
+    this._onlineTimeInterval = null;
+  }
+
+  /**
+   * Broadcast live online duration to drivers on socket + Pusher (~every 8s).
+   */
+  startOnlineTimeBroadcast() {
+    if (this._onlineTimeInterval) {
+      clearInterval(this._onlineTimeInterval);
+    }
+    const tick = async () => {
+      if (!this.io) return;
+      try {
+        const Driver = (await import('../models/Driver.js')).default;
+        const drivers = await Driver.find({ isOnline: true })
+          .select('todayOnlineMs onlineSessionStartedAt user')
+          .populate('user', '_id')
+          .lean();
+        for (const d of drivers) {
+          let ms = d.todayOnlineMs || 0;
+          if (d.onlineSessionStartedAt) {
+            ms += Date.now() - new Date(d.onlineSessionStartedAt).getTime();
+          }
+          const timeOnline = formatOnlineDurationMs(ms);
+          const payload = { timeOnline };
+          const id = d._id.toString();
+          this.io.to(`driver:${id}`).emit('ONLINE_TIME_UPDATE', payload);
+          const uid = d.user?._id?.toString();
+          if (uid) {
+            this.io.to(`user:${uid}`).emit('ONLINE_TIME_UPDATE', payload);
+          }
+          try {
+            const { getPusherService } = await import('./pusherService.js');
+            const ps = getPusherService();
+            if (ps?.pusher) {
+              ps.pusher.trigger(`private-driver-${id}`, 'ONLINE_TIME_UPDATE', payload);
+            }
+          } catch (e) {
+            logger.debug(`Pusher ONLINE_TIME_UPDATE skip: ${e.message}`);
+          }
+        }
+      } catch (err) {
+        logger.warn(`Online time broadcast tick failed: ${err.message}`);
+      }
+    };
+    this._onlineTimeInterval = setInterval(tick, 8000);
+    tick();
   }
 
   /**
@@ -66,7 +115,10 @@ class SocketService {
     }
     const id = typeof driverId === 'string' ? driverId : driverId?.toString?.();
     if (!id) return;
+    const ackPayload = { ...ridePayload, ack_required: true, sent_at: new Date().toISOString() };
     this.io.to(`driver:${id}`).emit('ride-request', ridePayload);
+    this.io.to(`driver:${id}`).emit('NEW_RIDE_REQUEST', ackPayload);
+    this.io.to(`driver:${id}`).emit('RIDE_REQUEST_RECEIVED', ackPayload);
     logger.info(`Ride offer emitted via Socket.io to driver ${id}`);
   }
 
@@ -81,7 +133,9 @@ class SocketService {
 
     const statusData = {
       ride_id: ride._id.toString(),
-      status,
+      status: mapRideStatusForClientApi(status),
+      internal_status: status,
+      lifecycle_status: getLifecycleStatus(status),
       driver: driver ? {
         driver_id: driver._id.toString(),
         name: driver.user?.name,
@@ -141,8 +195,13 @@ class SocketService {
       timestamp: new Date(),
     };
 
-    // Emit via Socket.io
+    // Emit via Socket.io (primary real-time path)
     this.io.to(`user:${ride.rider._id.toString()}`).emit('driver-location-update', locationData);
+    const isTrip = ride.status === 'in-progress';
+    this.io.to(`user:${ride.rider._id.toString()}`).emit(
+      isTrip ? 'TRIP_LOCATION_UPDATE' : 'DRIVER_LOCATION_UPDATE',
+      { ...locationData, phase: isTrip ? 'trip' : 'pickup' }
+    );
 
     // Also emit via Pusher for mobile app
     try {
@@ -212,6 +271,7 @@ class SocketService {
     };
 
     this.io.to(`user:${ride.rider._id.toString()}`).emit('ride-accepted', acceptedData);
+    this.io.to(`user:${ride.rider._id.toString()}`).emit('RIDE_ACCEPTED', acceptedData);
     logger.info(`Ride accepted notification sent to rider for ride ${ride._id}`);
   }
 
@@ -335,6 +395,18 @@ class SocketService {
 
     this.io.to(`ride:${rideId}`).emit('new-chat-message', message);
     logger.info(`Chat message emitted to ride ${rideId}`);
+  }
+
+  /**
+   * Push inbox notification to a user's connected clients (real-time list + badge).
+   */
+  emitNewNotification(userId, payload) {
+    if (!this.io || !userId) {
+      return;
+    }
+    const uid = typeof userId === 'string' ? userId : userId?.toString?.();
+    if (!uid) return;
+    this.io.to(`user:${uid}`).emit('NEW_NOTIFICATION', payload);
   }
 }
 

@@ -18,10 +18,9 @@ import {
   SafeAreaProvider,
 } from "react-native-safe-area-context";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
-import { AppDetailsState, setSubscriptionUtils } from "@/store/AppSlice";
 import { CREATE_CHAT, RETRIEVE_CHAT } from "@/constants";
-import React, { memo, useContext, useEffect, useRef, useState } from "react";
-import { useDispatch, useSelector } from "react-redux";
+import React, { memo, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useSelector } from "react-redux";
 
 import { AppContext } from "@/app/context";
 import { AuthState } from "@/store/AuthSlice";
@@ -148,24 +147,59 @@ interface Props {
 
 function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
   const insets = useCombinedSafeInsets();
-  const dispatch = useDispatch();
   const { user } = useSelector(AuthState);
-  const { subscription } = useSelector(AppDetailsState);
   const { apiConfig } = useContext(AppContext);
   const [chats, setChats] = useState<any[]>([]);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const flashMessageRef = useRef<FlashMessage | null>(null);
+  const chatRefetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
-  const channelName = data?.rideId ? `private-ride-${data.rideId}` : null;
+  const channelName = data?.rideId ? `private.ride.${data.rideId}` : "";
+
+  const getAllChats = useCallback(() => {
+    if (!data?.rideId) return;
+    setLoading(true);
+    axios
+      .get(RETRIEVE_CHAT + data.rideId, apiConfig)
+      .then(({ data: res }) => {
+        const messages = res?.data?.messages || res?.data || [];
+        setChats(messages);
+      })
+      .catch((err) => {
+        flashMessageRef.current?.showMessage({
+          type: "danger",
+          message: err?.response?.data?.message || "Could not load messages",
+        });
+      })
+      .finally(() => setLoading(false));
+  }, [data?.rideId, apiConfig]);
+
+  const scheduleChatRefetch = useCallback(() => {
+    if (chatRefetchDebounceRef.current) {
+      clearTimeout(chatRefetchDebounceRef.current);
+    }
+    chatRefetchDebounceRef.current = setTimeout(() => {
+      chatRefetchDebounceRef.current = null;
+      getAllChats();
+    }, 280);
+  }, [getAllChats]);
 
   usePusherChannel({
-    channel: channelName || "private-chat",
-    visible: visible && !subscription.chat && !!data?.rideId && !!channelName,
-    onSubscriptionSucceeded: () => dispatch(setSubscriptionUtils({ chat: true })),
+    channel: channelName || "private.ride.__disabled__",
+    visible: visible && !!channelName,
     onEvent: (event) => {
-      if (event?.data) setChats((prev) => [...prev, event.data]);
+      const ev = event as { eventName?: string; name?: string };
+      const name = ev.eventName ?? ev.name ?? "";
+      if (!name || name.startsWith("pusher:") || name.startsWith("pusher_internal:")) {
+        return;
+      }
+      if (name === "new-message") {
+        scheduleChatRefetch();
+      }
     },
   });
 
@@ -196,24 +230,6 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
       .finally(() => setSending(false));
   };
 
-  const getAllChats = () => {
-    if (!data?.rideId) return;
-    setLoading(true);
-    axios
-      .get(RETRIEVE_CHAT + data.rideId, apiConfig)
-      .then(({ data }) => {
-        const messages = data?.data?.messages || data?.data || [];
-        setChats(messages);
-      })
-      .catch((err) => {
-        flashMessageRef.current?.showMessage({
-          type: "danger",
-          message: err?.response?.data?.message || "Could not load messages",
-        });
-      })
-      .finally(() => setLoading(false));
-  };
-
   useEffect(() => {
     if (visible) {
       const interactionTask = InteractionManager.runAfterInteractions(() => {
@@ -222,7 +238,17 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
       return () => interactionTask.cancel();
     }
     else setChats([]);
-  }, [visible]);
+  }, [visible, getAllChats]);
+
+  useEffect(
+    () => () => {
+      if (chatRefetchDebounceRef.current) {
+        clearTimeout(chatRefetchDebounceRef.current);
+        chatRefetchDebounceRef.current = null;
+      }
+    },
+    []
+  );
 
   const keyboardOffset =
     Platform.OS === "ios" ? Math.max(insets.top, 12) + 8 : 0;

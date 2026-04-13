@@ -9,6 +9,7 @@ import NotificationBanner from "@/components/NotificationBanner";
 import notificationManager, {
   NotificationPayload,
 } from "@/services/notificationManager";
+import { useNotificationSocket } from "@/hooks/useNotificationSocket";
 import { AppContext } from "./context";
 import { addIncomingNotification, setLatestNotification, setUnreadCount } from "@/store/AppSlice";
 import { setAuthData } from "@/store/AuthSlice";
@@ -176,6 +177,8 @@ const NotificationBootstrap = () => {
 
     notificationManager.initPusherListener(userId);
   }, [pusherReady, userId]);
+
+  useNotificationSocket(userId, token ?? undefined);
 
   useEffect(() => {
     fetchUnreadCount();

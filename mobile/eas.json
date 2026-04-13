@@ -8,11 +8,12 @@
       }
     },
     "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
         "NODE_ENV": "production"
-      },
-      "android": {
-        "buildType": "app-bundle"
       }
     },
     "preview2": {

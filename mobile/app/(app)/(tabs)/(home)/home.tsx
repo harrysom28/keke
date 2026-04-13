@@ -1114,7 +1114,6 @@ export default function HomeScreen() {
     temp?.ride_id,
     openPostRideSummary,
     clearRideState,
-    TAB_BAR_HEIGHT,
   ]);
 
   useEffect(() => {
@@ -1207,7 +1206,7 @@ export default function HomeScreen() {
       const distanceKm = haversineKm(o, d);
       if (distanceKm <= MAX_FIT_DISTANCE_KM && map.fitToCoordinates) {
         map.fitToCoordinates([o, d], {
-          edgePadding: { top: 80, right: 60, bottom: TAB_BAR_HEIGHT + 12, left: 60 },
+          edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
           animated: true,
         });
       } else if (map.animateToRegion) {
@@ -1215,7 +1214,7 @@ export default function HomeScreen() {
       }
     }, 150);
     return () => clearTimeout(id);
-  }, [isBooking, hasPickupAndDest, maps.origin.latitude, maps.origin.longitude, maps.destination.latitude, maps.destination.longitude, TAB_BAR_HEIGHT]);
+  }, [isBooking, hasPickupAndDest, maps.origin.latitude, maps.origin.longitude, maps.destination.latitude, maps.destination.longitude]);
 
   // When user returns to home tab with valid location and no route, center map on current location
   const lastFocusedRef = useRef(false);
@@ -1853,7 +1852,7 @@ export default function HomeScreen() {
             const distanceKm = haversineKm(o, d);
             if (distanceKm <= MAX_FIT_DISTANCE_KM) {
               mapRef.current.fitToCoordinates?.([o, d], {
-                edgePadding: { top: 80, right: 60, bottom: TAB_BAR_HEIGHT + 12, left: 60 },
+                edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
                 animated: true,
               });
             } else {

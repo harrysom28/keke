@@ -1,5 +1,6 @@
 import Pusher from 'pusher';
 import logger from '../utils/logger.js';
+import { mapRideStatusForClientApi, getLifecycleStatus } from '../utils/rideStatus.js';
 
 // Initialize Pusher (if configured). Supports PUSHER_APP_* and PUSHER_* env vars.
 let pusher = null;
@@ -76,7 +77,9 @@ class PusherService {
     try {
       const statusData = {
         ride_id: ride._id.toString(),
-        status: status,
+        status: mapRideStatusForClientApi(status),
+        internal_status: status,
+        lifecycle_status: getLifecycleStatus(status),
         driver: driver ? {
           driver_id: driver._id.toString(),
           driver_user_id: driver.user?._id?.toString(),
@@ -222,6 +225,44 @@ class PusherService {
     } catch (error) {
       logger.error(`Failed to emit notification via Pusher: ${error.message}`);
       return false;
+    }
+  }
+
+  /**
+   * Live driver GPS for rider map while driver is en route / at pickup (accepted | arrived).
+   */
+  async emitDriverLiveLocationToRider(driverId, lat, lng, heading = null) {
+    if (!this.pusher || driverId == null) {
+      return;
+    }
+    try {
+      const Ride = (await import('../models/Ride.js')).default;
+      const activeRide = await Ride.findOne({
+        driver: driverId,
+        status: { $in: ['accepted', 'arrived'] },
+      })
+        .select('rider')
+        .lean();
+
+      if (!activeRide?.rider) {
+        return;
+      }
+
+      const riderId = activeRide.rider.toString();
+      const h =
+        heading != null && heading !== '' && !Number.isNaN(Number(heading))
+          ? Number(heading)
+          : null;
+
+      this.pusher.trigger(`private-user-${riderId}`, 'driver-location-update', {
+        lat,
+        lng,
+        heading: h,
+        rideId: activeRide._id.toString(),
+      });
+      logger.debug(`Pusher: driver-location-update for rider ${riderId}`);
+    } catch (error) {
+      logger.error(`Failed to emit driver-location-update: ${error.message}`);
     }
   }
 }

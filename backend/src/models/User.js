@@ -326,6 +326,15 @@ userSchema.pre('validate', function (next) {
   next();
 });
 
+// Coerce legacy/invalid role values so saves don't fail enum validation
+userSchema.pre('save', function (next) {
+  const validRoles = ['passenger', 'driver', 'admin'];
+  if (this.role && !validRoles.includes(this.role)) {
+    this.role = 'passenger';
+  }
+  next();
+});
+
 // Hash password before saving
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) {

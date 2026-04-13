@@ -1,5 +1,6 @@
 import {
   AppDetailsState,
+  setAppData,
   setRideUtils,
   setSubscriptionUtils,
 } from "@/store/AppSlice";
@@ -148,11 +149,26 @@ export default function HomeScreen() {
     hasValidLocation && location
       ? { latitude: location.latitude, longitude: location.longitude }
       : undefined;
-  const { routeCoords, loading: routeLoading } = useDriverRoute(
-    driverCoord,
-    hasRoute ? maps.destination : undefined,
-    { enabled: hasRoute }
+  const rideStatusNorm = String(ride?.status ?? "")
+    .toLowerCase()
+    .replace(/-/g, "_");
+  const tripStarted =
+    !!ride?.is_ride_started ||
+    rideStatusNorm === "in_progress" ||
+    rideStatusNorm === "started";
+  const routeWaypoint =
+    tripStarted || rideStatusNorm === "completed"
+      ? maps.destination
+      : { latitude: maps.origin.latitude, longitude: maps.origin.longitude };
+  const { routeCoords, loading: routeLoading, eta: routeEta, distance: routeDistance } =
+    useDriverRoute(driverCoord, hasRoute ? routeWaypoint : undefined, {
+      enabled: hasRoute,
+    });
+  const pendingOpenChatRideId = useSelector(
+    (s: { App: { pendingOpenChatRideId?: string | null } }) =>
+      s.App.pendingOpenChatRideId ?? null
   );
+  const [chatOpenKick, setChatOpenKick] = useState(0);
   const routeFittedRef = useRef(false);
 
   useEffect(() => {
@@ -168,6 +184,21 @@ export default function HomeScreen() {
       });
     }
   }, [routeCoords]);
+
+  const prevTripStartedRef = useRef(tripStarted);
+  useEffect(() => {
+    if (prevTripStartedRef.current !== tripStarted) {
+      routeFittedRef.current = false;
+      prevTripStartedRef.current = tripStarted;
+    }
+  }, [tripStarted]);
+
+  useEffect(() => {
+    if (!pendingOpenChatRideId || !ride?.ride_id) return;
+    if (String(pendingOpenChatRideId) !== String(ride.ride_id)) return;
+    setChatOpenKick((k) => k + 1);
+    dispatch(setAppData({ pendingOpenChatRideId: null }));
+  }, [pendingOpenChatRideId, ride?.ride_id, dispatch]);
 
   const [routeKey, setRouteKey] = useState(0);
 
@@ -202,6 +233,7 @@ export default function HomeScreen() {
   }, [user?.profile?.driver_id]);
 
   const handlePusherRideRequest = useCallback((raw: Record<string, unknown>) => {
+    dispatch(setAppData({ driverPendingRideOffer: true }));
     const rider = raw.rider as { name?: string; rating?: number } | undefined;
     const pickup = raw.pickup as { address?: string; lat?: number; lng?: number } | undefined;
     const dropoff = raw.dropoff as { address?: string; lat?: number; lng?: number } | undefined;
@@ -244,7 +276,7 @@ export default function HomeScreen() {
     setRide(mapped);
     setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
     newRideSheetRef.current?.open();
-  }, []);
+  }, [dispatch]);
 
   const getPendingRide = () => {
     axios
@@ -252,10 +284,12 @@ export default function HomeScreen() {
       .then(({ data }) => {
         const rides = data?.data?.rides ?? data?.rides ?? [];
         if (Array.isArray(rides) && rides.length > 0) {
+          dispatch(setAppData({ driverPendingRideOffer: true }));
           setOfferDeadlineMs(null);
           setRide(rides[0]);
           newRideSheetRef.current?.open();
         } else {
+          dispatch(setAppData({ driverPendingRideOffer: false }));
           newRideSheetRef.current?.close();
           setRide({});
         }
@@ -278,6 +312,7 @@ export default function HomeScreen() {
   };
 
   const handleOfferExpired = () => {
+    dispatch(setAppData({ driverPendingRideOffer: false }));
     newRideSheetRef.current?.close();
     setOfferDeadlineMs(null);
     setRide((prev) => {
@@ -306,6 +341,7 @@ export default function HomeScreen() {
           const rideStatus = rideData?.status;
           if (rideStatus === 'cancelled' || rideStatus === 'completed') {
             console.log('Driver: Ride is cancelled or completed, clearing map', { status: rideStatus });
+            dispatch(setAppData({ driverPendingRideOffer: false }));
             newRideSheetRef.current?.close();
             setRide({});
             setMaps({
@@ -333,7 +369,14 @@ export default function HomeScreen() {
           setRide(rideData);
           animateToMapDirections(rideData);
           newRideSheetRef.current?.open();
+          const st = String(rideData?.status ?? "").toLowerCase();
+          const pendingOffer =
+            st === "requested" && !rideData?.accepted_by_driver;
+          dispatch(
+            setAppData({ driverPendingRideOffer: Boolean(pendingOffer) })
+          );
         } else {
+          dispatch(setAppData({ driverPendingRideOffer: false }));
           newRideSheetRef.current?.close();
           setRide({});
           getPendingRide();
@@ -360,6 +403,7 @@ export default function HomeScreen() {
         // Silently handle 404 errors (driver profile not found, etc.)
         if (err?.response?.status === 404) {
           console.log('Resource not found (404) - silently handling');
+          dispatch(setAppData({ driverPendingRideOffer: false }));
           setRide({});
           setMaps({
             origin: { latitude: 0, longitude: 0 },
@@ -471,7 +515,13 @@ export default function HomeScreen() {
   };
 
   // TASK 4: Driver foreground alerts - show toast + vibration for critical notifications
-  const DRIVER_ALERT_SUBTYPES = ["ride_requested", "ride_cancelled", "passenger_cancelled", "driver_cancelled"];
+  const DRIVER_ALERT_SUBTYPES = [
+    "ride_requested",
+    "ride_cancelled",
+    "passenger_cancelled",
+    "driver_cancelled",
+    "chat_message",
+  ];
   useEffect(() => {
     if (!notificationEvent?.body) return;
     const subType = notificationEvent?.data?.subType ?? notificationEvent?.data?.sub_type ?? "";
@@ -591,6 +641,22 @@ export default function HomeScreen() {
     },
   });
 
+  const activeDriverRideChannel = useMemo(() => {
+    const id = ride?.ride_id;
+    if (!id) return "";
+    const st = String(ride?.status ?? "").toLowerCase();
+    if (st === "completed" || st === "cancelled") return "";
+    return `private.ride.${id}`;
+  }, [ride?.ride_id, ride?.status]);
+
+  usePusherChannel({
+    channel: activeDriverRideChannel || "private.ride.__inactive__",
+    visible: isFocused && !!activeDriverRideChannel,
+    onEvent: () => {
+      getActiveRide();
+    },
+  });
+
   return (
     <>
       <Portal>
@@ -600,8 +666,13 @@ export default function HomeScreen() {
         <NewRide
           data={ride}
           bottomSheetRef={newRideSheetRef}
-          isActive={ride?.accepted_by_driver as boolean}
           getActiveRide={getActiveRide}
+          routeEta={routeEta}
+          routeDistance={routeDistance}
+          chatOpenSignal={chatOpenKick}
+          onOfferResolved={() =>
+            dispatch(setAppData({ driverPendingRideOffer: false }))
+          }
           offerDeadlineMs={offerDeadlineMs}
           onOfferExpired={handleOfferExpired}
         />

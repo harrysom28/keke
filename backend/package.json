@@ -10,6 +10,7 @@
     "dev:8000": "PORT=8000 nodemon src/server.js",
     "init:db": "node scripts/init-db.js",
     "fix:phone-index": "node scripts/fixPhoneIndex.js",
+    "fix:stale-roles": "node scripts/fix-stale-roles.js",
     "test:email": "node scripts/testEmail.js",
     "test:notification": "node scripts/testNotification.js",
     "seed:vehicle-types": "node scripts/seedVehicleTypes.js",

@@ -3,7 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
-    "postinstall": "patch -p1 -N -i ios/patches/@react-native-firebase+messaging+21.14.0.patch 2>/dev/null || true; patch-package",
+    "postinstall": "patch-package",
     "start": "expo start",
     "android": "npm run prebuild:android:with-patch && npx expo run:android",
     "ios": "expo run:ios",
@@ -91,6 +91,7 @@
     "react-native-worklets": "0.5.1",
     "react-redux": "^9.1.2",
     "redux-persist": "^6.0.0",
+    "socket.io-client": "^4.8.3",
     "twrnc": "^4.4.0"
   },
   "devDependencies": {

@@ -170,20 +170,18 @@ const TripCompletedModal = ({
                 </View>
               </>
             )}
-            {!isPassenger && (
-              <TouchableOpacity
-                onPress={action}
-                style={tw`self-start w-full py-3.5 bg-base-green rounded-[8px]`}
+            <TouchableOpacity
+              onPress={action}
+              style={tw`self-start w-full py-3.5 bg-base-green rounded-[8px]`}
+            >
+              <Text
+                style={tw.style(`text-base text-center text-white`, {
+                  fontFamily: "RobotoMedium",
+                })}
               >
-                <Text
-                  style={tw.style(`text-base text-center text-white`, {
-                    fontFamily: "RobotoMedium",
-                  })}
-                >
-                  Confirm Payment
-                </Text>
-              </TouchableOpacity>
-            )}
+                {isPassenger ? "View summary & rate" : "Confirm Payment"}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ImageBackground>

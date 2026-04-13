@@ -15,8 +15,9 @@ import {
   notifyNoDriverFound,
   cancelUnacceptedRide,
 } from '../services/driverNotificationService.js';
+import { mapRideStatusForClientApi, getLifecycleStatus, logRideLifecycle } from '../utils/rideStatus.js';
 import { getSocketService } from '../services/socketService.js';
-import { calculateFareBreakdown } from '../config/feeConfig.js';
+import { calculateFareBreakdown as calculateFareBreakdownFromSettings } from '../services/settingsService.js';
 import {
   validateRiderBalance,
   holdRideFunds,
@@ -143,12 +144,7 @@ export const requestRide = asyncHandler(async (req, res) => {
 
   const fareBreakdown = calculateFare(distanceKm, durationMinutes, vehicleTypeId, pricing);
 
-  // Calculate surge pricing based on demand using normalized coordinates
-  const surgePricing = await surgePricingService.calculateSurgeMultiplier(
-    normalizedPickupLat,
-    normalizedPickupLng,
-    vehicleTypeId
-  );
+  const surgePricing = await surgePricingService.calculateSurgeMultiplier();
 
   // Apply surge pricing to fare
   const fareWithSurge = surgePricingService.applySurgePricing(
@@ -185,7 +181,7 @@ export const requestRide = asyncHandler(async (req, res) => {
       address: dropoffLocation.address || dropoffLocation.name || '',
       name: dropoffLocation.name || dropoffLocation.address || '',
     },
-    status: scheduledAt ? 'scheduled' : 'requested',
+    status: scheduledAt ? 'scheduled' : 'searching',
     isScheduled: !!scheduledAt,
     scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
     fare: {
@@ -212,13 +208,14 @@ export const requestRide = asyncHandler(async (req, res) => {
     paymentMethod,
     promoCode: promoCode || null,
     statusHistory: [{
-      status: scheduledAt ? 'scheduled' : 'requested',
+      status: scheduledAt ? 'scheduled' : 'searching',
       timestamp: new Date(),
-      note: scheduledAt ? 'Ride scheduled' : 'Ride requested',
+      note: scheduledAt ? 'Ride scheduled' : 'Ride searching for driver',
     }],
   };
 
   const ride = await Ride.create(rideData);
+  logRideLifecycle(logger, ride, { event: 'ride_created' });
   if (isWalletPayment) {
     try {
       await holdRideFunds(riderId, ride._id, totalFare);
@@ -244,10 +241,8 @@ export const requestRide = asyncHandler(async (req, res) => {
     ride.notifiedDriverIds = notifiedIds;
   }
 
-  const DISABLE_AUTO_ASSIGNMENT = process.env.DISABLE_AUTO_ASSIGNMENT === 'true';
-
   // Sequential driver offers (FCM + Pusher + Socket.io), background — instant HTTP response for rider
-  if (!ride.isScheduled && ride.status === 'requested') {
+  if (!ride.isScheduled && (ride.status === 'searching' || ride.status === 'requested')) {
     if (matchedDrivers.length > 0) {
       setImmediate(() => {
         (async () => {
@@ -255,9 +250,10 @@ export const requestRide = asyncHandler(async (req, res) => {
             const assignedDriverId = await offerRideToDrivers(ride, matchedDrivers);
             if (!assignedDriverId) {
               const fresh = await Ride.findById(ride._id).populate('rider');
-              if (fresh?.status === 'requested' && !fresh.driver) {
+              if (fresh && (fresh.status === 'searching' || fresh.status === 'requested') && !fresh.driver) {
                 await cancelUnacceptedRide(fresh._id);
-                await notifyNoDriverFound(fresh);
+                const after = await Ride.findById(ride._id).populate('rider');
+                if (after) await notifyNoDriverFound(after);
               }
             }
           } catch (err) {
@@ -273,26 +269,6 @@ export const requestRide = asyncHandler(async (req, res) => {
         );
       });
     }
-  }
-
-  // Auto-assignment is a separate dev-only tool — only runs when offer queue is disabled
-  // In production, offerRideToDrivers above handles everything
-  if (!DISABLE_AUTO_ASSIGNMENT && process.env.NODE_ENV !== 'production') {
-    logger.info(`Dev auto-assignment scheduled for ride ${ride._id}`);
-    const rideId = ride._id.toString();
-    setTimeout(async () => {
-      try {
-        const updatedRide = await Ride.findById(rideId).populate('vehicleType');
-        if (!updatedRide || updatedRide.status !== 'requested' || updatedRide.driver) return;
-
-        const newMatchedDrivers = await rideMatchingService.findAndMatchDrivers(updatedRide, 10, 5);
-        if (newMatchedDrivers.length > 0) {
-          await rideMatchingService.autoAssignDriver(updatedRide, newMatchedDrivers);
-        }
-      } catch (error) {
-        logger.error(`Dev auto-assignment error for ride ${rideId}: ${error.message}`);
-      }
-    }, 1000);
   }
 
   res.status(201).json({
@@ -338,18 +314,15 @@ export const getFareEstimate = asyncHandler(async (req, res) => {
 
   const fareBreakdown = calculateFare(distanceKm, durationMinutes, vehicleTypeId, pricing);
 
-  // Calculate surge pricing based on demand
-  const surgePricing = await surgePricingService.calculateSurgeMultiplier(
-    pickup.lat,
-    pickup.lng,
-    vehicleTypeId
-  );
+  const surgePricing = await surgePricingService.calculateSurgeMultiplier();
 
-  // Apply surge pricing to fare
   const fareWithSurge = surgePricingService.applySurgePricing(
     fareBreakdown.totalFare,
     surgePricing.multiplier
   );
+
+  const fareAmount = Math.round(Number(fareWithSurge.finalFare || 0));
+  const riderBreakdown = await calculateFareBreakdownFromSettings(fareAmount);
 
   res.json({
     status: 'success',
@@ -369,13 +342,16 @@ export const getFareEstimate = asyncHandler(async (req, res) => {
         distanceFare: fareBreakdown.distanceFare,
         timeFare: fareBreakdown.timeFare,
         minimumFare: fareBreakdown.minimumFare,
-        totalFare: fareWithSurge.finalFare,
+        preSurgeFare: fareBreakdown.totalFare,
+        totalFare: fareAmount,
         surgeMultiplier: surgePricing.multiplier,
         isSurged: surgePricing.isSurged,
         surgeReason: surgePricing.reason,
         currency: fareBreakdown.currency || 'NGN',
+        riderServiceCharge: riderBreakdown.riderServiceCharge,
+        riderTotal: riderBreakdown.riderTotal,
       },
-      cost: fareWithSurge.finalFare.toString(), // For mobile app compatibility
+      cost: String(fareAmount),
     },
   });
 });
@@ -422,14 +398,14 @@ export const getFareEstimatePreview = asyncHandler(async (req, res) => {
   const pricing = settings?.pricing ? { ...settings.pricing } : null;
 
   const fareBreakdown = calculateFare(distanceKm, estimatedMins, vehicleType._id, pricing);
-  const surgePricing = await surgePricingService.calculateSurgeMultiplier(oLat, oLng, vehicleType._id);
+  const surgePricing = await surgePricingService.calculateSurgeMultiplier();
   const fareWithSurge = surgePricingService.applySurgePricing(
     fareBreakdown.totalFare,
     surgePricing.multiplier
   );
 
   const fareAmount = Math.round(Number(fareWithSurge.finalFare || 0));
-  const breakdown = calculateFareBreakdown(fareAmount);
+  const breakdown = await calculateFareBreakdownFromSettings(fareAmount);
 
   const formatNgn = (n) => `₦${Number(n || 0).toLocaleString()}`;
 
@@ -664,9 +640,9 @@ export const cancelRide = asyncHandler(async (req, res) => {
   if (isEscrow && (fareAmount > 0 || !!hasWalletHold)) {
     if (cancelledBy === 'driver') {
       cancellationScenario = 'driverCancel';
-    } else if (ride.status === 'requested' || ride.status === 'scheduled') {
+    } else if (['requested', 'searching', 'scheduled'].includes(ride.status)) {
       cancellationScenario = 'beforeAccept';
-    } else if (ride.status === 'accepted') {
+    } else if (ride.status === 'accepted' || ride.status === 'driver_en_route') {
       const { getCancellationGuards } = await import('../services/settingsService.js');
       const { gracePeriodSeconds } = await getCancellationGuards();
       const minutesSinceAccepted = ride.acceptedAt
@@ -692,7 +668,7 @@ export const cancelRide = asyncHandler(async (req, res) => {
     const { calculateCancellationFee } = await import('../utils/cancellationFeeCalculator.js');
     const result = calculateCancellationFee(ride, cancelledBy);
     cancellationFee = result.cancellationFee;
-    if (cancelledBy === 'rider' && ['accepted', 'arrived'].includes(ride.status)) {
+    if (cancelledBy === 'rider' && ['accepted', 'driver_en_route', 'arrived'].includes(ride.status)) {
       try {
         const { getCancellationPolicy } = await import('../services/settingsService.js');
         const fallbackScenario = ride.status === 'arrived' ? 'afterArrival' : 'afterAccept';
@@ -772,7 +748,11 @@ export const cancelRide = asyncHandler(async (req, res) => {
       });
     }
 
-    if (cancelledBy === 'rider' && driverUserId && ['accepted', 'arrived', 'in-progress'].includes(previousRideStatus)) {
+    if (
+      cancelledBy === 'rider' &&
+      driverUserId &&
+      ['accepted', 'driver_en_route', 'arrived', 'in-progress'].includes(previousRideStatus)
+    ) {
       await sendToUser(driverUserId, 'driver', {
         title: 'Rider cancelled',
         message: `${ride.rider?.name || 'The rider'} cancelled the ride. You will receive your ₦${Math.round(Number(driverCompensation || 0)).toLocaleString()} compensation.`,
@@ -805,6 +785,92 @@ export const cancelRide = asyncHandler(async (req, res) => {
     message: 'Ride cancelled successfully',
     data: {
       ride: formatRideResponse(ride),
+    },
+  });
+});
+
+/**
+ * GET /api/booking/cancel-ride/preview?rideId= — rider-only fee estimate before cancelling.
+ */
+export const cancelRidePreview = asyncHandler(async (req, res) => {
+  const { rideId } = req.query;
+  const userId = req.user._id;
+
+  const ride = await Ride.findById(rideId).populate('rider').populate('driver');
+
+  if (!ride) {
+    throw new NotFoundError('Ride');
+  }
+
+  if (ride.rider._id.toString() !== userId.toString()) {
+    throw new ValidationError('You do not have permission to preview this cancellation');
+  }
+
+  if (['completed', 'cancelled'].includes(ride.status)) {
+    return res.json({
+      status: 'success',
+      data: {
+        fee_applies: false,
+        fee_amount: 0,
+        fee_reason: null,
+      },
+    });
+  }
+
+  const fareAmount = ride.fare?.totalFare ?? 0;
+  const hasWalletHold = await UserWalletTransaction.findOne({
+    idempotencyKey: `hold:${ride._id}`,
+    type: 'hold',
+  })
+    .select('_id')
+    .lean();
+
+  const isEscrow =
+    ride.paymentMethod === 'wallet' &&
+    (['held', 'charged'].includes(ride.paymentStatus) || !!hasWalletHold);
+
+  let feeAmount = 0;
+  let feeReason = null;
+
+  if (isEscrow && (fareAmount > 0 || !!hasWalletHold)) {
+    let cancellationScenario;
+    if (['requested', 'searching', 'scheduled'].includes(ride.status)) {
+      cancellationScenario = 'beforeAccept';
+    } else if (ride.status === 'accepted' || ride.status === 'driver_en_route') {
+      const { getCancellationGuards } = await import('../services/settingsService.js');
+      const { gracePeriodSeconds } = await getCancellationGuards();
+      const minutesSinceAccepted = ride.acceptedAt
+        ? (Date.now() - new Date(ride.acceptedAt).getTime()) / 60000
+        : 999;
+      const withinGracePeriod = minutesSinceAccepted * 60 <= (gracePeriodSeconds ?? 60);
+      const driverNotMoving = ride.driverMovementFlag === 'not_approaching';
+      cancellationScenario = withinGracePeriod || driverNotMoving ? 'beforeAccept' : 'afterAccept';
+    } else {
+      cancellationScenario = 'afterArrival';
+    }
+    const { getCancellationPolicy } = await import('../services/settingsService.js');
+    const policy = await getCancellationPolicy(cancellationScenario);
+    feeAmount = policy.riderPenalty ?? 0;
+    if (feeAmount > 0) {
+      if (cancellationScenario === 'afterAccept') {
+        feeReason = 'Driver has already accepted and is on the way';
+      } else if (cancellationScenario === 'afterArrival') {
+        feeReason = 'Driver has arrived at your pickup location';
+      }
+    }
+  } else {
+    const { calculateCancellationFee } = await import('../utils/cancellationFeeCalculator.js');
+    const result = calculateCancellationFee(ride, 'rider');
+    feeAmount = result.cancellationFee ?? 0;
+    feeReason = feeAmount > 0 ? result.feeReason || 'A cancellation fee applies' : null;
+  }
+
+  res.json({
+    status: 'success',
+    data: {
+      fee_applies: feeAmount > 0,
+      fee_amount: feeAmount,
+      fee_reason: feeReason,
     },
   });
 });
@@ -958,6 +1024,8 @@ export const getRideDetails = asyncHandler(async (req, res) => {
  * Format ride response for mobile app compatibility
  */
 const formatRideResponse = (ride) => {
+  const internalStatus = ride.status;
+  const clientStatus = mapRideStatusForClientApi(internalStatus);
   return {
     ride_id: ride._id.toString(),
     user_id: ride.rider._id?.toString() || ride.rider.toString(),
@@ -986,7 +1054,9 @@ const formatRideResponse = (ride) => {
       vehicle_model: ride.driver.vehicleDetails?.model || null,
     } : null,
     vehicle_id: ride.vehicleType?._id?.toString() || ride.vehicleType?.toString(),
-    status: ride.status,
+    status: clientStatus,
+    internal_status: internalStatus,
+    lifecycle_status: getLifecycleStatus(internalStatus),
     accepted_by_driver: ride.acceptedByDriver,
     is_ride_started: ride.isRideStarted,
     drop_off_completed: ride.dropOffCompleted,
