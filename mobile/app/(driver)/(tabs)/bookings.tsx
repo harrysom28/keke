@@ -10,7 +10,6 @@ import {
 } from "react-native";
 import {
   CLOSEST_BOOKING,
-  DRIVER_ACCEPT_BOOKING,
   DRIVER_BOOKINGS,
   DRIVER_BOOKING_ID,
   DRIVER_CANCEL_BOOKING,
@@ -28,6 +27,7 @@ import { DriverBookingSheet } from "@/components/driver/bookingSheet";
 import EmptyData from "@/components/emptyData";
 import { MapArrowSvg } from "@/svg";
 import axios from "axios";
+import { postAcceptScheduledBooking } from "@/utils/acceptScheduledBooking";
 import { getErrorMessage } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
@@ -159,45 +159,44 @@ const Bookings = () => {
   const [booking, setBooking] = useState({});
   const [selected, setSelected] = useState(Tab[0]);
 
-  const AcceptBooking = (
+  const AcceptBooking = async (
     booking_id: string,
     loading: React.Dispatch<React.SetStateAction<boolean>>
   ) => {
     loading(true);
-    // Backend expects rideId, not booking_id
-    axios
-      .post(DRIVER_ACCEPT_BOOKING, { rideId: booking_id }, apiConfig)
-      .then(({ data }) => {
+    try {
+      const result = await postAcceptScheduledBooking(booking_id, apiConfig);
+      if (result.ok) {
+        if (result.wentOnlineFirst) {
+          safeShowMessage({
+            type: "info",
+            message: "You were set online to accept this booking.",
+          });
+        }
         safeShowMessage({
           type: "success",
-          message: data?.message || "Booking accepted successfully",
+          message:
+            (result.data as { message?: string })?.message ||
+            "Booking accepted successfully",
         });
         setChange((prev) => !prev);
-      })
-      .catch((err) => {
-        console.log('Accept booking error:', err?.response?.data);
-        const status = err?.response?.status || err?.status;
-        
-        // Silently handle 401 errors - token refresh should happen automatically via API client
-        if (status === 401) {
-          console.log('Authentication error (401) - token refresh should handle this');
-          return;
-        }
-        
-        // Silently handle 404 errors (driver profile not found, booking not found, etc.)
-        if (status === 404) {
-          console.log('Resource not found (404) - silently handling');
-          return;
-        }
-        
-        // Use centralized error handler to extract safe string message
-        const errorMessage = getErrorMessage(err);
-        safeShowMessage({
-          type: "danger",
-          message: errorMessage,
-        });
-      })
-      .finally(() => loading(false));
+        return;
+      }
+      if (result.silent && result.status === 401) {
+        console.log("Authentication error (401) - token refresh should handle this");
+        return;
+      }
+      if (result.silent && result.status === 404) {
+        console.log("Resource not found (404) - silently handling");
+        return;
+      }
+      safeShowMessage({ type: "danger", message: result.message });
+    } catch (err) {
+      console.log("Accept booking error:", err);
+      safeShowMessage({ type: "danger", message: getErrorMessage(err) });
+    } finally {
+      loading(false);
+    }
   };
   const CancelBooking = (
     booking_id: string,
@@ -418,17 +417,27 @@ const Bookings = () => {
   }, [isFocused, change, selected]);
 
   const ViewBooking = (booking_id: string) => {
+    const id = String(booking_id || "").trim();
+    if (!/^[a-f\d]{24}$/i.test(id)) {
+      safeShowMessage({
+        type: "warning",
+        message: "This booking cannot be opened yet. Pull to refresh or try again shortly.",
+      });
+      return;
+    }
     bottomSheetRef?.current?.open();
     setViewLoading(true);
     // Map the booking data to expected format
-    const currentBooking = data.find((item: any) => item.booking_id === booking_id || item.ride_id === booking_id);
+    const currentBooking = data.find(
+      (item: any) => item.booking_id === id || item.ride_id === id
+    );
     if (currentBooking) {
       setBooking(currentBooking);
       setViewLoading(false);
     } else {
       // Fallback: try to fetch from API if not found in current data
       axios
-        .get(DRIVER_BOOKING_ID + booking_id + "/booking", apiConfig)
+        .get(DRIVER_BOOKING_ID + id + "/booking", apiConfig)
         .then(({ data }) => {
           console.log(data?.data);
           const mapped = mapBookingData(data?.data);
@@ -470,11 +479,10 @@ const Bookings = () => {
         bottomSheetRef={bottomSheetRef}
         data={booking}
         isloading={viewLoading}
-        accepted={!!booking?.driver_id || booking?.status === 'accepted'}
+        accepted={!!booking?.driver_id || booking?.status === "accepted"}
         action={(booking_id, loading) => AcceptBooking(booking_id, loading)}
         cancel={(booking_id, loading) => CancelBooking(booking_id, loading)}
         viewBooking={(booking_id) => ViewBooking(booking_id)}
-        accepted={selected === Tab[1]}
       />
 
       <ImageBackground

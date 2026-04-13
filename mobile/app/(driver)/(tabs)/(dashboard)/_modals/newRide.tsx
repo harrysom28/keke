@@ -98,7 +98,21 @@ const NewRide = ({
   const lastChatKickRef = useRef(0);
   const [show, setShow] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
-  const rideId = data?.ride_id ?? data?.rideId ?? '';
+  const rideId = String(
+    data?.ride_id ?? data?.rideId ?? (data as { _id?: string })?._id ?? ""
+  ).trim();
+  const hasValidRideId = /^[a-f\d]{24}$/i.test(rideId);
+  const guardRideId = () => {
+    if (!hasValidRideId) {
+      showMessage({
+        type: "danger",
+        message:
+          "This ride is missing a valid reference. Pull to refresh or reopen the trip from the map.",
+      });
+      return false;
+    }
+    return true;
+  };
   let payment_type = data?.payment_type?.toLocaleLowerCase() as string;
   const leftValue = useRef(new Animated.Value(0)).current;
   const offerExpiredFiredRef = useRef(false);
@@ -186,6 +200,7 @@ const NewRide = ({
   const arrivalDistLabel = routeDistance || data?.arrival_distance || "";
 
   const AcceptRide = () => {
+    if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, accept: true }));
     axios
       .post(DRIVER_ACCEPT_RIDE, { rideId }, apiConfig)
@@ -198,6 +213,7 @@ const NewRide = ({
       .finally(() => setLoading((prev) => ({ ...prev, accept: false })));
   };
   const RejectRide = () => {
+    if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, reject: true }));
     axios
       .post(DRIVER_REJECT_RIDE, { rideId }, apiConfig)
@@ -211,6 +227,7 @@ const NewRide = ({
       .finally(() => setLoading((prev) => ({ ...prev, reject: false })));
   };
   const MarkPickupArrived = () => {
+    if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, arrived: true }));
     axios
       .post(DRIVER_MARK_PICKUP_ARRIVED, { rideId }, apiConfig)
@@ -223,6 +240,7 @@ const NewRide = ({
   };
 
   const StartRide = () => {
+    if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, start: true }));
     axios
       .post(DRIVER_START_RIDE, { rideId }, apiConfig)
@@ -234,6 +252,7 @@ const NewRide = ({
       .finally(() => setLoading((prev) => ({ ...prev, start: false })));
   };
   const CompleteRide = () => {
+    if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, complete: true }));
     axios
       .post(DRIVER_COMPLETE_RIDE, { rideId }, apiConfig)
@@ -249,6 +268,7 @@ const NewRide = ({
       .finally(() => setLoading((prev) => ({ ...prev, complete: false })));
   };
   const ConfirmPayment = () => {
+    if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, confirm: true }));
     axios
       .post(DRIVER_CONFIRM_PAYMENT, { rideId }, apiConfig)
@@ -262,6 +282,7 @@ const NewRide = ({
   };
 
   const PayChange = (amount: string) => {
+    if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, change: true }));
     axios
       .post(DRIVER_PAY_CHANGE, { rideId, amount }, apiConfig)

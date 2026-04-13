@@ -130,7 +130,10 @@ export const DRIVER_TASKS = `${SERVER_URL}tasks/daily/`;
 export const DRIVER_BOOKINGS = `${SERVER_URL}schedule/list-bookings`;
 export const DRIVER_BOOKING_ID = `${SERVER_URL}schedule/show/`;
 export const DRIVER_ACCEPT_BOOKING = `${SERVER_URL}schedule/accept/booking`;
+/** Open scheduled pool (not yet accepted) — e.g. Bookings "Available" tab */
 export const CLOSEST_BOOKING = `${SERVER_URL}schedule/closest/booking`;
+/** This driver's accepted future scheduled rides — driver home "Booking Date" card only */
+export const CLOSEST_BOOKING_ASSIGNED = `${SERVER_URL}schedule/closest/booking?assigned_to_driver=true`;
 export const DRIVER_LATEST_BOOKING = `${SERVER_URL}schedule/latest/booking`;
 export const DRIVER_CANCEL_BOOKING = `${SERVER_URL}schedule/cancel/booking`;
 export const DRIVER_EARNINGS = `${SERVER_URL}driver/rides/earning`;

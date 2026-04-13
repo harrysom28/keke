@@ -1267,13 +1267,57 @@ export const rejectRide = asyncHandler(async (req, res) => {
   }
 
   // Check if driver is assigned to this ride
-  if (ride.driver?.toString() !== driver._id.toString()) {
+  if (String(ride.driver) !== String(driver._id)) {
     throw new ValidationError('You are not assigned to this ride');
   }
 
   // Check if ride can be cancelled
   if (['completed', 'cancelled'].includes(ride.status)) {
     throw new ValidationError('Ride cannot be cancelled');
+  }
+
+  // Scheduled bookings: cancel the ride — do not return to instant matching pool
+  if (
+    ride.isScheduled &&
+    ['accepted', 'driver_en_route', 'arrived', 'scheduled'].includes(ride.status)
+  ) {
+    await ride.cancelRide('driver', reason || 'Driver cancelled scheduled booking', 0, 'driverCancel');
+    await ride.populate('rider', 'name phone profileImage rating deviceToken');
+    driver.isAvailable = true;
+    await driver.save();
+
+    try {
+      const { sendToUser } = await import('../services/notificationService.js');
+      await sendToUser(ride.rider, 'rider', {
+        title: 'Scheduled ride cancelled',
+        message: 'Your driver cancelled this scheduled booking.',
+        type: 'alert',
+        priority: 'high',
+        screen: 'home',
+        ride_id: ride._id,
+        event_key: 'ride_cancelled_by_driver',
+        data: { subType: 'driver_cancelled', rideId: ride._id.toString() },
+      });
+    } catch (err) {
+      logger.error(`Scheduled driver cancel notification failed: ${err.message}`);
+    }
+
+    try {
+      const { updateDriverCancellationRate } = await import('../services/driverStatisticsService.js');
+      await updateDriverCancellationRate(driver._id);
+    } catch (error) {
+      logger.error(`Failed to update driver cancellation rate: ${error.message}`);
+    }
+
+    logger.info(`Scheduled ride ${rideId} cancelled by driver ${driver._id}`);
+
+    return res.json({
+      status: 'success',
+      message: 'Scheduled booking cancelled successfully',
+      data: {
+        ride: formatRideForDriver(ride),
+      },
+    });
   }
 
   // If ride is assigned but trip not started, driver can bail — return ride to matching pool
@@ -1504,11 +1548,16 @@ export const startRide = asyncHandler(async (req, res) => {
   }
 
   // Check if driver is assigned to this ride
-  if (ride.driver?.toString() !== driver._id.toString()) {
+  if (String(ride.driver) !== String(driver._id)) {
     throw new ValidationError('You are not assigned to this ride');
   }
 
-  if (!['accepted', 'driver_en_route', 'arrived'].includes(ride.status)) {
+  const canStart =
+    ['accepted', 'driver_en_route', 'arrived'].includes(ride.status) ||
+    (ride.isScheduled &&
+      ride.status === 'scheduled' &&
+      String(ride.driver) === String(driver._id));
+  if (!canStart) {
     throw new ValidationError('Ride cannot be started in current status');
   }
 
@@ -1522,6 +1571,9 @@ export const startRide = asyncHandler(async (req, res) => {
   });
 
   await ride.save();
+
+  driver.isAvailable = false;
+  await driver.save();
   await ride.populate('rider', 'name phone profileImage rating deviceToken');
   await ride.populate('vehicleType');
 

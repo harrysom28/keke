@@ -148,9 +148,14 @@ export const acceptScheduledBooking = asyncHandler(async (req, res) => {
   await ride.populate('rider', 'name phone profileImage rating');
   await ride.populate('vehicleType');
 
-  // Make driver unavailable (they'll be available again when ride is completed or scheduled time arrives)
-  driver.isAvailable = false;
-  await driver.save();
+  // Only take driver "off the market" once pickup time has started; future accepts stay available.
+  const now = new Date();
+  const pickupMs = ride.scheduledAt ? new Date(ride.scheduledAt).getTime() : 0;
+  const pickupIsNowOrPast = !ride.scheduledAt || pickupMs <= now.getTime();
+  if (pickupIsNowOrPast) {
+    driver.isAvailable = false;
+    await driver.save();
+  }
 
   // Send real-time notification
   const socketService = getSocketService();
@@ -259,10 +264,18 @@ export const getScheduledBookingById = asyncHandler(async (req, res) => {
 
 /**
  * Get closest scheduled booking - GET /api/schedule/closest/booking
+ *
+ * Query:
+ * - (default) Open pool: future scheduled rides matching vehicle type, not yet assigned — for Bookings "Available".
+ * - assigned_to_driver=true: future scheduled rides already accepted by this driver — for driver home dashboard only.
  */
 export const getClosestScheduledBooking = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { latitude, longitude } = req.query;
+  const { latitude, longitude, assigned_to_driver: assignedToDriverRaw } = req.query;
+  const assignedToDriver =
+    assignedToDriverRaw === true ||
+    assignedToDriverRaw === 'true' ||
+    assignedToDriverRaw === '1';
 
   const user = await User.findById(userId);
   if (!user) {
@@ -285,24 +298,34 @@ export const getClosestScheduledBooking = asyncHandler(async (req, res) => {
     });
   }
 
-  // Get all scheduled rides for driver's vehicle type
-  const scheduledRides = await Ride.find({
-    vehicleType: driver.vehicleDetails.vehicleType,
-    isScheduled: true,
-    scheduledAt: { $gte: new Date() }, // Only future rides
-    status: { $in: ['requested', 'scheduled'] },
-    driver: null, // Not yet accepted
-  })
+  const rideFilter = assignedToDriver
+    ? {
+        driver: driver._id,
+        isScheduled: true,
+        scheduledAt: { $gte: new Date() },
+        status: { $nin: ['cancelled', 'completed'] },
+      }
+    : {
+        vehicleType: driver.vehicleDetails.vehicleType,
+        isScheduled: true,
+        scheduledAt: { $gte: new Date() },
+        status: { $in: ['requested', 'scheduled'] },
+        driver: null,
+      };
+
+  const scheduledRides = await Ride.find(rideFilter)
     .populate('rider', 'name phone profileImage rating')
     .populate('vehicleType')
-    .sort({ scheduledAt: 1 }); // Sort by scheduled time
+    .sort({ scheduledAt: 1 });
 
   if (scheduledRides.length === 0) {
     return res.json({
       status: 'success',
       data: {
         booking: null,
-        message: 'No scheduled bookings available',
+        message: assignedToDriver
+          ? 'No accepted scheduled bookings'
+          : 'No scheduled bookings available',
       },
     });
   }
@@ -408,7 +431,14 @@ export const cancelScheduledBooking = asyncHandler(async (req, res) => {
   }
 
   const isRider = ride.rider && ride.rider._id.toString() === userId.toString();
-  const isDriver = ride.driver && ride.driver.user && ride.driver.user._id.toString() === userId.toString();
+  let isDriver = false;
+  if (ride.driver) {
+    const driverDoc = await Driver.findOne({ user: userId }).select('_id').lean();
+    const assignedId = ride.driver._id?.toString?.() ?? ride.driver?.toString?.();
+    if (driverDoc?._id && assignedId && driverDoc._id.toString() === assignedId) {
+      isDriver = true;
+    }
+  }
 
   if (!isRider && !isDriver && user.role !== 'admin') {
     throw new ValidationError('You do not have permission to cancel this booking');
@@ -419,7 +449,8 @@ export const cancelScheduledBooking = asyncHandler(async (req, res) => {
     throw new ValidationError(`Cannot cancel a ${ride.status} ride`);
   }
 
-  if (ride.status === 'in_progress' || ride.status === 'started') {
+  const statusNorm = String(ride.status || '').toLowerCase().replace(/-/g, '_');
+  if (statusNorm === 'in_progress' || statusNorm === 'started') {
     return res.status(400).json({
       success: false,
       message: 'Cannot cancel a ride that is already in progress.',

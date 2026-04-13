@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AntDesign, MaterialCommunityIcons } from "@expo/vector-icons";
 import { AppDetailsState, setAppData, setSubscriptionUtils } from "@/store/AppSlice";
 import {
-  CLOSEST_BOOKING,
+  CLOSEST_BOOKING_ASSIGNED,
   DRIVER_ACTIVE_RIDE,
   DRIVER_BOOKING_ID,
   DRIVER_CANCEL_BOOKING,
@@ -44,11 +44,48 @@ import axios from "axios";
 import apiClient from "@/utils/apiClient";
 import { getGreeting } from "@/lib/getGreeting";
 import { router } from "expo-router";
+import { postAcceptScheduledBooking } from "@/utils/acceptScheduledBooking";
 import { getErrorMessage } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
+
+/** Map schedule/closest API shape (ride_id, nested pickup/dropoff, scheduled_at) to home card fields. */
+function mapClosestBookingForHome(raw: Record<string, unknown>): Partial<TBooking> & Record<string, unknown> {
+  const rideId = String(raw.ride_id ?? raw.booking_id ?? "");
+  const scheduledAt = raw.scheduled_at as string | Date | undefined | null;
+  const { booking_date, booking_time } = getLocalBookingDateAndTime(scheduledAt);
+  const pickup = raw.pickup as { address?: string } | undefined;
+  const dropoff = raw.dropoff as { address?: string } | undefined;
+  const origin =
+    (typeof pickup?.address === "string" && pickup.address.trim()) ||
+    (typeof raw.pickup_location === "string" && String(raw.pickup_location).trim()) ||
+    (typeof raw.origin === "string" && String(raw.origin).trim()) ||
+    "";
+  const destination =
+    (typeof dropoff?.address === "string" && dropoff.address.trim()) ||
+    (typeof raw.dropoff_location === "string" && String(raw.dropoff_location).trim()) ||
+    (typeof raw.destination === "string" && String(raw.destination).trim()) ||
+    "";
+  const passenger = raw.passenger as { name?: string } | undefined;
+
+  return {
+    ...raw,
+    booking_id: rideId,
+    ride_id: rideId,
+    booking_date,
+    booking_time,
+    origin,
+    pickup_location: origin,
+    destination,
+    dropoff_location: destination,
+    status: typeof raw.status === "string" ? raw.status : String(raw.status ?? ""),
+    scheduled_at: scheduledAt as string | undefined,
+    username: passenger?.name ?? (raw.username as string | undefined),
+    name: passenger?.name ?? (raw.name as string | undefined),
+  } as Partial<TBooking> & Record<string, unknown>;
+}
 
 const Home = () => {
   const insets = useSafeAreaInsets();
@@ -66,7 +103,15 @@ const Home = () => {
   const { user } = useSelector(AuthState);
   const dispatch = useDispatch();
 
-  const isOnline = activity?.is_online ?? false;
+  /** Session flag from backend; can stay true while on a job. */
+  const sessionOnline = activity?.is_online ?? false;
+  /** Matches server checks for accepting rides (see scheduleController / driverController). */
+  const isAvailableForRides = activity?.is_available ?? false;
+  const availabilityLabel = isAvailableForRides
+    ? "Online"
+    : sessionOnline
+      ? "On a trip"
+      : "Offline";
   const isVerified = activity?.verification_status === "approved" && activity?.documents_verified;
 
   const emergencySheetRef = useRef<BottomSheetMethods>(null);
@@ -183,7 +228,7 @@ const Home = () => {
       });
       return;
     }
-    if (isOnline) {
+    if (isAvailableForRides) {
       Alert.alert(
         "Go offline?",
         "You will stop receiving new ride requests until you go online again. Finish or decline any active offer first.",
@@ -225,12 +270,12 @@ const Home = () => {
 
   const getClosestBooking = () => {
     axios
-      .get(CLOSEST_BOOKING, apiConfig)
+      .get(CLOSEST_BOOKING_ASSIGNED, apiConfig)
       .then(({ data }) => {
         const payload = data?.data;
         const bookingItem = payload?.booking ?? (Array.isArray(payload) ? payload[0] : null);
-        if (bookingItem && typeof bookingItem === 'object') {
-          setBooking(bookingItem);
+        if (bookingItem && typeof bookingItem === "object") {
+          setBooking(mapClosestBookingForHome(bookingItem as Record<string, unknown>));
         } else {
           setBooking({});
         }
@@ -348,11 +393,58 @@ const Home = () => {
       .finally(() => loading(false));
   };
 
+  const handleAcceptScheduledBooking = useCallback(
+    async (rideId: string, loading: React.Dispatch<React.SetStateAction<boolean>>) => {
+      loading(true);
+      try {
+        const result = await postAcceptScheduledBooking(rideId, apiConfig);
+        if (result.ok) {
+          if (result.wentOnlineFirst) {
+            safeShowMessage({
+              type: "info",
+              message: "You were set online to accept this booking.",
+            });
+          }
+          safeShowMessage({
+            type: "success",
+            message:
+              (result.data as { message?: string })?.message ||
+              "Booking accepted successfully",
+          });
+          bookingSheetRef.current?.close();
+          setViewbooking({});
+          setChange((prev) => !prev);
+          fetchDriverDashboard();
+          return;
+        }
+        if (result.silent && result.status === 401) {
+          console.log("Authentication error (401) - token refresh should handle this");
+          return;
+        }
+        safeShowMessage({
+          type: "danger",
+          message: result.message || "Could not accept booking.",
+        });
+      } finally {
+        loading(false);
+      }
+    },
+    [apiConfig, fetchDriverDashboard]
+  );
+
   const ViewBooking = (booking_id: string) => {
+    const id = String(booking_id || "").trim();
+    if (!/^[a-f\d]{24}$/i.test(id)) {
+      safeShowMessage({
+        type: "warning",
+        message: "This booking cannot be opened yet. Pull to refresh or try again shortly.",
+      });
+      return;
+    }
     bookingSheetRef?.current?.open();
     setVLoading(true);
     axios
-      .get(DRIVER_BOOKING_ID + booking_id + "/booking", apiConfig)
+      .get(DRIVER_BOOKING_ID + id + "/booking", apiConfig)
       .then(({ data }) => {
         const bookingData = data?.data || {};
         
@@ -411,7 +503,7 @@ const Home = () => {
         
         setViewbooking({
           ...bookingData,
-          booking_id,
+          booking_id: id,
           pickup_location: pickupLocation,
           dropoff_location: dropoffLocation,
           origin: pickupLocation,
@@ -544,10 +636,10 @@ const Home = () => {
         bottomSheetRef={bookingSheetRef}
         data={viewbooking}
         isloading={vloading}
-        accepted={!!viewbooking?.driver_id || viewbooking?.status === 'accepted'}
+        accepted={!!viewbooking?.driver_id || viewbooking?.status === "accepted"}
+        action={handleAcceptScheduledBooking}
         cancel={(booking_id, loading) => CancelBooking(booking_id, loading)}
         viewBooking={(booking_id) => ViewBooking(booking_id)}
-        accepted
       />
       <ImageBackground
         style={tw.style(`bg-white`, {
@@ -653,14 +745,18 @@ const Home = () => {
               <Text
                 style={tw.style(
                   `text-[14px]`,
-                  isOnline ? `text-base-green` : `text-[#484C52]`,
+                  isAvailableForRides
+                    ? `text-base-green`
+                    : sessionOnline
+                      ? `text-amber-700`
+                      : `text-[#484C52]`,
                   { fontFamily: "RobotoBold" }
                 )}
               >
-                {isOnline ? "Online" : "Offline"}
+                {availabilityLabel}
               </Text>
               <Switch
-                value={isOnline}
+                value={isAvailableForRides}
                 onValueChange={toggleAvailability}
                 disabled={availabilityLoading || !isVerified}
                 trackColor={{
@@ -844,11 +940,12 @@ const Home = () => {
             </View>
           ) : (
             <TouchableOpacity
-              onPress={() => ViewBooking(booking?.booking_id as string)}
+              onPress={() =>
+                ViewBooking(String(booking?.booking_id || (booking as { ride_id?: string })?.ride_id || ""))
+              }
               style={tw.style(
                 `flex-row justify-between bg-white p-4 mt-4 rounded-[10px]`,
                 {
-                  // display: "none",
                   elevation: 4,
                 }
               )}
@@ -866,7 +963,12 @@ const Home = () => {
                     fontFamily: "RobotoBold",
                   })}
                 >
-                  {formatBookingDate(booking?.booking_date as string)}
+                  {formatBookingDate(
+                    (booking?.booking_date as string) ||
+                      (booking?.scheduled_at
+                        ? getLocalBookingDateAndTime(booking.scheduled_at as string).booking_date
+                        : "")
+                  )}
                 </Text>
                 {String(booking?.status ?? "").toLowerCase() !== "cancelled" && (
                   <TouchableOpacity
@@ -881,7 +983,10 @@ const Home = () => {
                             text: "Yes, Cancel",
                             style: "destructive",
                             onPress: () =>
-                              CancelBooking(booking?.booking_id as string, setRLoading),
+                              CancelBooking(
+                                String(booking?.booking_id || (booking as { ride_id?: string })?.ride_id || ""),
+                                setRLoading
+                              ),
                           },
                         ]
                       );
@@ -908,13 +1013,11 @@ const Home = () => {
                   })}
                   numberOfLines={2}
                 >
-                  {booking?.origin}
+                  {String(booking?.origin || booking?.pickup_location || "")}
                 </Text>
-                <View
-                  style={tw`flex-row items-center justify-end gap-x-1 mt-1`}
-                >
+                <View style={tw`flex-row items-center justify-end gap-x-1 mt-1`}>
                   <AntDesign
-                    name="clockcircleo"
+                    name="clock-circle"
                     size={21}
                     color={tw.color("base-green")}
                   />
@@ -923,7 +1026,12 @@ const Home = () => {
                       fontFamily: "RobotoBold",
                     })}
                   >
-                    {formatBookingTime(booking?.booking_time as string)}
+                    {formatBookingTime(
+                      (booking?.booking_time as string) ||
+                        (booking?.scheduled_at
+                          ? getLocalBookingDateAndTime(booking.scheduled_at as string).booking_time
+                          : "")
+                    )}
                   </Text>
                 </View>
               </View>

@@ -371,11 +371,22 @@ rideSchema.statics.findActiveRideForRider = async function (riderId) {
     .sort({ createdAt: -1 });
 };
 
-// Static method to find active ride for driver
+/**
+ * Driver "active" ride: excludes scheduled pickups whose time has not arrived yet,
+ * so accepting a future booking does not block the dashboard / map as ongoing.
+ */
 rideSchema.statics.findActiveRideForDriver = async function (driverId) {
+  const now = new Date();
   return this.findOne({
     driver: driverId,
     status: { $in: ['accepted', 'driver_en_route', 'arrived', 'in-progress'] },
+    $or: [
+      { isScheduled: { $ne: true } },
+      {
+        isScheduled: true,
+        $or: [{ scheduledAt: { $lte: now } }, { scheduledAt: null }, { scheduledAt: { $exists: false } }],
+      },
+    ],
   })
     .populate('rider', 'name phone profileImage rating')
     .populate('vehicleType')
