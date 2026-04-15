@@ -1355,7 +1355,13 @@ const RidesScreen = () => {
       fare,
       cost: fare,
       status: ride.status || raw.status || "scheduled",
-      payment_method: raw.payment_method || raw.payment_type || "cash",
+      payment_method:
+        (ride as any)?.payment_method ||
+        (ride as any)?.paymentMethod ||
+        (ride as any)?.payment_type ||
+        raw.payment_method ||
+        raw.payment_type ||
+        "wallet",
       is_started: raw.is_started ?? raw.is_ride_started ?? false,
       username: raw.username || raw.passenger?.name || "Passenger",
       driver_id: raw.driver_id ?? null,

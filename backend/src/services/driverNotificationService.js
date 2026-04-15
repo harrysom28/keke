@@ -315,5 +315,6 @@ export async function notifyNoDriverFound(ride) {
   }
 }
 
-// Backwards compatible export name
+// Backwards compatible export names
 export { sendNoDriverFoundOnce as cancelUnacceptedRide };
+export { dispatchRide as offerRideToDrivers };

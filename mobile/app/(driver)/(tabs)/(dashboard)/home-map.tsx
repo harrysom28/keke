@@ -238,13 +238,15 @@ export default function HomeScreen() {
     const pickup = raw.pickup as { address?: string; lat?: number; lng?: number } | undefined;
     const dropoff = raw.dropoff as { address?: string; lat?: number; lng?: number } | undefined;
     const rideIdStr = String(raw.ride_id ?? "");
-    const expiresSec = Number(raw.offer_expires_in ?? 20);
+    const expiresSec = Number(raw.offer_expires_in ?? 60);
     const fare = raw.fare;
 
     Vibration.vibrate([0, 400, 200, 400]);
 
     const mapped: Partial<TDriverActiveRide> = {
       ride_id: rideIdStr,
+      // Pass through offer id so accept can validate staleness on the backend
+      offer_id: String(raw.offer_id ?? ""),
       status: "requested",
       accepted_by_driver: false,
       is_ride_started: false,

@@ -202,8 +202,9 @@ const NewRide = ({
   const AcceptRide = () => {
     if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, accept: true }));
+    const offerId = String((data as { offer_id?: string })?.offer_id || "").trim();
     axios
-      .post(DRIVER_ACCEPT_RIDE, { rideId }, apiConfig)
+      .post(DRIVER_ACCEPT_RIDE, offerId ? { rideId, offerId } : { rideId }, apiConfig)
       .then(({ data }) => {
         onOfferResolved?.();
         getActiveRide();

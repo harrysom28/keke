@@ -29,6 +29,12 @@ let alertHandler: NotificationHandler | null = null;
 let bannerHandler: NotificationHandler | null = null;
 let inboxHandler: NotificationHandler | null = null;
 
+// Some backends (or notification bridges) can occasionally deliver the same event
+// multiple times (e.g. reconnect/retry behavior). We defensively de-dupe in-app
+// handling to avoid spamming banners/toasts and duplicating inbox items.
+const RECENT_DEDUPE_WINDOW_MS = 55_000;
+const recentNotificationKeys = new Map<string, number>();
+
 let foregroundUnsubscribe: (() => void) | null = null;
 let backgroundOpenUnsubscribe: (() => void) | null = null;
 let firebaseInitialized = false;
@@ -115,6 +121,35 @@ export const registerInboxHandler = (handler: NotificationHandler): void => {
 };
 
 export const handle = (payload: NotificationPayload): void => {
+  try {
+    const stableKey =
+      String(payload.notification_id || payload.id || "").trim() ||
+      [
+        payload.event_key || "",
+        payload.ride_id || "",
+        payload.title || "",
+        payload.message || "",
+      ]
+        .map((v) => String(v).trim())
+        .join("|");
+
+    const now = Date.now();
+    // prune stale keys cheaply
+    for (const [k, ts] of recentNotificationKeys.entries()) {
+      if (now - ts > RECENT_DEDUPE_WINDOW_MS) {
+        recentNotificationKeys.delete(k);
+      }
+    }
+    const last = recentNotificationKeys.get(stableKey);
+    if (last && now - last < RECENT_DEDUPE_WINDOW_MS) {
+      logger.debug("Notification deduped", { stableKey });
+      return;
+    }
+    recentNotificationKeys.set(stableKey, now);
+  } catch {
+    // Never block notification delivery due to dedupe errors.
+  }
+
   if (payload.priority === "critical") {
     alertHandler?.(payload);
     return;

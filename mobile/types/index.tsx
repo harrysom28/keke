@@ -75,6 +75,8 @@ export type TDriverActiveRide = {
   origin: Location;
   passenger: Passenger;
   payment_type: PaymentType;
+  /** Backend sequential offer identifier for stale-accept protection */
+  offer_id?: string;
   ride_id: string;
   status: RideStatus;
   vehicle_id: number;

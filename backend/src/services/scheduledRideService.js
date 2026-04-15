@@ -2,7 +2,7 @@ import Ride from '../models/Ride.js';
 import logger from '../utils/logger.js';
 import rideMatchingService from './rideMatchingService.js';
 import notificationService from './notificationService.js';
-import { offerRideToDrivers, notifyNoDriverFound } from './driverNotificationService.js';
+import { dispatchRide, notifyNoDriverFound } from './driverNotificationService.js';
 
 /**
  * Service to handle scheduled rides
@@ -78,13 +78,10 @@ class ScheduledRideService {
                     .populate('vehicleType');
                   if (!rideDoc) return;
 
-                  const assignedDriverId = await offerRideToDrivers(rideDoc, matchedDrivers);
-                  if (!assignedDriverId) {
-                    await notifyNoDriverFound(rideDoc);
-                  }
+                  await dispatchRide(rideDoc, matchedDrivers);
                 } catch (err) {
                   logger.error(
-                    `Scheduled ride offerRideToDrivers failed for ${ride._id}: ${err.message}`
+                    `Scheduled ride dispatchRide failed for ${ride._id}: ${err.message}`
                   );
                 }
               })();
@@ -119,13 +116,10 @@ class ScheduledRideService {
                     .populate('vehicleType');
                   if (!rideDoc) return;
 
-                  const assignedDriverId = await offerRideToDrivers(rideDoc, matchedDrivers);
-                  if (!assignedDriverId) {
-                    await notifyNoDriverFound(rideDoc);
-                  }
+                  await dispatchRide(rideDoc, matchedDrivers);
                 } catch (err) {
                   logger.error(
-                    `Overdue scheduled ride offerRideToDrivers failed for ${ride._id}: ${err.message}`
+                    `Overdue scheduled ride dispatchRide failed for ${ride._id}: ${err.message}`
                   );
                 }
               })();

@@ -640,7 +640,11 @@ export default function HomeScreen() {
               return 0;
             })(),
             status: bookingData.status || 'requested',
-            payment_method: bookingData.payment_method || bookingData.payment_type || 'cash',
+            payment_method:
+              bookingData.payment_method ||
+              (bookingData as any).paymentMethod ||
+              bookingData.payment_type ||
+              'wallet',
             cost: (() => {
               if (typeof bookingData.fare === 'number') return String(bookingData.fare);
               if (typeof bookingData.cost === 'number') return String(bookingData.cost);
@@ -1532,7 +1536,11 @@ export default function HomeScreen() {
           return 0;
         })(),
         status: bookingData.status || 'requested',
-        payment_method: bookingData.payment_method || bookingData.payment_type || 'cash',
+        payment_method:
+          bookingData.payment_method ||
+          (bookingData as any).paymentMethod ||
+          bookingData.payment_type ||
+          'wallet',
         cost: (() => {
           if (typeof bookingData.fare === 'number') return bookingData.fare;
           if (typeof bookingData.cost === 'number') return bookingData.cost;
@@ -1596,7 +1604,11 @@ export default function HomeScreen() {
           scheduled_at: bookingData.scheduled_at,
           fare: bookingData.fare || bookingData.cost || 0,
           status: bookingData.status || 'requested',
-          payment_method: bookingData.payment_method || bookingData.payment_type || 'cash',
+        payment_method:
+          bookingData.payment_method ||
+          (bookingData as any).paymentMethod ||
+          bookingData.payment_type ||
+          'wallet',
           cost: bookingData.fare || bookingData.cost || 0,
           is_started: bookingData.is_started || bookingData.is_ride_started || false,
           // Passenger/Rider information (for driver view)
