@@ -4,6 +4,7 @@
  * - requireDriverKycVerified: driver must have kyc_status = verified (blocks ride acceptance)
  */
 import User from '../models/User.js';
+import Driver from '../models/Driver.js';
 import { AuthorizationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 
@@ -42,8 +43,24 @@ export const requireDriverKycVerified = asyncHandler(async (req, res, next) => {
     return next(new AuthorizationError('Please complete driver onboarding'));
   }
 
+  /**
+   * Some environments migrated driver verification onto the Driver profile
+   * (`documentsVerified` + `verificationStatus`) while User.kycStatus may lag behind.
+   * Allow ride acceptance when either gate says "verified/approved".
+   */
   if (user.kycStatus !== 'verified') {
-    return next(new AuthorizationError('KYC verification pending. You cannot accept rides until approved.'));
+    const driver = await Driver.findOne({ user: user._id })
+      .select('documentsVerified verificationStatus')
+      .lean();
+    const driverApproved =
+      !!driver?.documentsVerified && driver?.verificationStatus === 'approved';
+    if (!driverApproved) {
+      return next(
+        new AuthorizationError(
+          'KYC verification pending. You cannot accept rides until approved.'
+        )
+      );
+    }
   }
 
   next();

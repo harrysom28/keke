@@ -455,11 +455,11 @@ export const validationRules = {
 
   // Accept ride
   acceptRide: [
-    body('rideId')
+    body('offerId')
       .notEmpty()
-      .withMessage('Ride ID is required')
+      .withMessage('offerId is required')
       .isMongoId()
-      .withMessage('Invalid ride ID'),
+      .withMessage('Invalid offerId'),
   ],
 
   ackRideOffer: [

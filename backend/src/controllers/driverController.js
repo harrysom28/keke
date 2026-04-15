@@ -24,10 +24,12 @@ import rideMatchingService from '../services/rideMatchingService.js';
 import { ensureWalletDayStats, getOrCreateWallet } from '../services/walletService.js';
 import { formatOnlineDurationMs } from '../utils/driverOnlineTime.js';
 import {
-  offerRideToDrivers,
+  dispatchRide,
   notifyNoDriverFound,
   cancelUnacceptedRide,
 } from '../services/driverNotificationService.js';
+import RideOffer from '../models/RideOffer.js';
+import mongoose from 'mongoose';
 
 /**
  * Map multipart field name from mobile / driver create to upload category.
@@ -1123,7 +1125,7 @@ export const ackRideOffer = asyncHandler(async (req, res) => {
  */
 export const acceptRide = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { rideId } = req.body;
+  const { offerId } = req.body;
 
   const driver = await Driver.findOne({ user: userId });
   if (!driver) {
@@ -1142,38 +1144,95 @@ export const acceptRide = asyncHandler(async (req, res) => {
   }
 
   const acceptedAt = new Date();
-  const ride = await Ride.findOneAndUpdate(
-    { _id: rideId, status: { $in: ['searching', 'requested'] }, driver: null },
-    {
-      $set: {
-        driver: driver._id,
-        status: 'accepted',
-        acceptedAt,
-        acceptedByDriver: true,
-      },
-      $push: {
-        statusHistory: {
+
+  // Offer-based lock: atomic accept using a DB transaction to ensure only one driver wins.
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  let ride;
+  try {
+    const offer = await RideOffer.findById(offerId).session(session);
+    if (!offer) {
+      await session.abortTransaction();
+      session.endSession();
+      throw new NotFoundError('Offer');
+    }
+
+    if (offer.driver_id.toString() !== driver._id.toString()) {
+      await session.abortTransaction();
+      session.endSession();
+      throw new ConflictError('You are not authorized to accept this offer');
+    }
+
+    if (offer.status !== 'pending') {
+      await session.abortTransaction();
+      session.endSession();
+      throw new ConflictError('Offer already used');
+    }
+
+    if (Date.now() > new Date(offer.expires_at).getTime()) {
+      offer.status = 'expired';
+      offer.expired_at = new Date();
+      await offer.save({ session });
+      await session.commitTransaction();
+      session.endSession();
+      throw new ConflictError('Offer expired');
+    }
+
+    // Lock the ride (only if still in matching and unassigned).
+    ride = await Ride.findOneAndUpdate(
+      { _id: offer.ride_id, status: { $in: ['searching', 'requested'] }, driver: null },
+      {
+        $set: {
+          driver: driver._id,
           status: 'accepted',
-          timestamp: acceptedAt,
-          note: `Accepted by driver ${driver._id}`,
+          acceptedAt,
+          acceptedByDriver: true,
+        },
+        $push: {
+          statusHistory: {
+            status: 'accepted',
+            timestamp: acceptedAt,
+            note: `Accepted by driver ${driver._id} via offer ${offer._id}`,
+          },
         },
       },
-    },
-    { new: true }
-  );
+      { new: true, session }
+    );
 
-  if (!ride) {
-    throw new ConflictError('Ride is no longer available or already assigned');
+    if (!ride) {
+      offer.status = 'expired';
+      offer.expired_at = new Date();
+      await offer.save({ session });
+      await session.commitTransaction();
+      session.endSession();
+      throw new ConflictError('Ride already taken');
+    }
+
+    // Mark winning offer accepted.
+    offer.status = 'accepted';
+    offer.accepted_at = acceptedAt;
+    await offer.save({ session });
+
+    // Expire all other pending offers for this ride.
+    await RideOffer.updateMany(
+      { ride_id: ride._id, status: 'pending', _id: { $ne: offer._id } },
+      { $set: { status: 'expired', expired_at: new Date() } },
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+  } catch (e) {
+    try {
+      await session.abortTransaction();
+    } catch {}
+    session.endSession();
+    throw e;
   }
 
-  await Ride.updateOne(
-    { _id: ride._id, 'offerTracking.driver': driver._id },
-    { $set: { 'offerTracking.$.acceptedAt': acceptedAt } }
-  ).catch(() => {});
+  logger.info(`offer_accepted: offer=${offerId} ride=${ride._id} driver=${driver._id}`);
 
   logRideLifecycle(logger, ride, { event: 'driver_accept', driverUserId: userId.toString() });
-
-  await cache.set(`ride_accepted:${rideId}`, driver._id.toString(), 30);
 
   await ride.populate('rider', 'name phone profileImage rating deviceToken');
   await ride.populate('vehicleType');
@@ -1238,7 +1297,7 @@ export const acceptRide = asyncHandler(async (req, res) => {
     // Don't fail ride acceptance if statistics update fails
   }
 
-  logger.info(`Ride ${rideId} accepted by driver ${driver._id}`);
+  logger.info(`Ride ${ride._id} accepted by driver ${driver._id}`);
 
   res.json({
     status: 'success',
@@ -1353,15 +1412,7 @@ export const rejectRide = asyncHandler(async (req, res) => {
           if (!rideDoc) return;
           const matchedDrivers = await rideMatchingService.findAndMatchDrivers(rideDoc, 10, 5);
           if (matchedDrivers.length > 0) {
-            const assignedDriverId = await offerRideToDrivers(rideDoc, matchedDrivers);
-            if (!assignedDriverId) {
-              const fresh = await Ride.findById(ride._id).populate('rider');
-              if (fresh && (fresh.status === 'searching' || fresh.status === 'requested') && !fresh.driver) {
-                await cancelUnacceptedRide(fresh._id);
-                const after = await Ride.findById(ride._id).populate('rider');
-                if (after) await notifyNoDriverFound(after);
-              }
-            }
+          await dispatchRide(rideDoc, matchedDrivers);
           } else {
             await cancelUnacceptedRide(rideDoc._id);
             const after = await Ride.findById(ride._id).populate('rider');

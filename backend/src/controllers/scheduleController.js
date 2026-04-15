@@ -144,7 +144,6 @@ export const acceptScheduledBooking = asyncHandler(async (req, res) => {
   });
 
   await ride.save();
-  await cache.set(`ride_accepted:${rideId}`, driver._id.toString(), 30);
   await ride.populate('rider', 'name phone profileImage rating');
   await ride.populate('vehicleType');
 

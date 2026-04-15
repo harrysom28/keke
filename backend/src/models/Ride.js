@@ -65,6 +65,13 @@ const rideSchema = new mongoose.Schema(
       ],
       default: 'requested',
     },
+    /**
+     * Dispatch attempt counter (offer-based dispatch).
+     * We keep this minimal and do not implement retry loops here.
+     */
+    attempts: { type: Number, default: 0 },
+    /** Idempotency flag: ensure "no driver found" is emitted only once per ride. */
+    noDriverNotified: { type: Boolean, default: false },
     acceptedByDriver: {
       type: Boolean,
       default: false,

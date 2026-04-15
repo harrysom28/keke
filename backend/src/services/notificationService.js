@@ -829,7 +829,13 @@ export const evaluateTargetingRules = async (rules = {}, userId, userRole) => {
   }
 };
 
-export const dispatchToUser = async (notification, userId, userRole, fcmToken = '') => {
+export const dispatchToUser = async (
+  notification,
+  userId,
+  userRole,
+  fcmToken = '',
+  options = {}
+) => {
   try {
     if (!notification || !userId) {
       return null;
@@ -908,13 +914,25 @@ export const dispatchToUser = async (notification, userId, userRole, fcmToken = 
       };
 
       try {
-        await sendPushWithRetry(
-          fcmToken,
-          notification.title,
-          notification.message,
-          firebasePayload.data,
-          String(userId)
-        );
+        const disableRetry =
+          options?.disable_retry === true || options?.disableRetry === true;
+        if (disableRetry) {
+          await sendPushNotification(
+            fcmToken,
+            notification.title,
+            notification.message,
+            firebasePayload.data,
+            String(userId)
+          );
+        } else {
+          await sendPushWithRetry(
+            fcmToken,
+            notification.title,
+            notification.message,
+            firebasePayload.data,
+            String(userId)
+          );
+        }
       } catch (error) {
         logger.error(`Failed to dispatch push notification: ${error.message}`);
       }
@@ -935,14 +953,17 @@ export const sendToUser = async (userId, userRole, notifPayload) => {
     }
 
     const normalizedRole = normalizeUserRole(userRole || user.role);
+    const { disable_retry, disableRetry, ...restPayload } = notifPayload || {};
     const notification = await createNotification({
-      ...notifPayload,
+      ...restPayload,
       target_role: normalizedRole,
       target_user_id: user._id,
       is_global: false,
     });
 
-    await dispatchToUser(notification, user._id, normalizedRole, getUserFcmToken(user));
+    await dispatchToUser(notification, user._id, normalizedRole, getUserFcmToken(user), {
+      disable_retry: disable_retry ?? disableRetry,
+    });
     return notification;
   } catch (error) {
     logger.error(`sendToUser failed: ${error.message}`);

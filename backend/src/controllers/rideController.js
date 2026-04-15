@@ -11,7 +11,7 @@ import logger from '../utils/logger.js';
 import rideMatchingService from '../services/rideMatchingService.js';
 import surgePricingService from '../services/surgePricingService.js';
 import {
-  offerRideToDrivers,
+  dispatchRide,
   notifyNoDriverFound,
   cancelUnacceptedRide,
 } from '../services/driverNotificationService.js';
@@ -247,17 +247,9 @@ export const requestRide = asyncHandler(async (req, res) => {
       setImmediate(() => {
         (async () => {
           try {
-            const assignedDriverId = await offerRideToDrivers(ride, matchedDrivers);
-            if (!assignedDriverId) {
-              const fresh = await Ride.findById(ride._id).populate('rider');
-              if (fresh && (fresh.status === 'searching' || fresh.status === 'requested') && !fresh.driver) {
-                await cancelUnacceptedRide(fresh._id);
-                const after = await Ride.findById(ride._id).populate('rider');
-                if (after) await notifyNoDriverFound(after);
-              }
-            }
+            await dispatchRide(ride, matchedDrivers);
           } catch (err) {
-            logger.error(`offerRideToDrivers error for ride ${ride._id}: ${err.message}`);
+            logger.error(`dispatchRide error for ride ${ride._id}: ${err.message}`);
           }
         })();
       });
