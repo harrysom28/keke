@@ -4,7 +4,7 @@ import * as driverController from '../controllers/driverController.js';
 import * as payoutController from '../controllers/payoutController.js';
 import * as driverSecurityController from '../controllers/driverSecurityController.js';
 import { protect, restrictTo } from '../middleware/auth.js';
-import { requireDriverKycVerified } from '../middleware/onboarding.js';
+import { requireDriverApproved, requireBankDetails } from '../middleware/onboarding.js';
 import {
   requireTransactionPin,
   checkDeviceTrust,
@@ -62,6 +62,8 @@ router.get('/wallet', payoutController.getMyWallet);
 router.get('/payouts', payoutController.getMyPayouts);
 router.post(
   '/payout/request',
+  requireDriverApproved,
+  requireBankDetails,
   requireTransactionPin,
   checkDeviceTrust,
   riskEngine,
@@ -72,8 +74,8 @@ router.post(
 
 // Ride management
 router.get('/rides/pending', driverController.getPendingRides);
-router.post('/rides/ack-request', requireDriverKycVerified, validationRules.ackRideOffer, validate, driverController.ackRideOffer);
-router.post('/rides/accept', requireDriverKycVerified, validationRules.acceptRide, validate, driverController.acceptRide);
+router.post('/rides/ack-request', requireDriverApproved, validationRules.ackRideOffer, validate, driverController.ackRideOffer);
+router.post('/rides/accept', requireDriverApproved, validationRules.acceptRide, validate, driverController.acceptRide);
 router.post('/rides/cancel', validationRules.rejectRide, validate, driverController.rejectRide);
 router.post('/rides/arrived', validationRules.markArrived, validate, driverController.markArrived);
 router.post('/rides/start', validationRules.startRide, validate, driverController.startRide);

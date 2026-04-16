@@ -2,6 +2,7 @@ import express from 'express';
 import * as paymentController from '../controllers/paymentController.js';
 import * as walletFundingController from '../controllers/walletFundingController.js';
 import { protect } from '../middleware/auth.js';
+import { requireDriverApproved, requireBankDetails } from '../middleware/onboarding.js';
 import { validationRules, validate } from '../middleware/validation.js';
 import { limiters } from '../middleware/rateLimiter.js';
 
@@ -27,7 +28,7 @@ router.post('/payment/confirm', validationRules.confirmStripePayment, validate, 
 // Wallet operations (matching mobile app endpoints)
 router.post('/user/payment/for-ride', limiters.walletOpsLimiter, validationRules.payForRide, validate, paymentController.payForRideWithWallet);
 router.post('/user/profile/topup', limiters.walletOpsLimiter, validationRules.topUpWallet, validate, paymentController.topUpWallet);
-router.post('/user/balance/withdraw', limiters.walletOpsLimiter, validationRules.withdrawBalance, validate, paymentController.withdrawBalance);
+router.post('/user/balance/withdraw', limiters.walletOpsLimiter, requireDriverApproved, requireBankDetails, validationRules.withdrawBalance, validate, paymentController.withdrawBalance);
 
 // Change retrieval (matching mobile app endpoint)
 router.get('/user/ride/retrieve-change', paymentController.retrieveChange);

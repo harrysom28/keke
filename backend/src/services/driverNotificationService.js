@@ -198,7 +198,7 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
 
   const driverDocs = await Promise.all(
     driverIds.map((id) =>
-      Driver.findById(id).populate('user', 'name deviceToken fcm_token onboardingStage kycStatus role')
+      Driver.findById(id).populate('user', 'name deviceToken fcm_token role')
     )
   );
 

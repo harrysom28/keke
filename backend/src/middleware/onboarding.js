@@ -1,16 +1,17 @@
 /**
- * Onboarding enforcement middleware
- * - requireRiderComplete: rider must have onboarding_stage = rider_complete
- * - requireDriverKycVerified: driver must have kyc_status = verified (blocks ride acceptance)
+ * Authorization middleware.
+ *
+ * Driver approval source of truth: Driver.verificationStatus === 'approved'
+ * No dependency on User.onboardingStage or User.kycStatus for authorization.
  */
 import User from '../models/User.js';
 import Driver from '../models/Driver.js';
-import { AuthorizationError } from '../utils/errors.js';
-import { asyncHandler } from '../utils/errors.js';
+import { AuthorizationError, asyncHandler } from '../utils/errors.js';
+import logger from '../utils/logger.js';
 
 /**
- * Require rider to have completed onboarding
- * Use on: book ride, request ride
+ * Require rider to have completed onboarding.
+ * Use on: book ride, request ride.
  */
 export const requireRiderComplete = asyncHandler(async (req, res, next) => {
   const user = await User.findById(req.user._id).select('role onboardingStage');
@@ -28,40 +29,54 @@ export const requireRiderComplete = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * Require driver to have KYC verified before accepting rides
- * Use on: accept ride, go online (if we gate that)
+ * Require driver to be admin-approved before accepting rides.
+ * Single source of truth: Driver.verificationStatus === 'approved'.
+ * No dependency on User.onboardingStage or User.kycStatus.
  */
-export const requireDriverKycVerified = asyncHandler(async (req, res, next) => {
-  const user = await User.findById(req.user._id).select('role kycStatus onboardingStage');
-  if (!user) return next(new AuthorizationError('User not found'));
-
-  if (user.role !== 'driver') {
-    return next(new AuthorizationError('Not a driver'));
-  }
-
-  if (user.onboardingStage !== 'driver_complete') {
-    return next(new AuthorizationError('Please complete driver onboarding'));
-  }
-
-  /**
-   * Some environments migrated driver verification onto the Driver profile
-   * (`documentsVerified` + `verificationStatus`) while User.kycStatus may lag behind.
-   * Allow ride acceptance when either gate says "verified/approved".
-   */
-  if (user.kycStatus !== 'verified') {
-    const driver = await Driver.findOne({ user: user._id })
-      .select('documentsVerified verificationStatus')
+export const requireDriverApproved = async (req, res, next) => {
+  try {
+    const driver = await Driver.findOne({ user: req.user._id })
+      .select('verificationStatus')
       .lean();
-    const driverApproved =
-      !!driver?.documentsVerified && driver?.verificationStatus === 'approved';
-    if (!driverApproved) {
-      return next(
-        new AuthorizationError(
-          'KYC verification pending. You cannot accept rides until approved.'
-        )
-      );
-    }
-  }
 
-  next();
-});
+    if (!driver || driver.verificationStatus !== 'approved') {
+      logger.warn('requireDriverApproved: blocked', {
+        userId: req.user._id,
+        verificationStatus: driver?.verificationStatus ?? 'no_profile',
+      });
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Your account is pending admin approval. You will be notified once approved.',
+      });
+    }
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Require driver to have bank account details on file before withdrawing.
+ * Use on: withdrawal routes only — does not block ride acceptance.
+ */
+export const requireBankDetails = async (req, res, next) => {
+  try {
+    const driver = await Driver.findOne({ user: req.user._id })
+      .select('bankAccount')
+      .lean();
+
+    const bank = driver?.bankAccount;
+    if (!bank?.accountNumber || !bank?.bankName || !bank?.accountName) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Please add your bank account details before withdrawing.',
+        code: 'BANK_DETAILS_REQUIRED',
+      });
+    }
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+};

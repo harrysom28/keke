@@ -24,7 +24,7 @@ export interface UseDriverRequestTimeoutOptions {
   cooldownMs?: number;
 }
 
-const DEFAULT_PER_DRIVER = 30;
+const DEFAULT_PER_DRIVER = 60;
 const DEFAULT_MAX_RETRIES = 4;
 const DEFAULT_COOLDOWN_MS = 4000;
 

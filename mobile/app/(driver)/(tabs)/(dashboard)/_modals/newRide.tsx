@@ -210,7 +210,39 @@ const NewRide = ({
         getActiveRide();
         showMessage({ type: "success", message: data?.message });
       })
-      .catch(handleRideApiError)
+      .catch((err: unknown) => {
+        const status = (err as any)?.response?.status;
+        if (status === 403) {
+          // Middleware blocked the request — surface the server reason clearly.
+          const serverMsg: string = (err as any)?.response?.data?.message ?? "";
+          const isKyc =
+            serverMsg.toLowerCase().includes("kyc") ||
+            serverMsg.toLowerCase().includes("verification") ||
+            serverMsg.toLowerCase().includes("onboarding");
+          showMessage({
+            type: "warning",
+            message: isKyc
+              ? "Your account isn't cleared to accept rides yet. Contact support if you believe this is a mistake."
+              : serverMsg || "You are not authorized to accept this ride.",
+            duration: 5000,
+          });
+        } else if (status === 404) {
+          showMessage({ type: "info", message: "This ride is no longer available." });
+          onOfferResolved?.();
+        } else if (status === 409) {
+          // Expired offer, already taken, or duplicate accept — all safe to dismiss silently.
+          showMessage({
+            type: "info",
+            message:
+              (err as any)?.response?.data?.message === "Offer expired"
+                ? "This offer has expired."
+                : "This ride was already accepted by another driver.",
+          });
+          onOfferResolved?.();
+        } else {
+          handleRideApiError(err);
+        }
+      })
       .finally(() => setLoading((prev) => ({ ...prev, accept: false })));
   };
   const RejectRide = () => {
