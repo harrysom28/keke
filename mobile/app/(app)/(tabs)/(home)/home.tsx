@@ -162,6 +162,10 @@ export default function HomeScreen() {
   const milestoneToastShownRef = useRef(false);
   /** Dedupe heavy UI (sheet open, map fit, trigger) when active-ride polls return the same logical state */
   const lastActiveRideUiKeyRef = useRef<string>("");
+  /** Set to true right after confirm-ride succeeds so a null active-ride response doesn't immediately
+   *  wipe state — the DB write may still be propagating (replica lag) or the first poll fires too fast. */
+  const justBookedRef = useRef(false);
+  const justBookedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationRef = useRef({ latitude: 0, longitude: 0 });
   const { location, address, loading: locationLoading, locationError, getLocation: refreshLocation } = useCurrentLocation({ isFocused });
 
@@ -843,18 +847,24 @@ export default function HomeScreen() {
       .get("booking/active-ride")
       .then(({ data }) => {
         clearTimeout(timeoutId);
-        // Try multiple response structures
-        const rideData = data?.data?.ride || data?.ride || data?.data || {};
+        // Try multiple response structures.
+        // Intentionally NOT falling back to data?.data — that would pick up the
+        // wrapper object { ride: null } when the backend returns no active ride,
+        // making it look like a ride exists but with no ride_id.
+        const rideData = data?.data?.ride || data?.ride || {};
 
         if (Object.keys(rideData).length > 0 && (rideData?.ride_id || rideData?._id)) {
           const rideStatusRaw = rideData?.status;
           const rideStatus =
             typeof rideStatusRaw === "string" ? rideStatusRaw.toLowerCase() : String(rideStatusRaw || "").toLowerCase();
           const terminalStatuses = ["completed", "cancelled", "rejected"];
-          /** Matches backend findActiveRideForRider: requested, accepted, arrived, in-progress; include started aliases */
+          /** Matches backend findActiveRideForRider statuses; include both raw DB values and
+           *  client-mapped aliases so the guard works regardless of which the API returns. */
           const restorableStatuses = [
             "requested",
+            "searching",       // raw DB status (mapped to "requested" by backend API)
             "accepted",
+            "driver_en_route", // raw DB status (mapped to "accepted" by backend API)
             "arrived",
             "started",
             "in-progress",
@@ -905,6 +915,13 @@ export default function HomeScreen() {
             logger.debug("Active ride unchanged (skipping sheet re-open / map refit)", { rideId });
           }
 
+          // Ride confirmed — cancel any grace-period timer and clear the flag.
+          justBookedRef.current = false;
+          if (justBookedTimerRef.current) {
+            clearTimeout(justBookedTimerRef.current);
+            justBookedTimerRef.current = null;
+          }
+
           setTemp(rideData as TRide);
           setRide({
             screen: "WAITING",
@@ -926,6 +943,14 @@ export default function HomeScreen() {
           }
         } else {
           logger.debug('No active ride found or invalid data');
+          if (justBookedRef.current) {
+            // We just confirmed a ride — the backend write may not yet be visible
+            // to this read (replica lag / first-poll race). Retry once after a
+            // short delay rather than wiping the freshly-booked UI state.
+            logger.debug('Grace period active: skipping clear, retrying active-ride in 3 s');
+            setTimeout(getActiveRide, 3_000);
+            return;
+          }
           clearRideState();
           activeRideSheetRef?.current?.close();
         }
@@ -2423,6 +2448,14 @@ export default function HomeScreen() {
           getActiveRide={getActiveRide}
           onSheetClose={() => setInitialDropoff(null)}
           initialDropoff={initialDropoff}
+          onRideBooked={() => {
+            justBookedRef.current = true;
+            if (justBookedTimerRef.current) clearTimeout(justBookedTimerRef.current);
+            // Auto-clear after 30 s so stale grace periods don't persist forever.
+            justBookedTimerRef.current = setTimeout(() => {
+              justBookedRef.current = false;
+            }, 30_000);
+          }}
         />
       </Portal>
       <Portal>

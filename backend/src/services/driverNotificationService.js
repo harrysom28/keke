@@ -8,9 +8,14 @@ import RideOffer from '../models/RideOffer.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import { processCancellation } from './escrowWalletService.js';
 import { MATCHING_STATUSES } from '../utils/rideStatus.js';
+import rideMatchingService from './rideMatchingService.js';
 
 const OFFER_WINDOW_MS = 60_000;
 const DEFAULT_MAX_OFFERS = 6;
+/** Stop dispatching after this many rounds regardless of available drivers. */
+const MAX_DISPATCH_ATTEMPTS = 3;
+/** Hard deadline: cancel the ride if it has been searching this long. */
+const RIDE_MAX_AGE_MS = 10 * 60 * 1_000; // 10 minutes
 
 function buildRidePayload(ride, offerId, expiresAt) {
   return {
@@ -197,11 +202,11 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
     )
   );
 
+  // Only require the driver to be online/available — KYC is enforced at acceptance time.
   const eligible = driverDocs.filter((d) => {
     if (!d?.isAvailable || !d?.isOnline) return false;
-    if (!d?.documentsVerified || d?.verificationStatus !== 'approved') return false;
     const u = d.user;
-    return u?.onboardingStage === 'driver_complete' && String(u?.role || '') === 'driver';
+    return u && String(u?.role || '') === 'driver';
   });
 
   if (eligible.length === 0) {
@@ -257,15 +262,59 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
     })
   );
 
-  // Single timeout check (60s) — no polling loops.
+  // Record every driver that received an offer so future rounds skip them.
+  await Ride.updateOne(
+    { _id: ride._id },
+    { $addToSet: { notifiedDriverIds: { $each: eligible.map((d) => d._id) } } }
+  ).catch((err) => logger.warn(`notifiedDriverIds update failed for ride ${ride._id}: ${err.message}`));
+
+  // After the offer window, either retry with fresh drivers or terminate.
   setTimeout(() => {
     (async () => {
       try {
-        const r = await Ride.findById(ride._id).select('status driver noDriverNotified').lean();
-        if (!r) return;
-        if (r.driver || r.status === 'accepted') return;
-        if (r.noDriverNotified) return;
-        await sendNoDriverFoundOnce(ride._id);
+        const r = await Ride.findById(ride._id)
+          .select('status driver noDriverNotified attempts createdAt notifiedDriverIds')
+          .lean();
+        if (!r || r.driver || r.status === 'accepted' || r.noDriverNotified) return;
+
+        const rideAge = Date.now() - new Date(r.createdAt).getTime();
+        const tooManyAttempts = r.attempts >= MAX_DISPATCH_ATTEMPTS;
+        const tooOld = rideAge > RIDE_MAX_AGE_MS;
+
+        if (tooManyAttempts || tooOld) {
+          logger.info(
+            `dispatchRide: giving up on ride ${r._id} ` +
+            `(attempts=${r.attempts}/${MAX_DISPATCH_ATTEMPTS}, age=${Math.round(rideAge / 1000)}s)`
+          );
+          await sendNoDriverFoundOnce(ride._id);
+          return;
+        }
+
+        // Find a fresh batch of drivers, excluding everyone already notified.
+        const excludeIds = (r.notifiedDriverIds || []).map(String);
+        const freshRide = await Ride.findById(ride._id)
+          .populate('rider', 'name rating')
+          .lean();
+        if (!freshRide) return;
+
+        const newDrivers = await rideMatchingService.findAndMatchDrivers(
+          freshRide,
+          10,
+          DEFAULT_MAX_OFFERS,
+          excludeIds
+        );
+
+        if (newDrivers.length === 0) {
+          logger.info(`dispatchRide: no fresh drivers for ride ${ride._id}, giving up`);
+          await sendNoDriverFoundOnce(ride._id);
+          return;
+        }
+
+        logger.info(
+          `dispatchRide: retrying ride ${ride._id} with ${newDrivers.length} fresh drivers ` +
+          `(attempt ${r.attempts + 1}/${MAX_DISPATCH_ATTEMPTS})`
+        );
+        await dispatchRide(freshRide, newDrivers);
       } catch (e) {
         logger.warn(`dispatchRide timeout check failed for ride ${ride._id}: ${e.message}`);
       }

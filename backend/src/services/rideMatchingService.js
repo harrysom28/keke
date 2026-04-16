@@ -17,7 +17,10 @@ class RideMatchingService {
   /**
    * Find and match drivers for a ride request
    */
-  async findAndMatchDrivers(ride, maxDistanceKm = 10, maxDrivers = 5) {
+  /**
+   * @param {string[]} excludeDriverIds - Driver IDs to skip (already notified in prior dispatch rounds).
+   */
+  async findAndMatchDrivers(ride, maxDistanceKm = 10, maxDrivers = 5, excludeDriverIds = []) {
     try {
       const pickupLat = ride.pickupLocation.coordinates[1];
       const pickupLng = ride.pickupLocation.coordinates[0];
@@ -35,9 +38,11 @@ class RideMatchingService {
       }
 
       const rideVehicleTypeId = getVehicleTypeId(ride.vehicleType);
+      const excludeSet = new Set(excludeDriverIds.map(String));
 
-      // Filter by vehicle type (must not use .toString() on mixed ObjectId vs populated refs)
+      // Filter by vehicle type and skip already-notified drivers
       const matchingDrivers = nearbyDrivers.filter((driver) => {
+        if (excludeSet.has(driver._id.toString())) return false;
         const driverVehicleTypeId = getVehicleTypeId(driver.vehicleDetails?.vehicleType);
         return (
           rideVehicleTypeId &&

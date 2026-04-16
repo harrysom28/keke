@@ -42,6 +42,9 @@ import apiClient from "@/utils/apiClient";
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
   getActiveRide: () => void;
+  /** Called immediately after a ride is confirmed so the parent can activate its
+   *  grace-period guard and avoid clearing ride state on the first active-ride poll. */
+  onRideBooked?: () => void;
   onSheetClose?: () => void;
   initialDropoff?: {
     name: string;
@@ -50,7 +53,7 @@ interface Props {
   } | null;
 }
 
-const FindRideSheet = ({ bottomSheetRef, getActiveRide, onSheetClose, initialDropoff }: Props) => {
+const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClose, initialDropoff }: Props) => {
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
@@ -298,6 +301,10 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onSheetClose, initialDro
       
       console.log('✅ Ride created successfully:', response.data?.data);
       
+      // Activate grace period before closing so getActiveRide won't wipe state
+      // if the first poll fires before the DB write is visible on the read replica.
+      onRideBooked?.();
+
       // Close modal and reset state
       bottomSheetRef?.current?.close();
       dispatch(
