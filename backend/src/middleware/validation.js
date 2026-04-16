@@ -453,13 +453,16 @@ export const validationRules = {
       .toBoolean(),
   ],
 
-  // Accept ride
+  // Accept ride — offerId preferred; rideId accepted as fallback when offer_id is unavailable client-side
   acceptRide: [
     body('offerId')
-      .notEmpty()
-      .withMessage('offerId is required')
+      .optional({ checkFalsy: true })
       .isMongoId()
       .withMessage('Invalid offerId'),
+    body('rideId')
+      .optional({ checkFalsy: true })
+      .isMongoId()
+      .withMessage('Invalid rideId'),
   ],
 
   ackRideOffer: [

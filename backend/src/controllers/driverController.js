@@ -1125,7 +1125,11 @@ export const ackRideOffer = asyncHandler(async (req, res) => {
  */
 export const acceptRide = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { offerId } = req.body;
+  const { offerId, rideId: bodyRideId } = req.body;
+
+  if (!offerId && !bodyRideId) {
+    throw new ValidationError('offerId or rideId is required');
+  }
 
   const driver = await Driver.findOne({ user: userId });
   if (!driver) {
@@ -1150,7 +1154,16 @@ export const acceptRide = asyncHandler(async (req, res) => {
   session.startTransaction();
   let ride;
   try {
-    const offer = await RideOffer.findById(offerId).session(session);
+    // Prefer offerId for direct lookup; fall back to rideId+driverId when client
+    // doesn't have the offer_id (e.g. push notification opened stale ride data).
+    const offer = offerId
+      ? await RideOffer.findById(offerId).session(session)
+      : await RideOffer.findOne({
+          ride_id: bodyRideId,
+          driver_id: driver._id,
+          status: 'pending',
+        }).session(session);
+
     if (!offer) {
       await session.abortTransaction();
       session.endSession();
@@ -1230,7 +1243,7 @@ export const acceptRide = asyncHandler(async (req, res) => {
     throw e;
   }
 
-  logger.info(`offer_accepted: offer=${offerId} ride=${ride._id} driver=${driver._id}`);
+  logger.info(`offer_accepted: offer=${offerId ?? bodyRideId + '(by_rideId)'} ride=${ride._id} driver=${driver._id}`);
 
   logRideLifecycle(logger, ride, { event: 'driver_accept', driverUserId: userId.toString() });
 
