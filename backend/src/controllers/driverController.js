@@ -1144,6 +1144,16 @@ export const acceptRide = asyncHandler(async (req, res) => {
   // Check if driver has active ride
   const activeRide = await Ride.findActiveRideForDriver(driver._id);
   if (activeRide) {
+    // Idempotency: if this is a retry for the same ride (already accepted), return success.
+    const targetRideId = bodyRideId ?? null;
+    if (targetRideId && activeRide._id.toString() === targetRideId) {
+      logger.info(`acceptRide idempotent (active ride match): driver=${driver._id} ride=${activeRide._id}`);
+      return res.json({
+        status: 'success',
+        message: 'Ride accepted',
+        data: { ride: formatDriverRideResponse(activeRide) },
+      });
+    }
     throw new ConflictError('Driver already has an active ride');
   }
 
@@ -1179,6 +1189,20 @@ export const acceptRide = asyncHandler(async (req, res) => {
     if (offer.status !== 'pending') {
       await session.abortTransaction();
       session.endSession();
+      // Idempotency: if this driver's offer was already accepted, find their ride and return success.
+      if (offer.status === 'accepted') {
+        const existingRide = await Ride.findOne({ _id: offer.ride_id, driver: driver._id })
+          .populate('rider', 'name phone profileImage rating')
+          .populate('vehicleType');
+        if (existingRide) {
+          logger.info(`acceptRide idempotent (offer accepted): driver=${driver._id} ride=${existingRide._id}`);
+          return res.json({
+            status: 'success',
+            message: 'Ride accepted',
+            data: { ride: formatDriverRideResponse(existingRide) },
+          });
+        }
+      }
       throw new ConflictError('Offer already used');
     }
 
@@ -1218,6 +1242,18 @@ export const acceptRide = asyncHandler(async (req, res) => {
       await offer.save({ session });
       await session.commitTransaction();
       session.endSession();
+      // Idempotency: ride might already be assigned to this driver from a previous request.
+      const takenRide = await Ride.findOne({ _id: offer.ride_id, driver: driver._id })
+        .populate('rider', 'name phone profileImage rating')
+        .populate('vehicleType');
+      if (takenRide) {
+        logger.info(`acceptRide idempotent (ride already taken by self): driver=${driver._id} ride=${takenRide._id}`);
+        return res.json({
+          status: 'success',
+          message: 'Ride accepted',
+          data: { ride: formatDriverRideResponse(takenRide) },
+        });
+      }
       throw new ConflictError('Ride already taken');
     }
 
