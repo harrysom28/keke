@@ -92,7 +92,8 @@ export const errorHandler = (err, req, res, next) => {
   if (err instanceof mongoose.Error.ValidationError) {
     const messages = Object.values(err.errors).map((e) => {
       if (e.kind === 'enum') {
-        return 'Your account has outdated data. Please contact support or try logging in again.';
+        // Generic but accurate: enum mismatch can be triggered by many models, not just user accounts.
+        return `${e.path} is invalid`;
       }
       if (e.kind === 'required') {
         return `${e.path} is required`;

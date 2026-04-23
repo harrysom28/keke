@@ -1641,6 +1641,14 @@ export const markArrived = asyncHandler(async (req, res) => {
       : 'No location data found for driver at time of arrival mark';
   }
 
+  // Safety: ensure enum-safe value even if upstream logic changes.
+  const ALLOWED_PROXIMITY = new Set(['confirmed', 'probable', 'unlikely', 'unverifiable', 'blocked']);
+  if (!ALLOWED_PROXIMITY.has(proximityStatus)) {
+    ride.arrival_flagged = true;
+    ride.arrival_flag_reason = `Invalid proximity status "${String(proximityStatus)}" on arrival; coerced to unverifiable`;
+    proximityStatus = 'unverifiable';
+  }
+
   // CHECK 7: Log everything for dispute resolution
   ride.arrival_coordinates = hasLocationData
     ? { lat: coords[1], lng: coords[0] }
