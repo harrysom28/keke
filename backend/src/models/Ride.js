@@ -73,7 +73,7 @@ const rideSchema = new mongoose.Schema(
      */
     completed_by: {
       type: String,
-      enum: ['driver', 'rider', 'admin', 'system'],
+      enum: ['driver', 'rider', 'admin', 'system', null],
       default: null,
     },
     completion_reason: {
@@ -404,7 +404,7 @@ rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee 
     timestamp: new Date(),
     note: `Cancelled by ${cancelledBy}: ${reason || 'No reason provided'}`,
   });
-  await this.save();
+  await this.save({ validateBeforeSave: false });
 };
 
 // Static method to find active ride for rider
