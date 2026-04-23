@@ -443,6 +443,21 @@ rideSchema.statics.findActiveRideForDriver = async function (driverId) {
     .sort({ createdAt: -1 });
 };
 
+// Strip legacy/invalid enum values before validation to prevent
+// old documents from blocking saves on unrelated updates.
+rideSchema.pre('validate', function (next) {
+  const validCompletedBy = ['driver', 'rider', 'admin', 'system'];
+  const validCompletionReason = ['normal', 'force', 'timeout', 'issue_flagged', 'admin_resolved'];
+
+  if (this.completed_by !== null && !validCompletedBy.includes(this.completed_by)) {
+    this.completed_by = null;
+  }
+  if (this.completion_reason !== null && !validCompletionReason.includes(this.completion_reason)) {
+    this.completion_reason = null;
+  }
+  next();
+});
+
 const Ride = mongoose.model('Ride', rideSchema);
 
 export default Ride;
