@@ -26,11 +26,16 @@ import {
   processCancellation,
   EscrowWalletError,
 } from '../services/escrowWalletService.js';
+import SupportTicket from '../models/SupportTicket.js';
+import { logRideAudit } from '../services/rideAuditLogService.js';
 
 const normalizeRideCurrency = (currency) => {
   const normalized = String(currency || 'NGN').toUpperCase();
   return normalized === 'USD' ? 'NGN' : normalized;
 };
+
+/** Driver geosearch radius (km) for new requests — keep aligned with `search_radius_km` in `formatRideResponse`. */
+const RIDER_MATCH_SEARCH_RADIUS_KM = 10;
 
 /**
  * Request ride - matches mobile app endpoint /api/booking/request-ride
@@ -229,7 +234,11 @@ export const requestRide = asyncHandler(async (req, res) => {
   await ride.populate('vehicleType', 'name displayName image');
 
   // Find and match drivers using ride matching algorithm
-  const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, 10, 5);
+  const matchedDrivers = await rideMatchingService.findAndMatchDrivers(
+    ride,
+    RIDER_MATCH_SEARCH_RADIUS_KM,
+    5
+  );
   
   logger.info(`Found ${matchedDrivers.length} matched drivers for ride ${ride._id}`);
 
@@ -1071,6 +1080,12 @@ const formatRideResponse = (ride) => {
     arrival_time: ride.arrivalTime?.toString() || null,
     distance: ride.distance?.value || 0,
     duration: ride.duration?.estimated || 0,
+    /** Count of drivers notified for this ride (matches initial match + later rounds). */
+    drivers_notified: Array.isArray(ride.notifiedDriverIds)
+      ? ride.notifiedDriverIds.length
+      : 0,
+    /** Initial geosearch radius (km) — same as `RIDER_MATCH_SEARCH_RADIUS_KM` / `findAndMatchDrivers`. */
+    search_radius_km: RIDER_MATCH_SEARCH_RADIUS_KM,
     scheduled_at: ride.scheduledAt ? ride.scheduledAt.toISOString() : null, // Include scheduled time
     is_scheduled: ride.isScheduled || false, // Include scheduled flag
     createdAt: ride.createdAt,
@@ -1312,3 +1327,184 @@ const formatDriverRideResponse = (ride) => {
     createdAt: ride.createdAt,
   };
 };
+
+function stopRideAutomationTimers(rideId) {
+  const id = rideId?.toString?.() || String(rideId || '');
+  if (!id) return;
+  if (global.automationTimers && global.automationTimers.has(id)) {
+    const timers = global.automationTimers.get(id);
+    timers.forEach((t) => clearTimeout(t));
+    global.automationTimers.delete(id);
+    logger.info(`🧹 Stopped automation timers for ride ${id}`);
+  }
+}
+
+async function emitTripEventToRiderAndDriver(ride, event, payload) {
+  const socketService = getSocketService();
+  if (socketService?.io) {
+    // rider room uses user:{userId}
+    if (ride?.rider?._id) {
+      socketService.io.to(`user:${ride.rider._id.toString()}`).emit(event, payload);
+    }
+    // driver room id is inconsistent across codebase; emit to both user-id and driver-doc-id rooms.
+    const driverDocId = ride?.driver?._id?.toString?.() || ride?.driver?.toString?.() || null;
+    if (driverDocId) socketService.io.to(`driver:${driverDocId}`).emit(event, payload);
+    try {
+      const driverDoc = await Driver.findById(driverDocId).select('user').lean();
+      const driverUserId = driverDoc?.user?.toString?.();
+      if (driverUserId) socketService.io.to(`driver:${driverUserId}`).emit(event, payload);
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    const { getPusherService } = await import('../services/pusherService.js');
+    const ps = getPusherService();
+    if (ps?.pusher && ride?._id) {
+      ps.pusher.trigger(`private.ride.${ride._id.toString()}`, event, payload);
+    }
+  } catch (err) {
+    logger.warn(`Pusher ${event} emit failed: ${err.message}`);
+  }
+}
+
+/**
+ * Rider force-complete a stuck in-progress trip.
+ * POST /api/rides/:rideId/force-complete
+ */
+export const forceCompleteRide = asyncHandler(async (req, res) => {
+  const riderId = req.user?._id;
+  const { rideId } = req.params;
+  const { reportIssue } = req.body || {};
+
+  const ride = await Ride.findById(rideId).populate('rider', 'name phone profileImage rating').lean(false);
+  if (!ride) throw new NotFoundError('Ride');
+
+  if (ride.rider?._id?.toString() !== riderId.toString()) {
+    throw new ValidationError('You do not have permission to force-complete this ride');
+  }
+
+  if (ride.status !== 'in-progress') {
+    throw new ConflictError('Ride is not in progress');
+  }
+
+  const startedAtMs = ride.startedAt ? new Date(ride.startedAt).getTime() : null;
+  if (!startedAtMs) {
+    // Defensive: if trip has no startedAt, do not allow force completion.
+    throw new ValidationError('Ride has no start time; cannot force-complete');
+  }
+  const minutesSinceStart = (Date.now() - startedAtMs) / 60000;
+  if (minutesSinceStart < 3) {
+    return res.status(403).json({
+      status: 'error',
+      message: 'Trip cannot be force-completed within the first 3 minutes',
+    });
+  }
+
+  // Fare "lock": use the last known/recorded fare on the ride doc (do not recompute at request time).
+  const lockedFare = Number(ride?.fare?.totalFare || 0);
+
+  // Stop any active meters/automation for this ride
+  stopRideAutomationTimers(rideId);
+
+  // Transition ride to completed (non-normal completion)
+  ride.status = 'completed';
+  ride.completed_by = 'rider';
+  ride.completion_reason = 'force';
+  ride.flag = 'driver_not_ended';
+  ride.dropOffCompleted = true;
+  ride.completedAt = new Date();
+  ride.statusHistory.push({
+    status: 'completed',
+    timestamp: new Date(),
+    note: 'Ride force-completed by rider',
+  });
+  // Ensure fare remains locked (no recompute)
+  ride.fare = ride.fare || {};
+  ride.fare.totalFare = lockedFare;
+
+  await ride.save();
+
+  // Audit log (immutable)
+  await logRideAudit({
+    rideId: ride._id,
+    action: 'force_complete',
+    initiatedBy: riderId,
+    initiatedByRole: 'passenger',
+    details: {
+      fareAtCompletion: lockedFare,
+      fareLockedFrom: 'ride.fare.totalFare',
+      completionReason: 'force',
+    },
+  });
+
+  // Optional support ticket for "report" option
+  if (reportIssue === true || reportIssue === 'true') {
+    try {
+      await SupportTicket.create({
+        user: riderId,
+        ride: ride._id,
+        category: 'ride_issue',
+        subject: 'Driver did not end trip',
+        description: `Rider force-completed trip. Ride ${ride._id.toString()} was stuck in-progress.`,
+        priority: 'high',
+      });
+    } catch (err) {
+      logger.warn(`Support ticket create failed for ride ${rideId}: ${err.message}`);
+    }
+  }
+
+  // Emit realtime events to rider + driver
+  const eventPayload = { rideId: ride._id.toString(), completedBy: 'rider', fare: lockedFare };
+  await emitTripEventToRiderAndDriver(ride, 'trip:force_completed', eventPayload);
+
+  // Push notify driver
+  try {
+    const driverDoc = ride.driver ? await Driver.findById(ride.driver).select('user').lean() : null;
+    const driverUserId = driverDoc?.user?.toString?.();
+    if (driverUserId) {
+      const { sendToUser } = await import('../services/notificationService.js');
+      await sendToUser(driverUserId, 'driver', {
+        title: 'Trip ended by rider',
+        message: 'Your trip was ended by the rider.',
+        type: 'alert',
+        priority: 'high',
+        screen: 'home',
+        ride_id: ride._id,
+        event_key: 'trip_force_completed',
+        data: { subType: 'trip_force_completed', rideId: ride._id.toString(), fare: String(lockedFare) },
+      });
+    }
+  } catch (err) {
+    logger.warn(`Force-complete driver push failed for ride ${rideId}: ${err.message}`);
+  }
+
+  // Process payment + receipt using existing completion pipeline (best-effort; do not fail force-complete)
+  try {
+    const { processRidePayment, sendPaymentReceipt } = await import('../services/paymentService.js');
+    const paymentResult = await processRidePayment(ride);
+    if (paymentResult?.success && paymentResult?.payment?.status === 'completed') {
+      await sendPaymentReceipt(ride, paymentResult.payment);
+    }
+  } catch (err) {
+    logger.error(`Force-complete payment processing failed for ride ${rideId}: ${err.message}`);
+  }
+
+  // Also emit standard completion events (keeps existing mobile listeners working)
+  try {
+    const socketService = getSocketService();
+    if (socketService) {
+      await socketService.emitRideCompleted(ride);
+      await socketService.emitRideStatusUpdate(ride, 'completed', null);
+    }
+  } catch (err) {
+    logger.warn(`Force-complete completion emits failed for ride ${rideId}: ${err.message}`);
+  }
+
+  res.json({
+    success: true,
+    fare: lockedFare,
+    completedBy: 'rider',
+  });
+});

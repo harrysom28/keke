@@ -1,0 +1,163 @@
+export const rideStates = [
+  "heading_to_pickup",
+  "arrived_pickup",
+  "trip_started",
+  "near_destination",
+  "completed",
+] as const;
+
+export type RideState = (typeof rideStates)[number];
+
+type AnyObj = Record<string, any>;
+
+function normalizeStatus(v: unknown) {
+  return String(v ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function parseMinutesLike(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const s = String(v).trim().toLowerCase();
+  if (!s) return null;
+  // "3 min", "3mins", "3 minutes"
+  const m = s.match(/(\d+(\.\d+)?)\s*(min|mins|minute|minutes)\b/);
+  if (m?.[1]) return Math.round(parseFloat(m[1]));
+  // raw number string
+  const n = parseFloat(s);
+  if (Number.isFinite(n)) return Math.round(n);
+  return null;
+}
+
+function formatArrivingByFromMinutes(mins: number): string {
+  const d = new Date(Date.now() + mins * 60_000);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+export function getRideStateFromData(data: AnyObj): RideState {
+  const status = normalizeStatus(data?.status);
+  const lifecycle = normalizeStatus(data?.lifecycle_status ?? data?.lifecycleStatus);
+  const internal = normalizeStatus(data?.internal_status ?? data?.internalStatus);
+  const started = !!(data?.is_ride_started ?? data?.isRideStarted ?? data?.is_started);
+  const completed =
+    status === "completed" ||
+    status === "complete" ||
+    status === "dropped_off" ||
+    status === "dropoff_completed" ||
+    !!data?.drop_off_completed;
+
+  if (completed) return "completed";
+  if (status === "near_destination" || status === "near_dropoff" || status === "almost_there")
+    return "near_destination";
+  // Backend may omit boolean flags; use lifecycle / internal status as source of truth.
+  if (
+    lifecycle === "ride_started" ||
+    internal === "in_progress" ||
+    internal === "inprogress"
+  ) {
+    return "trip_started";
+  }
+  if (started || status === "started" || status === "in_progress" || status === "intransit")
+    return "trip_started";
+  if (status === "arrived" || status === "driver_arrived" || status === "arrived_pickup")
+    return "arrived_pickup";
+  return "heading_to_pickup";
+}
+
+export function getArrivingByLabel(data: AnyObj): string | null {
+  // If backend already provides a clock time, keep it.
+  const raw = (data?.arriving_by ?? data?.arrivingBy ?? data?.arrival_by ?? data?.arrivalBy) as
+    | string
+    | undefined;
+  if (raw && /^\d{1,2}:\d{2}$/.test(raw.trim())) return raw.trim();
+
+  const mins = parseMinutesLike(data?.arrival_time ?? data?.eta ?? data?.routeEta);
+  if (mins == null || mins <= 0) return null;
+  return formatArrivingByFromMinutes(mins);
+}
+
+export function getTripContext(data: AnyObj): { fromLabel: string; toLabel: string } {
+  const fromLabel =
+    data?.origin?.name ||
+    data?.pickup_location ||
+    data?.pickupLocation ||
+    data?.from ||
+    "Pickup location";
+  const toLabel =
+    data?.destination?.name ||
+    data?.dropoff_location ||
+    data?.dropoffLocation ||
+    data?.to ||
+    "Drop-off location";
+  return { fromLabel: String(fromLabel), toLabel: String(toLabel) };
+}
+
+export function getRiderHeaderCopy(state: RideState, data: AnyObj) {
+  const driverName =
+    data?.driver?.driver_name ||
+    data?.driver?.name ||
+    data?.driver?.user?.name ||
+    data?.driver?.user?.fullName ||
+    "your driver";
+
+  const etaMin = parseMinutesLike(data?.arrival_time ?? data?.eta ?? data?.routeEta);
+  const etaLabel =
+    typeof data?.arrival_time === "string" && data.arrival_time.includes(":")
+      ? data.arrival_time
+      : etaMin != null
+        ? `${etaMin} min`
+        : "";
+
+  switch (state) {
+    case "heading_to_pickup":
+      return {
+        title: `Picking up ${data?.passenger_name || data?.rider_name || "you"}`,
+        subtitle: etaLabel ? `${driverName} • ${etaLabel} away` : `${driverName} is on the way`,
+        reassurance: "You’re on your way.",
+      };
+    case "arrived_pickup":
+      return {
+        title: "Driver has arrived",
+        subtitle: `${driverName} is at pickup`,
+        reassurance: "Head to the pickup point when you’re ready.",
+      };
+    case "trip_started":
+      return {
+        title: "Trip in progress",
+        subtitle: "Sit back and relax — we’re en route",
+        reassurance: "You’re on your way.",
+      };
+    case "near_destination":
+      return {
+        title: "Arriving soon",
+        subtitle: "Almost at your destination",
+        reassurance: "Get ready to hop off.",
+      };
+    case "completed":
+      return {
+        title: "Trip completed",
+        subtitle: "Thanks for riding with us",
+        reassurance: "Hope you had a great trip.",
+      };
+  }
+}
+
+export function getDriverHeaderCopy(state: RideState) {
+  switch (state) {
+    case "heading_to_pickup":
+      return { title: "Heading to pickup", subtitle: "Navigate to the rider" };
+    case "arrived_pickup":
+      return { title: "At pickup", subtitle: "Confirm rider, then start trip" };
+    case "trip_started":
+      return { title: "Passenger onboard", subtitle: "Driving to destination" };
+    case "near_destination":
+      return { title: "Near destination", subtitle: "Prepare to complete the trip" };
+    case "completed":
+      return { title: "Trip completed", subtitle: "Great work" };
+  }
+}
+

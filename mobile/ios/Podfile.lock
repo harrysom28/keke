@@ -2197,7 +2197,7 @@ PODS:
     - ReactNativeDependencies
   - ReactNativeDependencies (0.81.5)
   - RecaptchaInterop (101.0.0)
-  - RNCAsyncStorage (2.2.0):
+  - RNCAsyncStorage (1.24.0):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -3047,7 +3047,7 @@ SPEC CHECKSUMS:
   ReactCommon: 08810150b1206cc44aecf5f6ae19af32f29151a8
   ReactNativeDependencies: 71ce9c28beb282aa720ea7b46980fff9669f428a
   RecaptchaInterop: 11e0b637842dfb48308d242afc3f448062325aba
-  RNCAsyncStorage: c8407cc394627a3a4cf56b457d594bfa822b6ab8
+  RNCAsyncStorage: b21cbac68a2438e13156b9da309edfd108b38024
   RNDateTimePicker: 3b90b0645499e9ae1a86298f23275a648283d415
   RNDeviceInfo: bcce8752b5043a623fe3c26789679b473f705d3c
   RNFBApp: c36e10ba255a28570d7b2edaef8df00d0c1afb48

@@ -20,6 +20,9 @@ import { getErrorMessage } from "@/utils/errorHandler";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { pusherManager } from "@/utils/pusherManager";
 import { clearRecentPlacesCache } from "@/utils/recentPlacesCache";
+import { persistor } from "@/store";
+import { clearDriverState, clearRideState } from "@/store/AppSlice";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 interface IContext {
   currentUser: {
@@ -216,7 +219,7 @@ export default function GlobalContext({
       });
   };
 
-  const clearCache = () => {
+  const clearCache = async () => {
     if (pusherInitializedRef.current) {
       setPusherReady(false);
       pusher.disconnect();
@@ -224,6 +227,8 @@ export default function GlobalContext({
     }
     clearRecentPlacesCache();
     dispatch(resetSubscription());
+    dispatch(clearRideState());
+    dispatch(clearDriverState());
     dispatch(
       setAuthData({
         registration: {
@@ -235,6 +240,19 @@ export default function GlobalContext({
     setCurrentUser({ profile: {} });
     dispatch(updateToken(null));
     setRoleLoaded(false);
+    // Wipe persisted redux state (AsyncStorage) so stale slices can't survive logout/reinstall.
+    // Token persistence remains in SecureStore (handled elsewhere).
+    try {
+      await persistor.purge();
+    } catch {
+      // ignore
+    }
+    // Also remove any ride-related manual keys outside redux-persist.
+    try {
+      await AsyncStorage.removeItem("dismissedBookingId");
+    } catch {
+      // ignore
+    }
     router.navigate("/");
   };
 
@@ -268,7 +286,7 @@ export default function GlobalContext({
         });
       })
       .finally(() => {
-        clearCache();
+        void clearCache();
         loading(false);
       });
   };

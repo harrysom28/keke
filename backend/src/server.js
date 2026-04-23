@@ -35,6 +35,7 @@ import { errorHandler, handleUnhandledRejection, handleUncaughtException } from 
 import logger from './utils/logger.js';
 import { initializeSocketService } from './services/socketService.js';
 import scheduledRideService from './services/scheduledRideService.js';
+import staleTripService from './services/staleTripService.js';
 import { schedulePreloadRefresh } from './services/placeSearchPreload.js';
 import {
   startOrphanedRideRecovery,
@@ -177,6 +178,127 @@ app.get('/', (req, res) => {
 io.on('connection', (socket) => {
   logger.info(`Socket connected: ${socket.id}`);
 
+  if (!global.driverOfflineTimers) {
+    global.driverOfflineTimers = new Map();
+  }
+
+  const clearOfflineTimer = (rideId) => {
+    const key = rideId?.toString?.() || String(rideId || '');
+    if (!key) return;
+    const existing = global.driverOfflineTimers.get(key);
+    if (existing?.timeoutId) clearTimeout(existing.timeoutId);
+    global.driverOfflineTimers.delete(key);
+  };
+
+  const markDriverOfflineDuringTrip = async (driverUserId) => {
+    try {
+      if (!driverUserId) return;
+      const Driver = (await import('./models/Driver.js')).default;
+      const Ride = (await import('./models/Ride.js')).default;
+      const { logRideAudit } = await import('./services/rideAuditLogService.js');
+      const { getSocketService } = await import('./services/socketService.js');
+
+      const driver = await Driver.findOne({ user: driverUserId }).select('_id user').lean();
+      if (!driver?._id) return;
+
+      const ride = await Ride.findOne({ driver: driver._id, status: 'in-progress' }).select(
+        '_id rider driver status flag statusHistory updatedAt startedAt'
+      );
+      if (!ride?._id) return;
+
+      const rideId = ride._id.toString();
+
+      // Set flag + history (do not complete)
+      if (ride.flag !== 'driver_offline_during_trip') {
+        ride.flag = 'driver_offline_during_trip';
+        ride.statusHistory.push({
+          status: ride.status,
+          timestamp: new Date(),
+          note: 'Driver went offline during trip (socket disconnect)',
+        });
+        await ride.save();
+      }
+
+      await logRideAudit({
+        rideId: ride._id,
+        action: 'driver_offline',
+        initiatedBy: driverUserId,
+        initiatedByRole: 'driver',
+        details: { flag: 'driver_offline_during_trip' },
+      });
+
+      // Emit event to rider
+      const socketService = getSocketService();
+      if (socketService?.io && ride.rider) {
+        socketService.io.to(`user:${ride.rider.toString()}`).emit('trip:driver_offline', {
+          rideId,
+          message: 'Driver went offline. You may end the trip manually.',
+        });
+      }
+
+      // Start 10-minute timer; if no reconnect, flag as stale timeout
+      clearOfflineTimer(rideId);
+      const timeoutId = setTimeout(async () => {
+        try {
+          const Ride2 = (await import('./models/Ride.js')).default;
+          const { flagRideAsStaleTimeout } = await import('./services/staleTripService.js');
+          const r = await Ride2.findById(rideId).select('_id status rider driver flag statusHistory updatedAt startedAt');
+          if (!r || r.status !== 'in-progress') return;
+          // Treat as stale (timeout) for ops review (do NOT auto-complete)
+          await flagRideAsStaleTimeout(r);
+        } catch (err) {
+          logger.error(`Offline->stale flag failed for ride ${rideId}: ${err.message}`);
+        } finally {
+          clearOfflineTimer(rideId);
+        }
+      }, 10 * 60 * 1000);
+
+      global.driverOfflineTimers.set(rideId, { timeoutId, driverUserId: String(driverUserId) });
+      logger.warn(`Driver offline timer started (10m) for ride ${rideId}`);
+    } catch (err) {
+      logger.error(`markDriverOfflineDuringTrip failed: ${err.message}`);
+    }
+  };
+
+  const handleDriverReconnected = async (driverUserId) => {
+    try {
+      if (!driverUserId) return;
+      const Driver = (await import('./models/Driver.js')).default;
+      const Ride = (await import('./models/Ride.js')).default;
+      const { logRideAudit } = await import('./services/rideAuditLogService.js');
+
+      const driver = await Driver.findOne({ user: driverUserId }).select('_id user').lean();
+      if (!driver?._id) return;
+      const ride = await Ride.findOne({ driver: driver._id, status: 'in-progress' }).select('_id flag statusHistory');
+      if (!ride?._id) return;
+
+      const rideId = ride._id.toString();
+      const timer = global.driverOfflineTimers.get(rideId);
+      if (timer?.timeoutId) {
+        clearOfflineTimer(rideId);
+      }
+
+      if (ride.flag === 'driver_offline_during_trip') {
+        ride.flag = null;
+        ride.statusHistory.push({
+          status: 'in-progress',
+          timestamp: new Date(),
+          note: 'Driver reconnected during trip; offline flag cleared',
+        });
+        await ride.save();
+        await logRideAudit({
+          rideId: ride._id,
+          action: 'driver_reconnected',
+          initiatedBy: driverUserId,
+          initiatedByRole: 'driver',
+          details: { clearedFlag: 'driver_offline_during_trip' },
+        });
+      }
+    } catch (err) {
+      logger.error(`handleDriverReconnected failed: ${err.message}`);
+    }
+  };
+
   // Authenticate socket with JWT token
   socket.on('authenticate', async (data) => {
     try {
@@ -249,6 +371,8 @@ io.on('connection', (socket) => {
           socket.driverId = authenticatedUserId;
           socket.join(`driver:${authenticatedUserId}`);
           socket.join('available-drivers');
+          // Reconnect: clear any offline timer/flags for in-progress trips.
+          handleDriverReconnected(authenticatedUserId).catch(() => {});
         }
 
         logger.info(`Socket ${socket.id} authenticated for user ${authenticatedUserId} (${authenticatedUserRole})`);
@@ -263,6 +387,9 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     logger.info(`Socket disconnected: ${socket.id}`);
+    if (socket.userRole === 'driver' && socket.userId) {
+      markDriverOfflineDuringTrip(socket.userId).catch(() => {});
+    }
   });
 
   // Join user room for private messages (only allow own room)
@@ -428,6 +555,7 @@ const startServer = async () => {
         logger.info(`🌐 API URL: http://localhost:${port}/api`);
         if (process.env.NODE_ENV !== 'test') {
           scheduledRideService.start();
+          staleTripService.start();
           startOrphanedRideRecovery();
         }
         import('./services/socketService.js')
@@ -462,6 +590,7 @@ async function gracefulShutdown(signal) {
     /* ignore */
   }
   scheduledRideService.stop();
+  staleTripService.stop();
   stopOrphanedRideRecovery();
   server.close(() => {
     Promise.all([disconnectDB(), closeRedisConnection()])

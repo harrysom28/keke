@@ -1337,6 +1337,17 @@ export const acceptRide = asyncHandler(async (req, res) => {
     socketService.emitRideStatusUpdate(ride, 'accepted', driver);
   }
 
+  // Also emit Pusher ride status so rider apps (that rely on Pusher) update immediately.
+  try {
+    const { getPusherService } = await import('../services/pusherService.js');
+    const pusherSvc = getPusherService();
+    if (pusherSvc) {
+      pusherSvc.emitRideStatusUpdate(ride, 'accepted', driver);
+    }
+  } catch (err) {
+    logger.warn(`Pusher ride.status emit failed (accepted): ${err?.message || err}`);
+  }
+
   // Update driver acceptance rate
   try {
     const { updateDriverAcceptanceRate } = await import('../services/driverStatisticsService.js');
@@ -1748,6 +1759,8 @@ export const completeRide = asyncHandler(async (req, res) => {
   }
 
   ride.status = 'completed';
+  ride.completed_by = 'driver';
+  ride.completion_reason = 'normal';
   ride.dropOffCompleted = true;
   ride.completedAt = new Date();
   const isEscrowWallet = ride.paymentMethod === 'wallet' && ['held', 'charged'].includes(ride.paymentStatus);
@@ -1799,6 +1812,17 @@ export const completeRide = asyncHandler(async (req, res) => {
   if (socketService) {
     await socketService.emitRideCompleted(ride);
     await socketService.emitRideStatusUpdate(ride, 'completed', driver);
+    try {
+      const payload = { rideId: ride._id.toString(), completedBy: 'driver', fare: ride.fare?.totalFare ?? 0 };
+      socketService.io?.to(`user:${ride.rider._id.toString()}`).emit('trip:completed', payload);
+      socketService.io?.to(`driver:${driver._id.toString()}`).emit('trip:completed', payload);
+      socketService.io?.to(`driver:${userId.toString()}`).emit('trip:completed', payload);
+      const { getPusherService } = await import('../services/pusherService.js');
+      const ps = getPusherService();
+      ps?.pusher?.trigger(`private.ride.${ride._id.toString()}`, 'trip:completed', payload);
+    } catch (e) {
+      logger.debug(`trip:completed emit skipped: ${e.message}`);
+    }
   }
 
   try {

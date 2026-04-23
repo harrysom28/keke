@@ -326,28 +326,24 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       setStep(1);
       
     } catch (err: any) {
-      console.error('❌ Create ride error:', err?.response?.data || err?.message);
-      
       // Handle 409 - Active ride already exists
       if (err?.response?.status === 409 || err?.status === 409) {
         console.log('🔄 Active ride exists, fetching it...');
         getActiveRide();
         showMessage({
           type: "info",
-          message: "You already have an active ride",
+          message: "You already have an active ride. Opening it now…",
         });
         
         // Close modal
         bottomSheetRef?.current?.close();
-        dispatch(
-          setAppData({
-            isBooking: false,
-            ride: { status: false, data: {} },
-          })
-        );
+        // Important: don't clear ride state; we want to resume the existing trip.
+        dispatch(setAppData({ isBooking: false }));
         setStep(1);
         return;
       }
+      
+      console.error('❌ Create ride error:', err?.response?.data || err?.message);
       
       // Handle validation errors
       const validationErrors = err?.response?.data?.error?.errors || 

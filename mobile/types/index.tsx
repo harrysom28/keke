@@ -123,6 +123,10 @@ export type TRide = {
   arrival_distance: string;
   arrival_time: string;
   cost: string;
+  /** Drivers notified for this request (from API). */
+  drivers_notified?: number;
+  /** Search radius in km used when matching drivers. */
+  search_radius_km?: number;
   destination: Location;
   driver: Driver;
   driver_id: string;

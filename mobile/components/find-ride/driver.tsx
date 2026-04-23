@@ -352,6 +352,10 @@ const DriverViewComponent = ({
   const isFocused = useIsFocused();
   const measuredHeightRef = useRef(0);
   const [headerHeight, setHeaderHeight] = useState(0);
+  const maxListHeight = useMemo(() => {
+    const h = Dimensions.get("window").height;
+    return Math.min(Math.round(h * 0.55), 520);
+  }, []);
 
   const emitMeasuredHeight = useCallback((contentHeight: number) => {
     if (!onHeightChange || !contentHeight || !isFinite(contentHeight)) return;
@@ -946,7 +950,7 @@ const DriverViewComponent = ({
 
       {/* Virtualized driver list for smoother low-end Android scrolling */}
       <FlatList
-        style={styles.scrollView}
+        style={[styles.scrollView, { maxHeight: maxListHeight }]}
         contentContainerStyle={styles.scrollContent}
         data={data}
         renderItem={({ item }) => (
@@ -959,6 +963,8 @@ const DriverViewComponent = ({
           />
         )}
         keyExtractor={(item: any, index: number) => item?.driver_id || item?.user_id || `driver-${index}`}
+        scrollEnabled={true}
+        nestedScrollEnabled={true}
         removeClippedSubviews={true}
         maxToRenderPerBatch={4}
         windowSize={3}

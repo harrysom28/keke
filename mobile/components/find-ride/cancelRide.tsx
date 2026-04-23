@@ -5,6 +5,7 @@ import {
   ImageBackground,
   Modal,
   Platform,
+  KeyboardAvoidingView,
   Pressable,
   StatusBar,
   Text,
@@ -233,12 +234,18 @@ function CancelRideModalInner({
             Cancel Ride
           </Text>
         </View>
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{
-            paddingBottom: Math.max(insets.bottom, 16),
-          }}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={{ flex: 1 }}
         >
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            contentContainerStyle={{
+              paddingBottom: Math.max(insets.bottom + 24, 40),
+            }}
+          >
           <Text
             style={tw.style("text-base text-[#000000A1] my-5", {
               fontFamily: "RobotoMedium",
@@ -326,7 +333,8 @@ function CancelRideModalInner({
               </Text>
             )}
           </Pressable>
-        </ScrollView>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </ImageBackground>
     </>
   );

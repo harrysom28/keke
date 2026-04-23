@@ -240,6 +240,23 @@ const AppSlice = createSlice({
     resetObject: (state, action) => {
       return InitialState;
     },
+    /** Clear all ride-related state (used on logout, 404s, cancel flows, stale rehydrate). */
+    clearRideState: (state) => {
+      state.isBooking = false;
+      state.requestOpenBookRide = false;
+      state.hasBookedRide = false;
+      state.pendingOpenChatRideId = null;
+      state.ride = InitialState.ride;
+      // Ride UI subscriptions are ride-lifecycle scoped; reset to avoid stale channels.
+      state.subscription = InitialState.subscription;
+    },
+    /** Clear driver/driver-offer related UI flags (used on logout and role switches). */
+    clearDriverState: (state) => {
+      state.driverPendingRideOffer = false;
+      // Also drop any live driver GPS in utils (in case a ride was in-flight).
+      const utils = (state.ride?.utils ?? {}) as any;
+      state.ride.utils = { ...(utils || {}), driverLiveLocation: null };
+    },
   },
 });
 
@@ -260,6 +277,8 @@ export const {
   setLatestNotification,
   decrementUnreadCount,
   clearUnreadCount,
+  clearRideState,
+  clearDriverState,
 } = AppSlice.actions;
 interface RootState {
   App: IState;

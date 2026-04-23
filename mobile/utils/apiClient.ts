@@ -276,6 +276,15 @@ apiClient.interceptors.response.use(
           // Not a fatal error; hook falls back to bundled config
           if (__DEV__) console.warn('📥 Response 404 config/public (using fallback public config)');
         } else if (
+          status === 409 &&
+          typeof url === 'string' &&
+          url.includes('booking/confirm-ride') &&
+          (dataStr.toLowerCase().includes('active ride') ||
+            dataStr.toLowerCase().includes('already have an active ride'))
+        ) {
+          // Expected path: user already has an active ride. Do NOT log as error (it triggers redbox).
+          if (__DEV__) console.warn('📥 Response 409 booking/confirm-ride (active ride already exists)');
+        } else if (
           status === 404 &&
           requestUsesNgrok &&
           typeof url === 'string' &&

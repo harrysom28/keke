@@ -59,11 +59,35 @@ const rideSchema = new mongoose.Schema(
         'driver_en_route',
         'arrived',
         'in-progress',
+        'issue_flagged',
         'completed',
         'cancelled',
         'no-driver-found',
       ],
       default: 'requested',
+    },
+    /**
+     * Completion metadata (for stuck-trip fail-safes).
+     * - completed_by: who finalized the ride lifecycle
+     * - completion_reason: why it was completed/flagged (normal vs forced flows)
+     */
+    completed_by: {
+      type: String,
+      enum: ['driver', 'rider', 'system'],
+      default: null,
+    },
+    completion_reason: {
+      type: String,
+      enum: ['normal', 'force', 'timeout', 'issue_flagged'],
+      default: null,
+    },
+    /**
+     * Generic operational flag for non-normal flows (e.g. driver_offline_during_trip, driver_not_ended).
+     * String (not enum) so ops can evolve flags without schema churn.
+     */
+    flag: {
+      type: String,
+      default: null,
     },
     /**
      * Dispatch attempt counter (offer-based dispatch).

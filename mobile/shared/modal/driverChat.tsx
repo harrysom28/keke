@@ -11,6 +11,8 @@ import {
   Text,
   TextInput,
   View,
+  ScrollView,
+  Linking,
 } from "react-native";
 import { TouchableOpacity } from "react-native-gesture-handler";
 import {
@@ -55,6 +57,8 @@ const formatSectionDate = (dateString: string | Date): string => {
   });
 };
 
+const getFirstName = (full: string) => String(full || "").trim().split(" ")[0] || "Driver";
+
 // ─── MessageItem ─────────────────────────────────────────────────────────────
 
 interface MProps {
@@ -64,15 +68,38 @@ interface MProps {
     created_at?: string;
     createdAt?: string;
     date?: string;
+    status?: "sent" | "delivered" | "seen";
+    kind?: "chat" | "system" | "date";
+    label?: string;
   };
   showAvatar: boolean;
   driverImage?: string;
 }
 
 const MessageItem = ({ isOwner, item, showAvatar, driverImage }: MProps) => {
+  if (item?.kind === "date") {
+    return <Text style={styles.dateSeparator}>{item.label}</Text>;
+  }
+
+  if (item?.kind === "system") {
+    return (
+      <View style={styles.systemRow}>
+        <View style={styles.systemPill}>
+          <Ionicons name="information-circle-outline" size={14} color="#2563EB" />
+          <Text style={styles.systemText}>{item.message}</Text>
+        </View>
+      </View>
+    );
+  }
+
   const time = formatTime(
     item?.created_at || item?.createdAt || item?.date || ""
   );
+
+  const status = item?.status || (isOwner ? "delivered" : undefined);
+  const statusIcon =
+    status === "seen" ? "checkmark-done" : status === "delivered" ? "checkmark-done" : "checkmark";
+  const statusColor = status === "seen" ? "#2D7A4F" : "#9CA3AF";
 
   return (
     <View
@@ -108,9 +135,12 @@ const MessageItem = ({ isOwner, item, showAvatar, driverImage }: MProps) => {
         {!!time && (
           <Text style={[styles.timeText, isOwner ? styles.timeOwner : styles.timeOther]}>
             {time}
-            {isOwner && (
-              <Text style={styles.checkmark}> ✓✓</Text>
-            )}
+            {isOwner ? (
+              <Text style={styles.checkmark}>
+                {" "}
+                <Ionicons name={statusIcon as any} size={12} color={statusColor} />
+              </Text>
+            ) : null}
           </Text>
         )}
       </View>
@@ -142,7 +172,284 @@ interface Props {
     rideId?: string;
     name: string;
     image: string;
+    rating?: number;
+    vehicle?: string;
+    plate?: string;
+    phone?: string;
   };
+}
+
+type RideStatus = "on_the_way" | "arrived" | "in_progress";
+
+function DriverHeader({
+  insetsTop,
+  onBack,
+  onCall,
+  onSOS,
+  avatarUrl,
+  name,
+  rating,
+  vehicleLine,
+  statusText,
+}: {
+  insetsTop: number;
+  onBack: () => void;
+  onCall: () => void;
+  onSOS: () => void;
+  avatarUrl?: string;
+  name: string;
+  rating: number;
+  vehicleLine: string;
+  statusText: string;
+}) {
+  return (
+    <View style={[styles.headerSafe, { paddingTop: insetsTop }]}>
+      <View style={styles.hubHeader}>
+        <TouchableOpacity
+          onPress={onBack}
+          style={styles.backBtn}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="chevron-back" size={24} color="#111827" />
+        </TouchableOpacity>
+
+        <View style={styles.driverCard}>
+          <View style={styles.driverRow}>
+            <View style={styles.avatarWrap}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.headerAvatar} />
+              ) : (
+                <View style={styles.headerAvatarFallback}>
+                  <Ionicons name="person" size={20} color="#fff" />
+                </View>
+              )}
+              <View style={styles.onlineDot} />
+            </View>
+
+            <View style={styles.driverMeta}>
+              <Text style={styles.driverName} numberOfLines={1}>
+                {name}
+              </Text>
+              <View style={styles.driverSubRow}>
+                <View style={styles.ratingPill}>
+                  <Ionicons name="star" size={12} color="#F59E0B" />
+                  <Text style={styles.ratingText}>{rating.toFixed(1)}</Text>
+                </View>
+                <Text style={styles.vehicleText} numberOfLines={1}>
+                  {vehicleLine}
+                </Text>
+              </View>
+              <Text style={styles.statusInline} numberOfLines={1}>
+                {statusText}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              onPress={onCall}
+              style={styles.callBtn}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Call driver"
+            >
+              <Ionicons name="call" size={18} color="#2D7A4F" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={onSOS}
+              style={styles.sosBtn}
+              activeOpacity={0.9}
+              accessibilityRole="button"
+              accessibilityLabel="Emergency SOS"
+            >
+              <Text style={styles.sosText}>SOS</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.divider} />
+    </View>
+  );
+}
+
+function StatusBarLite({
+  status,
+  etaText,
+}: {
+  status: RideStatus;
+  etaText?: string;
+}) {
+  const cfg =
+    status === "arrived"
+      ? { label: "Arrived", bg: "#DCFCE7", text: "#166534", dot: "#22C55E" }
+      : status === "in_progress"
+        ? { label: "Trip in progress", bg: "#DBEAFE", text: "#1D4ED8", dot: "#2563EB" }
+        : { label: "On the way", bg: "#FEF3C7", text: "#92400E", dot: "#F59E0B" };
+
+  return (
+    <View style={[styles.statusBarLite, { backgroundColor: cfg.bg }]}>
+      <View style={[styles.statusDot, { backgroundColor: cfg.dot }]} />
+      <Text style={[styles.statusBarText, { color: cfg.text }]}>{cfg.label}</Text>
+      {etaText ? <Text style={[styles.statusBarEta, { color: cfg.text }]}>{etaText}</Text> : null}
+    </View>
+  );
+}
+
+function RideSummaryCard({
+  pickupLabel,
+  directionLabel,
+  etaLabel,
+  onViewMap,
+}: {
+  pickupLabel: string;
+  directionLabel: string;
+  etaLabel: string;
+  onViewMap?: () => void;
+}) {
+  return (
+    <View style={styles.rideCard}>
+      <View style={styles.rideTop}>
+        <View style={styles.ridePin}>
+          <Ionicons name="location" size={16} color="#EF4444" />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.rideTitle} numberOfLines={1}>
+            Pickup
+          </Text>
+          <Text style={styles.rideValue} numberOfLines={2}>
+            {pickupLabel}
+          </Text>
+        </View>
+        {onViewMap ? (
+          <TouchableOpacity onPress={onViewMap} style={styles.viewMapBtn} activeOpacity={0.8}>
+            <Text style={styles.viewMapText}>View map</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      <View style={styles.rideDivider} />
+
+      <View style={styles.rideBottom}>
+        <View style={styles.rideMiniRow}>
+          <Ionicons name="navigate-outline" size={16} color="#2D7A4F" />
+          <Text style={styles.rideMiniText}>{directionLabel}</Text>
+        </View>
+        <View style={styles.rideMiniRow}>
+          <Ionicons name="time-outline" size={16} color="#2D7A4F" />
+          <Text style={styles.rideMiniText}>{etaLabel}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function ActionChips({
+  onPickUp,
+  onCall,
+  onLate,
+}: {
+  onPickUp: () => void;
+  onCall: () => void;
+  onLate: () => void;
+}) {
+  const actions = [
+    { key: "pickup", label: "I’m at pickup", icon: "navigate-outline" as const, onPress: onPickUp },
+    { key: "call", label: "Call driver", icon: "call-outline" as const, onPress: onCall },
+    { key: "late", label: "Running late", icon: "time-outline" as const, onPress: onLate },
+  ];
+  return (
+    <View style={styles.chipsWrap}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipsContent}
+        keyboardShouldPersistTaps="handled"
+        bounces={false}
+      >
+        {actions.map((a) => (
+          <TouchableOpacity key={a.key} onPress={a.onPress} style={styles.chip} activeOpacity={0.85}>
+            <Ionicons name={a.icon as any} size={16} color="#2D7A4F" />
+            <Text style={styles.chipText}>{a.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+function InputBar({
+  value,
+  onChange,
+  onSend,
+  disabled,
+  onMic,
+  onLocation,
+  bottomPad,
+  keyboardOffset,
+}: {
+  value: string;
+  onChange: (t: string) => void;
+  onSend: () => void;
+  disabled: boolean;
+  onMic: () => void;
+  onLocation: () => void;
+  bottomPad: number;
+  keyboardOffset: number;
+}) {
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={keyboardOffset}
+    >
+      <View style={[styles.inputBar, { paddingBottom: bottomPad }]}>
+        <TouchableOpacity
+          onPress={onMic}
+          style={styles.iconPill}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Voice message"
+        >
+          <Ionicons name="mic-outline" size={20} color="#111827" />
+        </TouchableOpacity>
+
+        <View style={styles.inputField}>
+          <TextInput
+            value={value}
+            onChangeText={onChange}
+            multiline
+            maxLength={1000}
+            style={styles.textInput}
+            placeholder="Message your driver…"
+            placeholderTextColor="#9CA3AF"
+            returnKeyType="send"
+            onSubmitEditing={onSend}
+            blurOnSubmit={false}
+          />
+          <TouchableOpacity
+            onPress={onLocation}
+            style={styles.inputIcon}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Share location"
+          >
+            <Ionicons name="location-outline" size={20} color="#2D7A4F" />
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          onPress={onSend}
+          disabled={disabled}
+          style={[styles.sendBtn, disabled && styles.sendBtnDisabled]}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Send message"
+        >
+          <Ionicons name="send" size={18} color="#fff" />
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
+  );
 }
 
 function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
@@ -153,6 +460,8 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [isTyping] = useState(false); // optional; keep false by default (no constant UI updates)
+  const [rideStatus] = useState<RideStatus>("on_the_way"); // dummy, static
   const flashMessageRef = useRef<FlashMessage | null>(null);
   const chatRefetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
@@ -269,6 +578,66 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
     return currentIsOwner !== nextIsOwner;
   };
 
+  const driverDisplayName = data?.name || "John Doe";
+  const driverRating = typeof data?.rating === "number" ? data.rating : 4.8;
+  const vehicleLabel = data?.vehicle || "Toyota Camry";
+  const plateLabel = data?.plate || "ABC-123";
+  const statusText = "Arriving soon";
+
+  const renderableMessages = (() => {
+    const base = [...chats].reverse();
+    // Inject a lightweight system message (static) at the top of the timeline.
+    const sys: any[] = [
+      { kind: "system", message: statusText, createdAt: new Date().toISOString() },
+    ];
+
+    const all = [...sys, ...base];
+    const withDates: any[] = [];
+    let lastLabel = "";
+    for (let i = 0; i < all.length; i++) {
+      const it = all[i] as any;
+      const d = it?.created_at || it?.createdAt || it?.date || new Date().toISOString();
+      const label = formatSectionDate(d);
+      if (label && label !== lastLabel) {
+        withDates.push({ kind: "date", label, message: "" });
+        lastLabel = label;
+      }
+      withDates.push({
+        ...it,
+        kind: it.kind || "chat",
+        status: it.status || (it.is_sender ? "delivered" : undefined),
+      });
+    }
+    return withDates;
+  })();
+
+  const handleCall = () => {
+    const num = String(data?.phone || "").trim();
+    if (!num) {
+      flashMessageRef.current?.showMessage({ type: "info", message: "Phone number not available" });
+      return;
+    }
+    Linking.openURL(num.startsWith("0") ? `tel:${num}` : `tel:+${num}`).catch(() =>
+      flashMessageRef.current?.showMessage({ type: "danger", message: "Unable to make call" })
+    );
+  };
+
+  const handleSOS = () => {
+    flashMessageRef.current?.showMessage({
+      type: "warning",
+      message: "Emergency: contact support or emergency services.",
+    });
+  };
+
+  const handleViewMap = () => {
+    flashMessageRef.current?.showMessage({
+      type: "info",
+      message: "View map (open the main trip screen).",
+    });
+  };
+
+  const isInitialLoading = loading && chats.length === 0;
+
   return (
     <>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
@@ -291,134 +660,122 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
           },
         ]}
       >
-        {/* Top inset on white chrome only — avoids a gray band under status bar / notch */}
-        <View style={[styles.headerSafe, { paddingTop: insets.top }]}>
-          <View style={styles.header}>
-            <TouchableOpacity
-              onPress={onClose}
-              style={styles.backBtn}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="chevron-back" size={24} color="#111827" />
-            </TouchableOpacity>
+        <DriverHeader
+          insetsTop={insets.top}
+          onBack={onClose}
+          onCall={handleCall}
+          onSOS={handleSOS}
+          avatarUrl={data?.image}
+          name={driverDisplayName}
+          rating={driverRating}
+          vehicleLine={`${vehicleLabel} • ${plateLabel}`}
+          statusText={loading ? "Syncing…" : statusText}
+        />
 
-            <View style={styles.headerMeta}>
-              <View style={styles.avatarWrap}>
-                {data?.image ? (
-                  <Image source={{ uri: data.image }} style={styles.headerAvatar} />
-                ) : (
-                  <View style={styles.headerAvatarFallback}>
-                    <Ionicons name="person" size={20} color="#fff" />
-                  </View>
-                )}
-                <View style={styles.onlineDot} />
-              </View>
-              <View style={styles.headerTextBlock}>
-                <Text style={styles.headerName} numberOfLines={1}>
-                  {data?.name || "Driver"}
-                </Text>
-                <Text style={styles.headerStatus}>In your ride</Text>
-              </View>
-            </View>
+        <StatusBarLite status={rideStatus} etaText={loading ? "Updating messages…" : "Arriving soon"} />
 
-            <View style={{ width: 40 }} />
-          </View>
-
-          <View style={styles.divider} />
-        </View>
+        <RideSummaryCard
+          pickupLabel="Roban Stores"
+          directionLabel="Driver → You"
+          etaLabel="1 min away"
+          onViewMap={handleViewMap}
+        />
 
         {/* ── Messages ── */}
-        {loading ? (
-          <View style={styles.loaderWrap}>
-            <ActivityIndicator size="large" color="#2D7A4F" />
-          </View>
-        ) : chats.length === 0 ? (
-          <View style={[styles.scrollContent, styles.scrollCentered]}>
-            <EmptyState name={data?.name} />
-          </View>
-        ) : (
-          <FlatList
-            style={styles.scroll}
-            contentContainerStyle={styles.scrollContent}
-            inverted={true}
-            initialNumToRender={20}
-            windowSize={5}
-            removeClippedSubviews={true}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            data={[...chats].reverse()}
-            keyExtractor={(item, index) =>
-              String((item as any)?.message_id || (item as any)?._id || index)
-            }
-            ListFooterComponent={
-              chats.length > 0 ? (
-                <Text style={styles.dateSeparator}>
-                  {formatSectionDate(
-                    (chats[0] as any)?.created_at ||
-                      (chats[0] as any)?.createdAt ||
-                      (chats[0] as any)?.date ||
-                      new Date()
-                  )}
-                </Text>
-              ) : null
-            }
-            renderItem={({ item, index }) => {
-              const isOwner =
-                item?.is_sender ||
-                item?.sender?.user_id === user?.profile?.user_id ||
-                item?.sender_id === user?.profile?.user_id;
-
-              // index here is for reversed array; map back to original chats index for grouping logic
-              const originalIndex = chats.length - 1 - index;
-
+        <FlatList
+          style={styles.scroll}
+          contentContainerStyle={[
+            styles.scrollContent,
+            renderableMessages.length === 0 ? styles.scrollCentered : null,
+          ]}
+          inverted={true}
+          initialNumToRender={20}
+          windowSize={5}
+          removeClippedSubviews={true}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          data={[...renderableMessages].reverse()}
+          keyExtractor={(item, index) =>
+            String(
+              (item as any)?.message_id ||
+                (item as any)?._id ||
+                (item as any)?.kind + "-" + ((item as any)?.label || "") + "-" + index
+            )
+          }
+          refreshing={false}
+          onRefresh={getAllChats}
+          ListEmptyComponent={
+            <View style={{ width: "100%" }}>
+              <EmptyState name={data?.name} />
+              {isInitialLoading ? (
+                <View style={styles.inlineLoaderRow}>
+                  <ActivityIndicator size="small" color="#2D7A4F" />
+                  <Text style={styles.inlineLoaderText}>Loading messages…</Text>
+                </View>
+              ) : null}
+            </View>
+          }
+          renderItem={({ item, index }) => {
+            if ((item as any)?.kind === "date" || (item as any)?.kind === "system") {
               return (
                 <MessageItem
-                  item={item}
-                  isOwner={isOwner}
-                  showAvatar={!isOwner && isLastInGroup(originalIndex)}
+                  item={item as any}
+                  isOwner={false}
+                  showAvatar={false}
                   driverImage={data?.image}
                 />
               );
-            }}
-          />
-        )}
+            }
+            const isOwner =
+              item?.is_sender ||
+              item?.sender?.user_id === user?.profile?.user_id ||
+              item?.sender_id === user?.profile?.user_id;
 
-        {/* ── Input bar ── */}
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={keyboardOffset}
-        >
-          <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-            <TextInput
-              value={message}
-              onChangeText={setMessage}
-              multiline
-              maxLength={1000}
-              style={styles.textInput}
-              placeholder="Message your driver…"
-              placeholderTextColor="#9CA3AF"
-              returnKeyType="send"
-              onSubmitEditing={sendChat}
-              blurOnSubmit={false}
-            />
-            <TouchableOpacity
-              onPress={sendChat}
-              disabled={!message.trim() || sending}
-              style={[
-                styles.sendBtn,
-                (!message.trim() || sending) && styles.sendBtnDisabled,
-              ]}
-              activeOpacity={0.8}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons name="send" size={18} color="#fff" />
-              )}
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
+            // index here is for reversed array; map back to original chats index for grouping logic
+            const originalIndex = chats.length - 1 - index;
+
+            return (
+              <MessageItem
+                item={item}
+                isOwner={isOwner}
+                showAvatar={!isOwner && isLastInGroup(originalIndex)}
+                driverImage={data?.image}
+              />
+            );
+          }}
+          ListHeaderComponent={
+            isTyping ? (
+              <View style={styles.typingRow}>
+                <View style={styles.typingBubble}>
+                  <Text style={styles.typingText}>
+                    {getFirstName(driverDisplayName)} is typing…
+                  </Text>
+                </View>
+              </View>
+            ) : null
+          }
+        />
+
+        <ActionChips
+          onPickUp={() => setMessage("I’m at the pickup point.")}
+          onCall={handleCall}
+          onLate={() => setMessage("I’m running a bit late.")}
+        />
+
+        <InputBar
+          value={message}
+          onChange={setMessage}
+          onSend={sendChat}
+          disabled={!message.trim() || sending}
+          onMic={() =>
+            flashMessageRef.current?.showMessage({ type: "info", message: "Voice message (coming soon)." })
+          }
+          onLocation={() =>
+            flashMessageRef.current?.showMessage({ type: "info", message: "Share location (coming soon)." })
+          }
+          bottomPad={Math.max(insets.bottom, 16)}
+          keyboardOffset={keyboardOffset}
+        />
       </View>
     </>
   );
@@ -453,11 +810,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
 
-  // ── header
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  // ── hub header
+  hubHeader: {
     paddingHorizontal: 12,
     paddingVertical: 10,
     backgroundColor: "#fff",
@@ -469,12 +823,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  headerMeta: {
-    flex: 1,
-    minWidth: 0,
+  driverCard: {
+    marginTop: 8,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  driverRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: 10,
   },
   avatarWrap: {
@@ -506,27 +870,181 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "#fff",
   },
-  headerTextBlock: {
-    alignItems: "center",
+  driverMeta: {
+    flex: 1,
     minWidth: 0,
-    maxWidth: "100%",
   },
-  headerName: {
+  driverName: {
     fontSize: 16,
     fontFamily: "RobotoBold",
     color: "#111827",
-    textAlign: "center",
   },
-  headerStatus: {
+  driverSubRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  ratingPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "#FFF7ED",
+    borderWidth: 1,
+    borderColor: "#FED7AA",
+  },
+  ratingText: {
+    fontSize: 12,
+    fontFamily: "RobotoMedium",
+    color: "#111827",
+  },
+  vehicleText: {
     fontSize: 12,
     fontFamily: "RobotoRegular",
-    color: "#22C55E",
-    marginTop: 1,
+    color: "#6B7280",
+    flex: 1,
+    minWidth: 0,
+  },
+  statusInline: {
+    fontSize: 12,
+    fontFamily: "RobotoMedium",
+    color: "#2D7A4F",
+    marginTop: 6,
+  },
+  callBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#D1FAE5",
+    backgroundColor: "#ECFDF5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sosBtn: {
+    paddingHorizontal: 10,
+    height: 40,
+    borderRadius: 999,
+    backgroundColor: "#111827",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sosText: {
+    fontSize: 12,
+    fontFamily: "RobotoBold",
+    color: "#fff",
   },
 
   divider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: "#E5E7EB",
+  },
+
+  // ── lightweight status bar
+  statusBarLite: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    gap: 8,
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+  },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  statusBarText: {
+    fontSize: 13,
+    fontFamily: "RobotoBold",
+  },
+  statusBarEta: {
+    marginLeft: 8,
+    fontSize: 12,
+    fontFamily: "RobotoMedium",
+  },
+
+  // ── ride summary card
+  rideCard: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 6,
+    borderRadius: 18,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+    padding: 14,
+  },
+  rideTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  ridePin: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "#FEF2F2",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rideTitle: {
+    fontSize: 11,
+    fontFamily: "RobotoRegular",
+    color: "#6B7280",
+    marginBottom: 2,
+  },
+  rideValue: {
+    fontSize: 13,
+    fontFamily: "RobotoMedium",
+    color: "#111827",
+    lineHeight: 18,
+  },
+  viewMapBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#F0F9F4",
+    borderWidth: 1,
+    borderColor: "#D1FAE5",
+  },
+  viewMapText: {
+    fontSize: 12,
+    fontFamily: "RobotoMedium",
+    color: "#2D7A4F",
+  },
+  rideDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#E5E7EB",
+    marginVertical: 12,
+  },
+  rideBottom: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  rideMiniRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  rideMiniText: {
+    fontSize: 12,
+    fontFamily: "RobotoRegular",
+    color: "#374151",
   },
 
   // ── scroll
@@ -550,6 +1068,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingVertical: 60,
   },
+  inlineLoaderRow: {
+    marginTop: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  inlineLoaderText: {
+    fontSize: 12,
+    fontFamily: "RobotoRegular",
+    color: "#6B7280",
+  },
 
   // ── date separator
   dateSeparator: {
@@ -557,8 +1087,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "RobotoRegular",
     color: "#9CA3AF",
-    marginBottom: 16,
-    marginTop: 4,
+    marginBottom: 10,
+    marginTop: 6,
+  },
+
+  // ── system messages
+  systemRow: {
+    alignItems: "center",
+    marginVertical: 6,
+  },
+  systemPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#EEF2FF",
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+  },
+  systemText: {
+    fontSize: 12,
+    fontFamily: "RobotoMedium",
+    color: "#1D4ED8",
   },
 
   // ── empty state
@@ -673,8 +1225,54 @@ const styles = StyleSheet.create({
     textAlign: "left",
   },
   checkmark: {
-    color: "#2D7A4F",
     fontSize: 11,
+  },
+
+  typingRow: {
+    alignItems: "flex-start",
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 4,
+  },
+  typingBubble: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  typingText: {
+    fontSize: 12,
+    fontFamily: "RobotoRegular",
+    color: "#6B7280",
+  },
+
+  // ── action chips (subtle)
+  chipsWrap: {
+    marginTop: 4,
+    paddingBottom: 6,
+  },
+  chipsContent: {
+    paddingHorizontal: 16,
+    gap: 10,
+    paddingRight: 24,
+  },
+  chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: "#F0F9F4",
+    borderWidth: 1,
+    borderColor: "#D1FAE5",
+  },
+  chipText: {
+    fontSize: 13,
+    fontFamily: "RobotoMedium",
+    color: "#111827",
   },
 
   // ── input bar
@@ -684,27 +1282,50 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     backgroundColor: "#fff",
+    gap: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#E5E7EB",
-    gap: 10,
   },
-  textInput: {
+  iconPill: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inputField: {
     flex: 1,
     minHeight: 44,
     maxHeight: 110,
     backgroundColor: "#F3F4F6",
     borderRadius: 22,
-    paddingHorizontal: 16,
+    paddingLeft: 16,
+    paddingRight: 10,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 8,
+  },
+  textInput: {
+    flex: 1,
     paddingTop: Platform.OS === "ios" ? 12 : 10,
     paddingBottom: Platform.OS === "ios" ? 12 : 10,
     fontSize: 15,
     fontFamily: "RobotoRegular",
     color: "#111827",
   },
+  inputIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 2,
+  },
   sendBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: "#2D7A4F",
     alignItems: "center",
     justifyContent: "center",

@@ -21,6 +21,7 @@ import {
 } from "@expo/vector-icons";
 import {
   AppDetailsState,
+  clearRideState as clearRideStateAction,
   setAppData,
   setRideData,
   setRideUtils,
@@ -279,6 +280,8 @@ export default function HomeScreen() {
   const clearRideState = useCallback(() => {
     logger.info('🧹 Clearing ride state completely');
     lastActiveRideUiKeyRef.current = "";
+    // Ensure Redux ride slice is cleared (prevents any persisted/stale rideId from driving UI).
+    dispatch(clearRideStateAction());
 
     // Clear map coordinates (this will hide polylines and markers)
     setMaps({
@@ -1789,9 +1792,36 @@ export default function HomeScreen() {
     setDismissedBookingId(null);
   }, []);
 
+  const activeRidePayloadId = useMemo(() => {
+    const waiting = ride?.data?.waiting as any;
+    return (
+      temp?.ride_id ||
+      (temp as any)?._id ||
+      waiting?.ride_id ||
+      waiting?._id ||
+      null
+    );
+  }, [temp, ride?.data?.waiting]);
+
+  const shouldRenderActiveRideSheet = useMemo(() => {
+    const screen = String(ride?.screen ?? "");
+    const hasScreen = screen.length > 0;
+    const waiting = ride?.data?.waiting as any;
+    const hasWaitingPayload =
+      waiting && typeof waiting === "object" && Object.keys(waiting).length > 0;
+    const hasTempPayload =
+      temp && typeof temp === "object" && Object.keys(temp as any).length > 0;
+    return !!(hasScreen || activeRidePayloadId || hasWaitingPayload || hasTempPayload);
+  }, [ride?.screen, ride?.data?.waiting, temp, activeRidePayloadId]);
+
   const openActiveRideSheet = useCallback(() => {
+    if (!activeRidePayloadId) {
+      // Avoid opening a blank sheet if user taps quickly before active-ride fetch returns.
+      getActiveRide();
+      return;
+    }
     activeRideSheetRef?.current?.open();
-  }, []);
+  }, [activeRidePayloadId, getActiveRide]);
 
   return (
     <>
@@ -2459,16 +2489,18 @@ export default function HomeScreen() {
         />
       </Portal>
       <Portal>
-        <ActiveRideSheet
-          key={trigger}
-          temp={temp}
-          currentView={ride}
-          setCurrentView={setRide}
-          bottomSheetRef={activeRideSheetRef}
-          getActiveRide={getActiveRide}
-          clearMap={clearRideState}
-          chatOpenSignal={chatOpenKick}
-        />
+        {shouldRenderActiveRideSheet ? (
+          <ActiveRideSheet
+            key={trigger}
+            temp={temp}
+            currentView={ride}
+            setCurrentView={setRide}
+            bottomSheetRef={activeRideSheetRef}
+            getActiveRide={getActiveRide}
+            clearMap={clearRideState}
+            chatOpenSignal={chatOpenKick}
+          />
+        ) : null}
       </Portal>
     </>
   );

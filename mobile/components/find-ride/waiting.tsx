@@ -1,11 +1,16 @@
 import {
   Image,
   Linking,
+  Modal,
+  Pressable,
   Text,
   View,
   ActivityIndicator,
   StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
+  Alert,
   Animated as RNAnimated,
 } from "react-native";
 import { AntDesign, Entypo, Ionicons } from "@expo/vector-icons";
@@ -18,17 +23,36 @@ import { TRide } from "@/types";
 import tw from "@/lib/tailwind";
 import { showMessage } from "react-native-flash-message";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import apiClient from "@/utils/apiClient";
+import {
+  getArrivingByLabel,
+  getRideStateFromData,
+  getRiderHeaderCopy,
+  getTripContext,
+} from "@/components/ride-in-transit/rideStates";
+import { RideStatusHeader } from "@/components/ride-in-transit/RideStatusHeader";
+import { TripDetailsCard } from "@/components/ride-in-transit/TripDetailsCard";
+import { UserInfoCard } from "@/components/ride-in-transit/UserInfoCard";
+import { ProgressBar } from "@/components/ride-in-transit/ProgressBar";
+import { RiderActionButtons } from "@/components/ride-in-transit/ActionButtons";
 
 const BRAND_GREEN = "#3C8F7C";
 const ERROR_RED = "#EF4444";
 
-const ROTATING_MESSAGES = [
-  "Contacting nearby drivers",
-  "2 drivers responding",
-  "Expanding search radius…",
-  "Looking for available rides…",
-  "Hang tight, almost there…",
-];
+const FALLBACK_ROTATING_MSG = ["Searching for drivers nearby…"];
+
+function getSearchRotatingMessages(driversNotified: number, fareDisplay: string): string[] {
+  const n = Math.max(0, Math.floor(driversNotified));
+  return [
+    n > 0
+      ? `${n} driver${n !== 1 ? "s" : ""} notified`
+      : "Searching for drivers nearby…",
+    "Most rides match within 60 seconds",
+    `Your fare is locked in at ${fareDisplay}`,
+    "Expanding search if needed…",
+    "Hang tight, almost there…",
+  ];
+}
 
 // ─── Animated dots loader ─────────────────────────────────────────────────────
 const AnimatedDots = () => {
@@ -101,16 +125,25 @@ const StatusHeader = ({
   pulseAnim,
   subtitleOverride,
   isCountdown,
+  rotatingMessages,
 }: {
   pulseAnim: RNAnimated.Value;
   subtitleOverride?: string;
   isCountdown: boolean;
+  rotatingMessages: readonly string[];
 }) => {
   const [msgIndex, setMsgIndex] = useState(0);
   const fadeAnim = useRef(new RNAnimated.Value(1)).current;
+  const messages =
+    rotatingMessages.length > 0 ? rotatingMessages : FALLBACK_ROTATING_MSG;
+
+  useEffect(() => {
+    setMsgIndex(0);
+  }, [rotatingMessages]);
 
   useEffect(() => {
     if (isCountdown || subtitleOverride) return;
+    const len = Math.max(1, messages.length);
 
     const rotate = () => {
       RNAnimated.timing(fadeAnim, {
@@ -118,7 +151,7 @@ const StatusHeader = ({
         duration: 300,
         useNativeDriver: true,
       }).start(() => {
-        setMsgIndex((i) => (i + 1) % ROTATING_MESSAGES.length);
+        setMsgIndex((i) => (i + 1) % len);
         RNAnimated.timing(fadeAnim, {
           toValue: 1,
           duration: 400,
@@ -129,7 +162,7 @@ const StatusHeader = ({
 
     const id = setInterval(rotate, 2800);
     return () => clearInterval(id);
-  }, [isCountdown, subtitleOverride, fadeAnim]);
+  }, [isCountdown, subtitleOverride, fadeAnim, rotatingMessages, messages]);
 
   return (
     <View style={styles.statusHeader}>
@@ -142,16 +175,19 @@ const StatusHeader = ({
 
       <Text style={styles.statusTitle}>Finding your driver…</Text>
 
-      {isCountdown && subtitleOverride ? (
-        <View style={styles.countdownRow}>
-          <ActivityIndicator size="small" color={BRAND_GREEN} />
-          <Text style={styles.countdownText}>{subtitleOverride}</Text>
-        </View>
-      ) : (
-        <RNAnimated.Text style={[styles.rotatingMsg, { opacity: fadeAnim }]}>
-          {subtitleOverride ?? ROTATING_MESSAGES[msgIndex]}
-        </RNAnimated.Text>
-      )}
+      {/* Keep this block height stable so the bottom sheet doesn't "bounce" when text changes */}
+      <View style={styles.subtitleSlot}>
+        {isCountdown && subtitleOverride ? (
+          <View style={styles.countdownRow}>
+            <ActivityIndicator size="small" color={BRAND_GREEN} />
+            <Text style={styles.countdownText}>{subtitleOverride}</Text>
+          </View>
+        ) : (
+          <RNAnimated.Text style={[styles.rotatingMsg, { opacity: fadeAnim }]}>
+            {subtitleOverride ?? messages[msgIndex % messages.length]}
+          </RNAnimated.Text>
+        )}
+      </View>
 
       <AnimatedDots />
     </View>
@@ -159,24 +195,34 @@ const StatusHeader = ({
 };
 
 // ─── Search info card ─────────────────────────────────────────────────────────
-const RideSearchInfoCard = () => (
+const RideSearchInfoCard = ({
+  driversNearby,
+  radiusKm,
+  estWaitMin,
+}: {
+  driversNearby: number;
+  radiusKm: number;
+  estWaitMin: number;
+}) => (
   <View style={styles.infoCard}>
     <View style={styles.infoItem}>
       <Ionicons name="time-outline" size={14} color={BRAND_GREEN} />
       <Text style={styles.infoLabel}>Est. wait</Text>
-      <Text style={styles.infoValue}>~1 min</Text>
+      <Text style={styles.infoValue}>~{estWaitMin} min</Text>
     </View>
     <View style={styles.infoDivider} />
     <View style={styles.infoItem}>
       <Ionicons name="radio-button-on-outline" size={14} color={BRAND_GREEN} />
       <Text style={styles.infoLabel}>Radius</Text>
-      <Text style={styles.infoValue}>2 km</Text>
+      <Text style={styles.infoValue}>{radiusKm} km</Text>
     </View>
     <View style={styles.infoDivider} />
     <View style={styles.infoItem}>
       <Ionicons name="car-outline" size={14} color={BRAND_GREEN} />
       <Text style={styles.infoLabel}>Drivers</Text>
-      <Text style={styles.infoValue}>3 nearby</Text>
+      <Text style={styles.infoValue}>
+        {driversNearby} nearby
+      </Text>
     </View>
   </View>
 );
@@ -245,6 +291,8 @@ interface Props {
   waitingSubtitleOverride?: string;
   onRequestNewDriver?: () => void;
   onSearchAgain?: () => void;
+  onTripResolved?: (rideId: string) => void;
+  onDismissTripUI?: () => void;
 }
 
 export const WaitingView = ({
@@ -256,11 +304,81 @@ export const WaitingView = ({
   waitingSubtitleOverride,
   onRequestNewDriver,
   onSearchAgain,
+  onTripResolved,
+  onDismissTripUI,
 }: Props) => {
   const insets = useCombinedSafeInsets();
   const data = ride as TRide;
 
-  const hasRideStarted = data?.is_ride_started || data?.isRideStarted || false;
+  const rideId = useMemo(() => {
+    const r: any = data || {};
+    return String(r?.ride_id || r?._id || "").trim();
+  }, [data]);
+
+  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [forceCompleting, setForceCompleting] = useState(false);
+
+  const lastUpdatedMs = useMemo(() => {
+    const r: any = data || {};
+    const raw = r?.updatedAt || r?.updated_at || r?.last_updated || null;
+    const t = raw ? new Date(raw).getTime() : NaN;
+    if (Number.isFinite(t)) return t;
+    const started = r?.started_at || r?.startedAt || null;
+    const ts = started ? new Date(started).getTime() : NaN;
+    return Number.isFinite(ts) ? ts : null;
+  }, [data]);
+
+  const noUpdateMinutes = useMemo(() => {
+    if (!lastUpdatedMs) return null;
+    return Math.floor((Date.now() - lastUpdatedMs) / 60000);
+  }, [lastUpdatedMs]);
+
+  const canDismissAfterNoUpdate = (noUpdateMinutes ?? 0) >= 15;
+
+  const resolveTripAndNavigate = useMemo(() => {
+    return (id: string) => {
+      if (!id) return;
+      if (onTripResolved) {
+        onTripResolved(id);
+        return;
+      }
+      try {
+        router.push({ pathname: "/(app)/ride-details", params: { rideId: id } as any });
+      } catch {
+        // ignore
+      }
+    };
+  }, [onTripResolved]);
+
+  const doForceComplete = async (opts: { reportIssue: boolean }) => {
+    if (!rideId) {
+      showMessage({ type: "warning", message: "Ride ID not available yet." });
+      return;
+    }
+    if (forceCompleting) return;
+    setForceCompleting(true);
+    try {
+      const res = await apiClient.post(`rides/${rideId}/force-complete`, {
+        reportIssue: opts.reportIssue,
+      });
+      const fare = (res as any)?.data?.fare ?? (res as any)?.fare ?? null;
+      showMessage({
+        type: "success",
+        message: fare != null ? `Ride ended. Fare: ₦${Number(fare).toLocaleString()}` : "Ride ended successfully.",
+      });
+      resolveTripAndNavigate(rideId);
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Unable to end ride. Please try again.";
+      showMessage({ type: "danger", message: String(msg) });
+    } finally {
+      setForceCompleting(false);
+    }
+  };
+
   const hasDriver =
     data?.driver && typeof data.driver === "object"
       ? Object.keys(data.driver).length > 0
@@ -269,6 +387,14 @@ export const WaitingView = ({
   const rideStatusLower = String((data as any)?.status ?? "").toLowerCase();
   const isDriverArrived =
     rideStatusLower === "arrived" || rideStatusLower === "driver_arrived";
+  /** Trip is live on the road — prefer status when booleans are stale. */
+  const hasRideStarted = !!(
+    data?.is_ride_started ||
+    data?.isRideStarted ||
+    rideStatusLower === "in-progress" ||
+    rideStatusLower === "in_progress" ||
+    rideStatusLower === "started"
+  );
 
   // ── Pulse animations ────────────────────────────────────────────────────────
   const searchPulseAnim = useRef(new RNAnimated.Value(1)).current;
@@ -393,6 +519,47 @@ export const WaitingView = ({
     return str;
   };
 
+  const driversNotified = useMemo(() => {
+    const r = data as any;
+    const v = r?.drivers_notified;
+    if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, Math.floor(v));
+    if (typeof v === "string" && v.trim() !== "") {
+      const p = parseInt(v, 10);
+      if (!Number.isNaN(p)) return Math.max(0, p);
+    }
+    return 0;
+  }, [data]);
+
+  const searchRadiusKm = useMemo(() => {
+    const v = (data as any)?.search_radius_km;
+    if (typeof v === "number" && Number.isFinite(v) && v > 0) return Math.round(v * 10) / 10;
+    return 10;
+  }, [data]);
+
+  const estWaitMin = useMemo(() => {
+    const raw = (data as any)?.duration;
+    const n = raw == null || raw === "" ? 2 : Number(raw);
+    const base = Number.isFinite(n) && n > 0 ? Math.ceil(n) : Math.ceil(2);
+    return Math.max(1, base);
+  }, [data]);
+
+  const searchFareDisplay = useMemo(() => {
+    const costValue =
+      (data as any)?.fare?.totalFare ??
+      (data as any)?.fare?.total_fare ??
+      data?.cost ??
+      (data as any)?.totalFare;
+    if (!costValue) return "₦0";
+    const num = typeof costValue === "string" ? parseFloat(costValue) : costValue;
+    if (isNaN(num) || num === 0) return "₦0";
+    return `₦${Math.round(num).toLocaleString()}`;
+  }, [data]);
+
+  const searchRotatingMessages = useMemo(
+    () => getSearchRotatingMessages(driversNotified, searchFareDisplay),
+    [driversNotified, searchFareDisplay]
+  );
+
   const statusText = useMemo(() => {
     if (hasRideStarted) return "In Transit";
     if (isAccepted) {
@@ -415,18 +582,277 @@ export const WaitingView = ({
     return waitingSubtitleOverride || "Searching for nearby drivers…";
   }, [data?.arrival_distance, data?.distance, hasRideStarted, isAccepted, waitingSubtitleOverride]);
 
+  const liveRideState = useMemo(() => getRideStateFromData(data as any), [data]);
+  const arrivingBy = useMemo(() => getArrivingByLabel(data as any), [data]);
+  const tripContext = useMemo(() => getTripContext(data as any), [data]);
+  const headerCopy = useMemo(
+    () => getRiderHeaderCopy(liveRideState, data as any),
+    [liveRideState, data]
+  );
+
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <View style={styles.wrapper}>
-      <ScrollView
-        style={styles.scrollContainer}
-        contentContainerStyle={styles.container}
-        showsVerticalScrollIndicator={false}
-        nestedScrollEnabled={true}
-        bounces={false}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.keyboardContainer}
       >
+        <ScrollView
+          style={styles.scrollContainer}
+          contentContainerStyle={styles.container}
+          showsVerticalScrollIndicator={false}
+          nestedScrollEnabled={true}
+          keyboardShouldPersistTaps="handled"
+          bounces={false}
+        >
+          {/* ── Accepted / In-Transit (modernized) ── */}
+          {isAccepted ? (
+            <>
+              <RideStatusHeader
+                state={liveRideState}
+                title={headerCopy.title}
+                subtitle={headerCopy.subtitle}
+                arrivingBy={arrivingBy}
+                reassurance={headerCopy.reassurance}
+              />
+
+              <TripDetailsCard fromLabel={tripContext.fromLabel} toLabel={tripContext.toLabel} />
+
+              {hasDriver ? (
+                <UserInfoCard
+                  title="Driver"
+                  imageUrl={
+                    (data as any)?.driver?.driver_image ||
+                    (data as any)?.driver?.image ||
+                    (data as any)?.driver?.user?.profileImage ||
+                    (data as any)?.driver?.user?.image ||
+                    null
+                  }
+                  name={(() => {
+                    const d = (data as any)?.driver || {};
+                    const u = d?.user || {};
+                    const first =
+                      d?.first_name ||
+                      d?.firstname ||
+                      u?.first_name ||
+                      u?.firstname ||
+                      u?.firstName ||
+                      "";
+                    const last =
+                      d?.last_name ||
+                      d?.lastname ||
+                      u?.last_name ||
+                      u?.lastname ||
+                      u?.lastName ||
+                      "";
+                    const joined = [first, last].filter(Boolean).join(" ").trim();
+                    return (
+                      joined ||
+                      d?.driver_name ||
+                      d?.full_name ||
+                      d?.name ||
+                      u?.fullName ||
+                      u?.name ||
+                      "Driver"
+                    );
+                  })()}
+                  ratingText={(() => {
+                    const d = (data as any)?.driver || {};
+                    const rating =
+                      d?.driver_rating ??
+                      d?.rating?.average ??
+                      d?.rating ??
+                      d?.user?.rating ??
+                      null;
+                    const trips = d?.rides_count ?? d?.total_rides ?? d?.driver_total_rides ?? null;
+                    const ratingFixed =
+                      rating != null && !Number.isNaN(parseFloat(String(rating)))
+                        ? parseFloat(String(rating)).toFixed(1)
+                        : null;
+                    if (ratingFixed && trips != null) return `⭐ ${ratingFixed} (${trips} trips)`;
+                    if (ratingFixed) return `⭐ ${ratingFixed}`;
+                    if (trips != null) return `${trips} trips`;
+                    return null;
+                  })()}
+                  subtitle={(() => {
+                    const d = (data as any)?.driver || {};
+                    const car =
+                      [d?.vehicle_color, d?.vehicle_name, d?.vehicle_model]
+                        .filter(Boolean)
+                        .join(" ") ||
+                      d?.vehicle_type ||
+                      "";
+                    const plate = d?.licence_plate_number || d?.vehicle_number || "";
+                    const parts = [car, plate].filter(Boolean);
+                    return parts.length ? parts.join(" • ") : null;
+                  })()}
+                />
+              ) : null}
+
+              <ProgressBar label="Pickup → Dropoff" state={liveRideState} />
+
+              {(liveRideState === "trip_started" || liveRideState === "near_destination") ? (
+                <View style={styles.issuesRow}>
+                  <TouchableOpacity
+                    onPress={() => setIssuesOpen(true)}
+                    disabled={forceCompleting}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel="Having issues"
+                  >
+                    <Text style={styles.issuesLink}>Having issues?</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              <Modal
+                visible={issuesOpen}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setIssuesOpen(false)}
+              >
+                <Pressable style={styles.sheetBackdrop} onPress={() => setIssuesOpen(false)} />
+                <View style={styles.sheetWrap}>
+                  <View style={styles.sheet}>
+                    <Text style={styles.sheetTitle}>Having issues?</Text>
+                    <Text style={styles.sheetSubtitle}>
+                      You can end the ride if it’s stuck, or report that the driver didn’t end the trip.
+                    </Text>
+
+                    <TouchableOpacity
+                      style={[styles.sheetAction, forceCompleting && { opacity: 0.6 }]}
+                      disabled={forceCompleting}
+                      onPress={() => {
+                        setIssuesOpen(false);
+                        Alert.alert("End Ride", "Are you sure you want to end this ride?", [
+                          { text: "Cancel", style: "cancel" },
+                          {
+                            text: "End Ride",
+                            style: "destructive",
+                            onPress: () => void doForceComplete({ reportIssue: false }),
+                          },
+                        ]);
+                      }}
+                    >
+                      <Text style={styles.sheetActionText}>End Ride</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.sheetAction, forceCompleting && { opacity: 0.6 }]}
+                      disabled={forceCompleting}
+                      onPress={() => {
+                        setIssuesOpen(false);
+                        Alert.alert(
+                          "Report issue",
+                          "This will end the ride and notify support that the driver didn’t end the trip.",
+                          [
+                            { text: "Cancel", style: "cancel" },
+                            {
+                              text: "Report & End",
+                              style: "destructive",
+                              onPress: () => void doForceComplete({ reportIssue: true }),
+                            },
+                          ]
+                        );
+                      }}
+                    >
+                      <Text style={[styles.sheetActionText, { color: ERROR_RED }]}>
+                        Report: Driver Didn’t End Trip
+                      </Text>
+                    </TouchableOpacity>
+
+                    {canDismissAfterNoUpdate ? (
+                      <TouchableOpacity
+                        style={styles.sheetAction}
+                        onPress={() => {
+                          setIssuesOpen(false);
+                          Alert.alert(
+                            "Dismiss trip card?",
+                            "This will only dismiss the trip UI on your device. It will not complete the trip.",
+                            [
+                              { text: "Cancel", style: "cancel" },
+                              {
+                                text: "Dismiss",
+                                style: "destructive",
+                                onPress: () => {
+                                  try {
+                                    onDismissTripUI?.();
+                                  } catch {
+                                    // ignore
+                                  }
+                                },
+                              },
+                            ]
+                          );
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.sheetActionText}>Dismiss</Text>
+                      </TouchableOpacity>
+                    ) : null}
+
+                    <TouchableOpacity
+                      style={styles.sheetCancel}
+                      onPress={() => setIssuesOpen(false)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.sheetCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Modal>
+
+              <RiderActionButtons
+                state={liveRideState}
+                onChat={() => {
+                  try {
+                    chat();
+                  } catch {
+                    showMessage({ type: "warning", message: "Chat is not available right now." });
+                  }
+                }}
+                onCall={() => {
+                  const driver = (data as any)?.driver || {};
+                  const phone =
+                    driver?.driver_phone ||
+                    driver?.phone ||
+                    driver?.phone_number ||
+                    driver?.user?.phone ||
+                    driver?.user?.phoneNumber ||
+                    (data as any)?.driver_phone ||
+                    "";
+                  if (!phone) {
+                    showMessage({ type: "warning", message: "Driver phone number not available" });
+                    return;
+                  }
+                  Linking.openURL(`tel:${String(phone).trim()}`).catch(() =>
+                    showMessage({
+                      type: "danger",
+                      message: "Unable to make call. Please try again.",
+                    })
+                  );
+                }}
+                onCancel={cancel}
+                onEmergency={() => {
+                  const rideId = (data as any)?.ride_id || (data as any)?._id || "";
+                  try {
+                    router.push({
+                      pathname: "/(app)/(tabs)/(profile)/contact",
+                      params: {
+                        ...(rideId ? { rideId } : {}),
+                        subject: "Emergency / safety issue",
+                      } as any,
+                    });
+                  } catch {
+                    showMessage({ type: "warning", message: "Unable to open support right now." });
+                  }
+                }}
+              />
+            </>
+          ) : null}
+
         {/* ── Driver arrived at pickup ── */}
-        {isDriverArrived && !hasRideStarted ? (
+        {!isAccepted && isDriverArrived && !hasRideStarted ? (
           <View style={styles.statusHeader}>
             <View style={tw`w-16 h-16 rounded-full bg-green-100 items-center justify-center mb-2`}>
               <RNAnimated.View
@@ -480,29 +906,27 @@ export const WaitingView = ({
                   pulseAnim={searchPulseAnim}
                   subtitleOverride={waitingSubtitleOverride}
                   isCountdown={isCountdown}
+                  rotatingMessages={searchRotatingMessages}
                 />
 
-                <RideSearchInfoCard />
+                <RideSearchInfoCard
+                  driversNearby={driversNotified}
+                  radiusKm={searchRadiusKm}
+                  estWaitMin={estWaitMin}
+                />
 
                 <ProgressSteps currentStep={progressStep} />
               </>
             ) : (
               /* ── Accepted / In-Transit header ── */
-              <View style={styles.statusHeader}>
-                {isAccepted && (
-                  <View style={styles.checkIconContainer}>
-                    <AntDesign name="check-circle" size={36} color={BRAND_GREEN} />
-                  </View>
-                )}
-                <Text style={styles.statusTitle}>{statusText}</Text>
-                <Text style={styles.statusSubtext}>{statusSubtext}</Text>
-              </View>
+              // handled above (modernized accepted view)
+              <View />
             )}
           </>
         )}
 
-        {/* ── Driver card (accepted + driver assigned) ── */}
-        {hasDriver && isAccepted && (
+        {/* ── Legacy driver card (keep only for non-accepted states) ── */}
+        {hasDriver && !isAccepted && (
           <TouchableOpacity
             onPress={() => info(data?.driver?.driver_id)}
             style={styles.driverCard}
@@ -618,7 +1042,7 @@ export const WaitingView = ({
         )}
 
         {/* ── Secure fare banner (accepted, en-route) ── */}
-        {isAccepted && !hasRideStarted && (
+        {!isAccepted ? null : !hasRideStarted ? (
           <View style={styles.secureFareBanner}>
             <View style={styles.secureFareHeader}>
               <Ionicons name="lock-closed" size={18} color={BRAND_GREEN} />
@@ -649,7 +1073,7 @@ export const WaitingView = ({
               </TouchableOpacity>
             </View>
           </View>
-        )}
+        ) : null}
 
         {/* ── Fare card ── */}
         <View style={styles.tripCard}>
@@ -708,109 +1132,44 @@ export const WaitingView = ({
           </View>
         )}
 
-        {/* ── Action buttons ── */}
-        <View style={[styles.actionButtons, { paddingBottom: Math.max(insets.bottom + 8, 16) }]}>
-          {/* Chat / Call (accepted + driver present) */}
-          {isAccepted && hasDriver && (
-            <View style={styles.quickActions}>
-              <TouchableOpacity
-                onPress={() => {
-                  if (chat) {
-                    const driver = data?.driver as any;
-                    const driverUserId =
-                      driver?.user_id ||
-                      driver?.user?._id ||
-                      driver?.user?.id ||
-                      data?.driver_id;
-                    if (driverUserId) {
-                      chat();
-                    } else {
-                      showMessage({
-                        type: "warning",
-                        message: "Driver information not available yet. Please wait…",
-                      });
-                    }
-                  } else {
-                    showMessage({ type: "warning", message: "Chat is not available at this time" });
-                  }
-                }}
-                style={styles.quickActionButton}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="chatbubble-ellipses-outline" size={22} color={BRAND_GREEN} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  const driver = data?.driver as any;
-                  const phoneNumber =
-                    driver?.driver_phone ||
-                    driver?.phone ||
-                    driver?.phone_number ||
-                    driver?.user?.phone ||
-                    driver?.user?.phoneNumber ||
-                    (data as any)?.driver_phone ||
-                    (data as any)?.phone;
-                  if (phoneNumber) {
-                    Linking.openURL(`tel:${String(phoneNumber).trim()}`).catch(() =>
-                      showMessage({ type: "danger", message: "Unable to make call. Please try again." })
-                    );
-                  } else {
-                    showMessage({ type: "warning", message: "Driver phone number not available" });
-                  }
-                }}
-                style={styles.quickActionButton}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="call-outline" size={22} color={BRAND_GREEN} />
-              </TouchableOpacity>
-            </View>
-          )}
+        {/* ── Action buttons (waiting-state only; accepted handled above) ── */}
+        {!isAccepted ? (
+          <View style={[styles.actionButtons, { paddingBottom: Math.max(insets.bottom + 8, 16) }]}>
+            <TouchableOpacity
+              onPress={onRequestNewDriver ?? action}
+              style={styles.primaryButton}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="swap-horizontal-outline"
+                size={18}
+                color="#fff"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.primaryButtonText}>Try another driver</Text>
+            </TouchableOpacity>
 
-          {/* Waiting-state actions */}
-          {!isAccepted && (
-            <>
-              {/* PRIMARY: Try another driver */}
-              <TouchableOpacity
-                onPress={onRequestNewDriver ?? action}
-                style={styles.primaryButton}
-                activeOpacity={0.8}
-              >
+            {onSearchAgain && (
+              <TouchableOpacity onPress={onSearchAgain} style={styles.textButton} activeOpacity={0.7}>
                 <Ionicons
-                  name="swap-horizontal-outline"
-                  size={18}
-                  color="#fff"
-                  style={{ marginRight: 6 }}
+                  name="location-outline"
+                  size={15}
+                  color={BRAND_GREEN}
+                  style={{ marginRight: 4 }}
                 />
-                <Text style={styles.primaryButtonText}>Try another driver</Text>
+                <Text style={styles.textButtonText}>Change pickup</Text>
               </TouchableOpacity>
+            )}
 
-              {/* SECONDARY: Change pickup */}
-              {onSearchAgain && (
-                <TouchableOpacity
-                  onPress={onSearchAgain}
-                  style={styles.textButton}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="location-outline" size={15} color={BRAND_GREEN} style={{ marginRight: 4 }} />
-                  <Text style={styles.textButtonText}>Change pickup</Text>
-                </TouchableOpacity>
-              )}
-            </>
-          )}
+            <TouchableOpacity onPress={cancel} style={styles.cancelButton} activeOpacity={0.8}>
+              <Text style={styles.cancelButtonText}>Cancel ride</Text>
+            </TouchableOpacity>
 
-          {/* DANGER: Cancel ride */}
-          <TouchableOpacity onPress={cancel} style={styles.cancelButton} activeOpacity={0.8}>
-            <Text style={styles.cancelButtonText}>Cancel ride</Text>
-          </TouchableOpacity>
-
-          {/* Reassurance microcopy */}
-          {!isAccepted && !hasRideStarted && (
-            <Text style={styles.reassuranceText}>
-              Most rides are matched within 60 seconds
-            </Text>
-          )}
-        </View>
-      </ScrollView>
+            <Text style={styles.reassuranceText}>Most rides are matched within 60 seconds</Text>
+          </View>
+        ) : null}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 };
@@ -819,15 +1178,93 @@ const styles = StyleSheet.create({
   wrapper: {
     width: "100%",
     backgroundColor: "#fff",
+    flex: 1,
+    minHeight: 0,
+    alignSelf: "stretch",
+  },
+  keyboardContainer: {
+    width: "100%",
+    flex: 1,
+    minHeight: 0,
   },
   scrollContainer: {
     width: "100%",
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
   },
   container: {
+    flexGrow: 1,
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 12,
+    // Trip in progress: ensure fare card/action area isn't clipped on small screens.
+    paddingBottom: 72,
     width: "100%",
+  },
+
+  issuesRow: {
+    marginTop: 8,
+    marginBottom: 6,
+    alignItems: "center",
+  },
+  issuesLink: {
+    fontSize: 12,
+    color: "#6B7280",
+    fontFamily: "RobotoMedium",
+    textDecorationLine: "underline",
+  },
+  sheetBackdrop: {
+    position: "absolute",
+    inset: 0,
+    backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  sheetWrap: {
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  sheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 14,
+  },
+  sheetTitle: {
+    fontSize: 16,
+    color: "#111827",
+    fontFamily: "RobotoBold",
+  },
+  sheetSubtitle: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#6B7280",
+    fontFamily: "RobotoRegular",
+    lineHeight: 16,
+  },
+  sheetAction: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: "#FFFFFF",
+  },
+  sheetActionText: {
+    fontSize: 14,
+    color: "#111827",
+    fontFamily: "RobotoMedium",
+  },
+  sheetCancel: {
+    marginTop: 10,
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  sheetCancelText: {
+    fontSize: 13,
+    color: "#6B7280",
+    fontFamily: "RobotoMedium",
   },
 
   // ── Status header ───────────────────────────────────────────────────────────
@@ -858,6 +1295,11 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 2,
   },
+  subtitleSlot: {
+    minHeight: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   countdownText: {
     fontSize: 13,
     color: BRAND_GREEN,
@@ -865,6 +1307,7 @@ const styles = StyleSheet.create({
   },
   rotatingMsg: {
     fontSize: 13,
+    lineHeight: 18,
     color: "#8F92A1",
     fontFamily: "RobotoRegular",
     textAlign: "center",

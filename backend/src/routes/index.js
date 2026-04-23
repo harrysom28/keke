@@ -20,7 +20,7 @@ import * as pusherController from '../controllers/pusherController.js';
 import * as driverController from '../controllers/driverController.js';
 import * as rideController from '../controllers/rideController.js';
 import * as authController from '../controllers/authController.js';
-import { protect } from '../middleware/auth.js';
+import { protect, restrictTo } from '../middleware/auth.js';
 import { validationRules, validate } from '../middleware/validation.js';
 import { limiters } from '../middleware/rateLimiter.js';
 import { getRedisClient } from '../config/redis.js';
@@ -125,6 +125,17 @@ router.use('/', uploadRoutes); // File upload routes
 router.get('/ride/driver-location', protect, rideController.getDriverLocation);
 router.post('/booking/ride/assign-new-driver', protect, validationRules.assignNewDriver, validate, rideController.assignNewDriver);
 router.get('/rides/fare-estimate', protect, validationRules.fareEstimatePreviewQuery, validate, rideController.getFareEstimatePreview);
+// Rider trip recovery + force-complete (alias routes; keeps /booking/* intact)
+router.get('/rides/active', protect, restrictTo('passenger'), rideController.getActiveRide);
+router.post(
+  '/rides/:rideId/force-complete',
+  protect,
+  restrictTo('passenger'),
+  validationRules.rideIdParam,
+  validate,
+  rideController.forceCompleteRide
+);
+router.get('/rides/:rideId', protect, validationRules.rideIdParam, validate, rideController.getRideDetails);
 
 // Driver discovery
 router.get('/drivers/nearby-count', protect, validationRules.nearbyDriverCountQuery, validate, driverController.getNearbyDriverCount);

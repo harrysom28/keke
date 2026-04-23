@@ -914,7 +914,8 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 20,
     paddingTop: 2,
-    paddingBottom: 32,
+    // Ensure footer/button area isn't clipped on compact screens.
+    paddingBottom: 44,
   },
   vehicleCardContainer: {
     marginBottom: 10,

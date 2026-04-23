@@ -149,11 +149,24 @@ export default ({ config }) => {
     base?.ios?.config?.googleMapsApiKey ||
     "";
 
-  // Fail fast in dev builds: MapView will crash natively without this key.
+  // Fail fast locally (MapView can crash natively without a key), but allow EAS builds to proceed
+  // even when the env isn't configured yet so CI/builds aren't blocked by missing secrets.
   if (!mapsDisplayKey) {
-    throw new Error(
-      "Missing Maps display key. Set EXPO_PUBLIC_MAPS_DISPLAY_KEY (preferred) or EXPO_PUBLIC_ANDROID_MAPS_DISPLAY_KEY in `mobile/.env` (or `mobile/utils/mobile.env`), then rebuild with `npm run android`."
-    );
+    const isEas =
+      process.env.EAS_BUILD === "true" ||
+      process.env.EAS_BUILD === "1" ||
+      process.env.CI === "true" ||
+      process.env.CI === "1";
+    if (isEas) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "⚠️ Missing Maps display key for this build. Set EXPO_PUBLIC_MAPS_DISPLAY_KEY (preferred) or EXPO_PUBLIC_ANDROID_MAPS_DISPLAY_KEY in EAS environment variables to enable maps at runtime."
+      );
+    } else {
+      throw new Error(
+        "Missing Maps display key. Set EXPO_PUBLIC_MAPS_DISPLAY_KEY (preferred) or EXPO_PUBLIC_ANDROID_MAPS_DISPLAY_KEY in `mobile/.env` (or `mobile/utils/mobile.env`), then rebuild with `npm run android`."
+      );
+    }
   }
 
   // Production API URL: set EXPO_PUBLIC_API_URL in EAS env for production builds

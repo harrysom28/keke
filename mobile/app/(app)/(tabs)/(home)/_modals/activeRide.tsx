@@ -2,8 +2,8 @@ import { BackHandler, Dimensions, Text, View } from "react-native";
 import { TouchableOpacity } from "react-native-gesture-handler";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { AntDesign } from "@expo/vector-icons";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { setAppData, setRideData, setRideUtils } from "@/store/AppSlice";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { clearRideState, setAppData, setRideData, setRideUtils } from "@/store/AppSlice";
 import { useDriverRequestTimeout } from "@/hooks/useDriverRequestTimeout";
 
 import CancelRideModal from "@/components/find-ride/cancelRide";
@@ -20,7 +20,9 @@ import apiClient from "@/utils/apiClient";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useDispatch } from "react-redux";
-import { useFocusEffect } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
+import { AppContext } from "@/app/context";
+import { pusherManager } from "@/utils/pusherManager";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -43,6 +45,7 @@ const ActiveRideSheet = ({
   chatOpenSignal = 0,
 }: Props) => {
   const dispatch = useDispatch();
+  const { pusherReady } = useContext(AppContext);
   const screenHeight = Dimensions.get("window").height;
   const [modal, setModal] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
@@ -51,6 +54,76 @@ const ActiveRideSheet = ({
   const lastAppliedSheetHeightRef = useRef<number | null>(null);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastChatKickRef = useRef(0);
+  const blankAutoClosedRef = useRef(false);
+  const lastTripUpdateAtRef = useRef<number>(Date.now());
+  const tripPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tripPollDelayMsRef = useRef<number>(5 * 60 * 1000);
+  /** Filled after `useDriverRequestTimeout` — avoids TDZ and unstable Pusher effect deps. */
+  const cancelDriverRequestTimersRef = useRef<() => void>(() => {});
+
+  const handleTripResolved = useCallback(
+    (rideId: string) => {
+      try {
+        cancelDriverRequestTimersRef.current();
+      } catch {
+        // ignore
+      }
+      try {
+        dispatch(clearRideState());
+      } catch {
+        // ignore
+      }
+      try {
+        clearMap?.();
+      } catch {
+        // ignore
+      }
+      try {
+        bottomSheetRef?.current?.close();
+      } catch {
+        // ignore
+      }
+      try {
+        setCurrentView((prev) => ({ ...prev, screen: "", data: {} as any }));
+      } catch {
+        // ignore
+      }
+      try {
+        router.push({ pathname: "/(app)/ride-details", params: { rideId } as any });
+      } catch {
+        // ignore
+      }
+    },
+    [bottomSheetRef, clearMap, dispatch, setCurrentView]
+  );
+
+  const handleDismissTripUI = useCallback(() => {
+    try {
+      cancelDriverRequestTimersRef.current();
+    } catch {
+      // ignore
+    }
+    try {
+      dispatch(clearRideState());
+    } catch {
+      // ignore
+    }
+    try {
+      clearMap?.();
+    } catch {
+      // ignore
+    }
+    try {
+      bottomSheetRef?.current?.close();
+    } catch {
+      // ignore
+    }
+    try {
+      setCurrentView((prev) => ({ ...prev, screen: "", data: {} as any }));
+    } catch {
+      // ignore
+    }
+  }, [bottomSheetRef, clearMap, dispatch, setCurrentView]);
 
   const rideDataForWaiting = useMemo(() => {
     if (currentView?.data?.waiting && Object.keys(currentView.data.waiting).length > 0) {
@@ -61,6 +134,89 @@ const ActiveRideSheet = ({
     }
     return {} as TRide;
   }, [currentView?.data?.waiting, temp]);
+
+  const activeRideId = useMemo(() => {
+    const rd: any = rideDataForWaiting || {};
+    return String(rd?.ride_id || rd?._id || "").trim();
+  }, [rideDataForWaiting]);
+
+  const handleTripResolvedRef = useRef(handleTripResolved);
+  handleTripResolvedRef.current = handleTripResolved;
+
+  // Subscribe to trip resolution events (force-complete / flagged / completed)
+  useEffect(() => {
+    if (!pusherReady) return;
+    if (!activeRideId) return;
+
+    const channel = `private.ride.${activeRideId}`;
+    lastTripUpdateAtRef.current = Date.now();
+
+    const onAnyResolution = (payload: any) => {
+      lastTripUpdateAtRef.current = Date.now();
+      const rideIdFromPayload = String(payload?.rideId || payload?.ride_id || "").trim();
+      const id = rideIdFromPayload || activeRideId;
+      handleTripResolvedRef.current(id);
+    };
+
+    const cleanup = pusherManager.subscribeMany(
+      channel,
+      ["trip:force_completed", "trip:flagged", "trip:completed", "ride.completed"],
+      onAnyResolution
+    );
+
+    return () => {
+      try {
+        cleanup();
+      } catch {
+        // ignore
+      }
+    };
+  }, [activeRideId, pusherReady]);
+
+  // Polling fallback: if no trip status update for >=5 minutes, check backend status
+  useEffect(() => {
+    if (!activeRideId) return;
+
+    const statusRaw = String((rideDataForWaiting as any)?.status ?? "").toLowerCase();
+    const inProgress = statusRaw === "in-progress" || statusRaw === "in_progress" || statusRaw === "started";
+    if (!inProgress) return;
+
+    const scheduleNext = () => {
+      if (tripPollTimeoutRef.current) clearTimeout(tripPollTimeoutRef.current);
+      const delay = Math.max(5 * 60 * 1000, tripPollDelayMsRef.current);
+      tripPollTimeoutRef.current = setTimeout(async () => {
+        try {
+          const now = Date.now();
+          if (now - lastTripUpdateAtRef.current < 5 * 60 * 1000) {
+            scheduleNext();
+            return;
+          }
+
+          const res = await apiClient.get(`rides/${activeRideId}`);
+          const nextStatus = String(res?.data?.data?.ride?.status ?? res?.data?.ride?.status ?? "").toLowerCase();
+          lastTripUpdateAtRef.current = Date.now();
+
+          if (nextStatus && nextStatus !== "in-progress" && nextStatus !== "in_progress") {
+            handleTripResolved(activeRideId);
+            return;
+          }
+        } catch {
+          // ignore network errors; backoff and retry later
+        } finally {
+          tripPollDelayMsRef.current = Math.min(tripPollDelayMsRef.current * 2, 20 * 60 * 1000);
+          scheduleNext();
+        }
+      }, delay);
+    };
+
+    tripPollDelayMsRef.current = 5 * 60 * 1000;
+    scheduleNext();
+
+    return () => {
+      if (tripPollTimeoutRef.current) clearTimeout(tripPollTimeoutRef.current);
+      tripPollTimeoutRef.current = null;
+    };
+  }, [activeRideId, handleTripResolved, rideDataForWaiting]);
 
   const showStaleRideWarning = useMemo(() => {
     const ride = rideDataForWaiting as any;
@@ -89,11 +245,26 @@ const ActiveRideSheet = ({
     let h = 120;
     const hasDriver =
       rd?.driver && typeof rd.driver === "object" && Object.keys(rd.driver).length > 0;
+    const accepted = !!(rd?.accepted_by_driver || rd?.acceptedByDriver);
+    const rawStatus = String(rd?.status ?? "").toLowerCase();
+    const tripLike =
+      !!rd?.is_ride_started ||
+      !!rd?.isRideStarted ||
+      !!rd?.is_started ||
+      rawStatus.includes("in-progress") ||
+      rawStatus.includes("in_progress") ||
+      rawStatus === "started";
 
     switch (resolvedScreenForLayout) {
       case "WAITING":
         h += 320;
         if (hasDriver) h += 140;
+        // Accepted / in-trip UI (header, trip card, driver card, progress, actions, fare) needs more vertical space
+        // than the generic WAITING estimate — otherwise the bottom sheet clips and ScrollView never scrolls.
+        if (accepted) {
+          h += 320;
+          if (tripLike) h += 240;
+        }
         if (showStaleRideWarning) h += 72;
         break;
       case "SEARCH":
@@ -118,11 +289,24 @@ const ActiveRideSheet = ({
   }, [resolvedScreenForLayout, rideDataForWaiting, showStaleRideWarning]);
 
   const sheetHeight = useMemo(() => {
-    const minH = screenHeight * 0.3;
+    const rd = rideDataForWaiting as any;
+    const accepted = !!(rd?.accepted_by_driver || rd?.acceptedByDriver);
+    const rawStatus = String(rd?.status ?? "").toLowerCase();
+    const tripLike =
+      !!rd?.is_ride_started ||
+      !!rd?.isRideStarted ||
+      !!rd?.is_started ||
+      rawStatus.includes("in-progress") ||
+      rawStatus.includes("in_progress") ||
+      rawStatus === "started";
+    const minH =
+      resolvedScreenForLayout === "WAITING" && accepted
+        ? Math.min(screenHeight * 0.52, screenHeight * 0.9)
+        : screenHeight * 0.3;
     const maxH = screenHeight * 0.9;
     const target = measuredHeight ?? estimatedSheetHeight;
     return Math.max(minH, Math.min(target, maxH));
-  }, [screenHeight, measuredHeight, estimatedSheetHeight]);
+  }, [screenHeight, measuredHeight, estimatedSheetHeight, resolvedScreenForLayout, rideDataForWaiting]);
 
   const applySheetHeight = useCallback(
     (value: number) => {
@@ -140,10 +324,22 @@ const ActiveRideSheet = ({
     (event: any) => {
       const measured = event?.nativeEvent?.layout?.height;
       if (!measured || measured <= 50) return;
-      applySheetHeight(measured + 48);
+      // IMPORTANT: `measured` here is the *container* height (already bounded by `sheetHeight`).
+      // Adding padding causes a feedback loop where the sheet keeps expanding and "bouncing".
+      applySheetHeight(measured);
     },
     [applySheetHeight]
   );
+
+  // If the ride UI grows (e.g. trip started) but we previously locked a short measured height, drop it
+  // so `estimatedSheetHeight` can drive a taller sheet again.
+  useEffect(() => {
+    if (measuredHeight == null) return;
+    if (estimatedSheetHeight > measuredHeight + 120) {
+      lastAppliedSheetHeightRef.current = null;
+      setMeasuredHeight(null);
+    }
+  }, [estimatedSheetHeight, measuredHeight]);
 
   useEffect(() => {
     if (!chatOpenSignal || chatOpenSignal === lastChatKickRef.current) return;
@@ -161,12 +357,86 @@ const ActiveRideSheet = ({
       );
     }, 200);
     setCurrentView((prev) => ({ ...prev, screen: "" }));
+    dispatch(clearRideState());
+    if (clearMap) {
+      clearMap();
+    }
   };
 
   const rideIdForHook =
     rideDataForWaiting?.ride_id ||
     (rideDataForWaiting as any)?._id ||
     (rideDataForWaiting as any)?.rideId;
+
+  // Self-heal: after reload, Home may open the sheet before `currentView.screen`
+  // is restored. If we have a real rideId, ensure we render WAITING.
+  useEffect(() => {
+    if (!rideIdForHook) return;
+    if (currentView?.screen) return;
+    setCurrentView((prev) => ({
+      ...prev,
+      screen: "WAITING",
+      data: {
+        ...(prev?.data ?? {}),
+        waiting: (rideDataForWaiting as any) ?? (prev?.data as any)?.waiting ?? {},
+      },
+    }));
+  }, [rideIdForHook, currentView?.screen, setCurrentView, rideDataForWaiting]);
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    // High-signal debug for the "blank sheet" report.
+    const payloadKeys =
+      rideDataForWaiting && typeof rideDataForWaiting === "object"
+        ? Object.keys(rideDataForWaiting as any).length
+        : 0;
+    const st = String((rideDataForWaiting as any)?.status ?? "").toLowerCase();
+    const accepted = !!(
+      (rideDataForWaiting as any)?.accepted_by_driver ||
+      (rideDataForWaiting as any)?.acceptedByDriver
+    );
+    console.log("ActiveRideSheet render state:", {
+      resolvedScreenForLayout,
+      rideIdForHook: rideIdForHook ? String(rideIdForHook) : null,
+      payloadKeys,
+      status: st,
+      accepted,
+    });
+  }, [rideIdForHook, rideDataForWaiting, resolvedScreenForLayout]);
+
+  // Safety: if the sheet gets opened with no valid ride payload (stale state / race),
+  // immediately close so the user is never trapped on a blank sheet.
+  useEffect(() => {
+    const hasWaitingPayload =
+      rideDataForWaiting && Object.keys(rideDataForWaiting as any).length > 0;
+    const screen = resolvedScreenForLayout;
+    const shouldAutoClose =
+      (screen === "" || screen === "WAITING") && !rideIdForHook && !hasWaitingPayload;
+    if (!shouldAutoClose) {
+      blankAutoClosedRef.current = false;
+      return;
+    }
+    if (blankAutoClosedRef.current) return;
+    blankAutoClosedRef.current = true;
+
+    dispatch(clearRideState());
+    if (clearMap) clearMap();
+    bottomSheetRef?.current?.close();
+    setCurrentView((prev) => {
+      const alreadyClosed =
+        prev?.screen === "" &&
+        (!prev?.data?.waiting || Object.keys(prev.data.waiting as any).length === 0);
+      return alreadyClosed ? prev : { ...prev, screen: "", data: { waiting: {} as any } };
+    });
+  }, [
+    rideIdForHook,
+    rideDataForWaiting,
+    resolvedScreenForLayout,
+    dispatch,
+    clearMap,
+    bottomSheetRef,
+    setCurrentView,
+  ]);
 
   const isRideAcceptedByDriver = !!(
     (rideDataForWaiting as any)?.accepted_by_driver || (rideDataForWaiting as any)?.acceptedByDriver
@@ -265,6 +535,10 @@ const ActiveRideSheet = ({
   });
 
   useEffect(() => {
+    cancelDriverRequestTimersRef.current = cancelDriverRequestTimers;
+  }, [cancelDriverRequestTimers]);
+
+  useEffect(() => {
     if (isRideAcceptedByDriver) {
       markAccepted();
     }
@@ -298,35 +572,35 @@ const ActiveRideSheet = ({
       (temp as any)?.rideId;
     const reason = data.description ? `${data.reason}: ${data.description}` : data.reason;
     
-    // Use apiClient instead of axios for automatic token refresh
-    apiClient
-      .post('booking/cancel-ride', { rideId, reason })
-      .then(({ data }) => {
+    // Use apiClient for automatic token refresh.
+    (async () => {
+      try {
+        await apiClient.post("booking/cancel-ride", { rideId, reason });
         executable();
-        // Clear ride state completely - this handles map, markers, polylines, and all state
-        if (clearMap) {
-          clearMap();
-        }
-        handleBack();
-        // Refresh to ensure backend state is synced
-        getActiveRide();
-      })
-      .catch((err) => {
-        let errorMessage = 'An unexpected error occurred.';
-
+      } catch (err: any) {
+        let errorMessage = "An unexpected error occurred.";
         if (err?.response?.data?.message) {
-          errorMessage = typeof err.response.data.message === 'string' 
-            ? err.response.data.message 
-            : (err.response.data.message?.message || errorMessage);
+          errorMessage =
+            typeof err.response.data.message === "string"
+              ? err.response.data.message
+              : err.response.data.message?.message || errorMessage;
         } else if (err?.response?.data?.error) {
-          errorMessage = typeof err.response.data.error === 'string' 
-            ? err.response.data.error 
-            : (err.response.data.error?.message || errorMessage);
+          errorMessage =
+            typeof err.response.data.error === "string"
+              ? err.response.data.error
+              : err.response.data.error?.message || errorMessage;
         }
-
         showError(errorMessage);
-      })
-      .finally(() => loading(false));
+      } finally {
+        // Always cleanup locally (404 = already gone, network error = still don't trap user).
+        cancelDriverRequestTimers();
+        dispatch(clearRideState());
+        if (clearMap) clearMap();
+        bottomSheetRef?.current?.close();
+        setCurrentView((prev) => ({ ...prev, screen: "" }));
+        loading(false);
+      }
+    })();
   };
 
   const ReassignDriver = (
@@ -380,6 +654,8 @@ const ActiveRideSheet = ({
             key={rideId || 'waiting'}
             ride={rideData}
             waitingSubtitleOverride={waitingSubtitleOverride}
+            onTripResolved={handleTripResolved}
+            onDismissTripUI={handleDismissTripUI}
             onRequestNewDriver={retryNow}
             onSearchAgain={() => {
               const rd = rideData as any;
@@ -491,6 +767,8 @@ const ActiveRideSheet = ({
               key={rideId || 'waiting-fallback'}
               ride={rideData}
               waitingSubtitleOverride={waitingSubtitleOverride}
+              onTripResolved={handleTripResolved}
+              onDismissTripUI={handleDismissTripUI}
               onRequestNewDriver={retryNow}
               onSearchAgain={() => {
                 const rd = rideData as any;
@@ -704,7 +982,16 @@ const ActiveRideSheet = ({
           }, 200);
         }}
       />
-      <View onLayout={handleContentLayout}>
+      <View
+        onLayout={handleContentLayout}
+        // Match sheet height so nested ScrollViews get a bounded parent (required for scrolling).
+        style={{
+          width: "100%",
+          minHeight: 220,
+          height: Math.max(220, Math.min(sheetHeight, screenHeight * 0.92)),
+          maxHeight: Math.min(sheetHeight, screenHeight * 0.92),
+        }}
+      >
         {showStaleRideWarning ? (
           <View
             style={tw`mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5`}
@@ -728,11 +1015,69 @@ const ActiveRideSheet = ({
             <AntDesign name="close" size={20} color="white" />
           </View>
         </TouchableOpacity>
-        {RenderView() || (
-          <View style={{ padding: 20, alignItems: 'center', justifyContent: 'center', flex: 1 }}>
-            <Text style={{ fontSize: 16, color: '#666' }}>Loading...</Text>
-          </View>
-        )}
+        {(() => {
+          const w = currentView?.data?.waiting as any;
+          const rideId =
+            w?.ride_id || w?.rideId || (temp as any)?.ride_id || (temp as any)?.rideId || (temp as any)?._id || w?._id;
+          const hasRidePayload =
+            (w && Object.keys(w).length > 0) || (temp && Object.keys(temp as any).length > 0);
+          const view = RenderView();
+
+          // If something goes wrong and we can't render the ride UI, never trap the user on a blank sheet.
+          if (!view) {
+            return (
+              <View style={tw`flex-1 items-center justify-center px-4 pt-10`}>
+                <Text style={tw.style(`text-base text-[#111827] text-center`, { fontFamily: "RobotoMedium" })}>
+                  {hasRidePayload
+                    ? "Loading your active ride…"
+                    : "We couldn't load your active ride details."}
+                </Text>
+                <Text style={tw.style(`text-sm text-[#6B7280] text-center mt-2`, { fontFamily: "RobotoRegular" })}>
+                  Tap refresh, or cancel the ride if it’s still active.
+                </Text>
+
+                <View style={tw`w-full mt-5 gap-y-3`}>
+                  <TouchableOpacity
+                    onPress={() => getActiveRide()}
+                    activeOpacity={0.85}
+                    style={tw`w-full bg-base-green py-4 rounded-xl`}
+                  >
+                    <Text style={tw.style(`text-white text-center text-base`, { fontFamily: "RobotoMedium" })}>
+                      Refresh active ride
+                    </Text>
+                  </TouchableOpacity>
+
+                  {rideId ? (
+                    <TouchableOpacity
+                      onPress={() => {
+                        cancelDriverRequestTimers();
+                        setModal(true);
+                      }}
+                      activeOpacity={0.85}
+                      style={tw`w-full border border-[#EF4444] py-4 rounded-xl`}
+                    >
+                      <Text style={tw.style(`text-[#EF4444] text-center text-base`, { fontFamily: "RobotoMedium" })}>
+                        Cancel ride
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+
+                  <TouchableOpacity
+                    onPress={handleBack}
+                    activeOpacity={0.85}
+                    style={tw`w-full bg-[#111827] py-4 rounded-xl`}
+                  >
+                    <Text style={tw.style(`text-white text-center text-base`, { fontFamily: "RobotoMedium" })}>
+                      Close
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          }
+
+          return view;
+        })()}
       </View>
     </BottomSheet>
   );
