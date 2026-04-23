@@ -78,7 +78,7 @@ const rideSchema = new mongoose.Schema(
     },
     completion_reason: {
       type: String,
-      enum: ['normal', 'force', 'timeout', 'issue_flagged', 'admin_resolved'],
+      enum: ['normal', 'force', 'timeout', 'issue_flagged', 'admin_resolved', null],
       default: null,
     },
     adminNote: { type: String, default: null },
