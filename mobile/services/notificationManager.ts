@@ -5,6 +5,7 @@ import logger from "@/utils/logger";
 import messaging from "@react-native-firebase/messaging";
 import { Pusher, PusherEvent } from "@pusher/pusher-websocket-react-native";
 import { router } from "expo-router";
+import { registerForPushNotifications } from "@/utils/registerPushToken";
 
 export type NotificationPayload = {
   id: string;
@@ -384,21 +385,20 @@ export const initFirebaseListeners = (): void => {
 
 export const registerFcmToken = async (): Promise<void> => {
   try {
-    const authStatus = await messaging().requestPermission();
-    const ok =
-      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-    if (!ok) {
-      logger.warn("FCM: notification permission not granted", { authStatus });
-      return;
-    }
-    const token = await messaging().getToken();
+    // Prefer Expo Push Tokens (ExponentPushToken[...]) to avoid APNs/FCM setup complexity.
+    // On simulators, this returns null (push requires physical device).
+    const token = await registerForPushNotifications();
     if (!token) {
-      logger.warn("FCM: getToken() returned empty");
+      logger.debug("Push token not available (likely simulator or permissions denied)");
       return;
     }
+
+    // New endpoint requested by backend: /api/auth/push-token
+    await apiClient.post("auth/push-token", { token, type: "expo" });
+    // Backward compatibility (existing backend route)
     await apiClient.post("notifications/fcm-token", { token });
-    logger.debug("FCM token registered with backend");
+
+    logger.debug("Push token registered with backend", { type: "expo" });
   } catch (error) {
     logger.error(
       "FCM token registration failed",

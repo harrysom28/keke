@@ -36,11 +36,6 @@ export const getErrorMessage = (error: any, fallback: string = 'An unexpected er
     return error.trim() || fallback;
   }
 
-  // Handle Error objects
-  if (error instanceof Error) {
-    return error.message || fallback;
-  }
-
   // Handle API response errors (Axios format)
   if (error?.response?.data) {
     const data = error.response.data;
@@ -66,6 +61,11 @@ export const getErrorMessage = (error: any, fallback: string = 'An unexpected er
         return data.error.message || data.error.name || String(data.error) || fallback;
       }
     }
+  }
+
+  // Handle Error objects (keep after Axios response parsing so we don't swallow server messages)
+  if (error instanceof Error) {
+    return error.message || fallback;
   }
 
   // Handle nested error objects

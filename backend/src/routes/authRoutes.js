@@ -27,5 +27,6 @@ router.post('/user/refresh', limiters.refreshTokenLimiter, authController.refres
 // Protected routes
 router.post('/user/signout', protect, authController.logout);
 router.get('/user/me', protect, authController.getCurrentUser);
+router.post('/push-token', protect, authController.savePushToken);
 
 export default router;

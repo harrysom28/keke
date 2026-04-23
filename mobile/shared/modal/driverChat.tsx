@@ -492,11 +492,20 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
   const [isTyping] = useState(false); // optional; keep false by default (no constant UI updates)
   const [rideDetails, setRideDetails] = useState<RideDetailsResponse | null>(null);
   const flashMessageRef = useRef<FlashMessage | null>(null);
+  const listRef = useRef<FlatList<any> | null>(null);
+  const stickToBottomRef = useRef(true);
   const chatRefetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
 
   const channelName = data?.rideId ? `private.ride.${data.rideId}` : "";
+
+  const scrollToBottom = useCallback((animated = true) => {
+    stickToBottomRef.current = true;
+    setTimeout(() => {
+      listRef.current?.scrollToEnd({ animated });
+    }, 350);
+  }, []);
 
   const getAllChats = useCallback(() => {
     if (!data?.rideId) return;
@@ -506,6 +515,8 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
       .then(({ data: res }) => {
         const messages = res?.data?.messages || res?.data || [];
         setChats(messages);
+        stickToBottomRef.current = true;
+        scrollToBottom(false);
       })
       .catch((err) => {
         flashMessageRef.current?.showMessage({
@@ -514,7 +525,7 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
         });
       })
       .finally(() => setLoading(false));
-  }, [data?.rideId, apiConfig]);
+  }, [data?.rideId, apiConfig, scrollToBottom]);
 
   const scheduleChatRefetch = useCallback(() => {
     if (chatRefetchDebounceRef.current) {
@@ -563,6 +574,7 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
       pending: true,
     };
     setChats((prev) => [...prev, optimistic]);
+    scrollToBottom(true);
 
     try {
       const resp = await apiClient.post(
@@ -576,6 +588,7 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
         const withoutOptimistic = prev.filter((m: any) => m?.message_id !== localId);
         return [...withoutOptimistic, serverMsg];
       });
+      scrollToBottom(true);
     } catch (err: any) {
       // Restore message so user doesn't lose it
       setMessage(messageText);
@@ -785,6 +798,11 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
 
         {/* ── Messages ── */}
         <FlatList
+          ref={listRef}
+          onLayout={() => {
+            stickToBottomRef.current = true;
+            listRef.current?.scrollToEnd({ animated: false });
+          }}
           style={styles.scroll}
           contentContainerStyle={[
             styles.scrollContent,
@@ -796,6 +814,18 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
           removeClippedSubviews={true}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          onScroll={(e) => {
+            const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+            // If list is shorter than the viewport, we consider it "at bottom".
+            if (contentSize.height <= layoutMeasurement.height + 20) {
+              stickToBottomRef.current = true;
+              return;
+            }
+            const distanceFromBottom =
+              contentSize.height - (contentOffset.y + layoutMeasurement.height);
+            stickToBottomRef.current = distanceFromBottom < 80;
+          }}
+          scrollEventThrottle={16}
           data={renderableMessages}
           keyExtractor={(item, index) => {
             const anyItem = item as any;
@@ -864,6 +894,11 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
               </View>
             ) : null
           }
+          onContentSizeChange={() => {
+            if (stickToBottomRef.current) {
+              listRef.current?.scrollToEnd({ animated: true });
+            }
+          }}
         />
 
         <ActionChips

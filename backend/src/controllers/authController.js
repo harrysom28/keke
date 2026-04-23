@@ -575,6 +575,38 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Save push token for the authenticated user
+ * POST /api/auth/push-token
+ */
+export const savePushToken = asyncHandler(async (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  const type = typeof req.body?.type === 'string' ? req.body.type.trim() : null;
+
+  if (!token) {
+    throw new ValidationError('Token is required');
+  }
+
+  await User.findByIdAndUpdate(
+    req.user._id,
+    {
+      $set: {
+        expoPushToken: token,
+        pushTokenType: type || 'expo',
+        // Keep legacy fields populated so existing notification code paths still work.
+        deviceToken: token,
+        fcm_token: token,
+      },
+    },
+    { runValidators: false }
+  );
+
+  res.json({
+    status: 'success',
+    data: { success: true },
+  });
+});
+
+/**
  * Resend OTP - POST /api/auth/user/resend-otp
  * If user doesn't exist, create them (idempotent OTP-first flow)
  */

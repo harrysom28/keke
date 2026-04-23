@@ -261,6 +261,14 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    expoPushToken: {
+      type: String,
+      default: null,
+    },
+    pushTokenType: {
+      type: String,
+      default: null,
+    },
     // Soft delete
     deletedAt: {
       type: Date,
