@@ -385,6 +385,9 @@ rideSchema.methods.completeRide = async function () {
 // Cancel ride
 rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee = 0, cancellationScenario = null) {
   this.status = 'cancelled';
+  // Cancellation is not a completion; ensure completion metadata never blocks save (older docs may contain invalid enums).
+  this.completed_by = null;
+  this.completion_reason = null;
   this.cancellation = {
     cancelledBy,
     reason,
