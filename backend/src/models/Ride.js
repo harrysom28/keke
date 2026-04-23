@@ -256,7 +256,7 @@ const rideSchema = new mongoose.Schema(
     arrival_distance_from_pickup: { type: Number, default: null }, // meters
     arrival_proximity_status: {
       type: String,
-      enum: ['confirmed', 'probable', 'unlikely', 'unverifiable', 'blocked'],
+      enum: ['confirmed', 'probable', 'unlikely', 'unverifiable', 'blocked', null],
       default: null,
     },
     arrival_flagged: { type: Boolean, default: false },
@@ -443,17 +443,19 @@ rideSchema.statics.findActiveRideForDriver = async function (driverId) {
     .sort({ createdAt: -1 });
 };
 
-// Strip legacy/invalid enum values before validation to prevent
-// old documents from blocking saves on unrelated updates.
 rideSchema.pre('validate', function (next) {
   const validCompletedBy = ['driver', 'rider', 'admin', 'system'];
   const validCompletionReason = ['normal', 'force', 'timeout', 'issue_flagged', 'admin_resolved'];
+  const validArrivalProximityStatus = ['confirmed', 'probable', 'unlikely', 'unverifiable', 'blocked'];
 
   if (this.completed_by !== null && !validCompletedBy.includes(this.completed_by)) {
     this.completed_by = null;
   }
   if (this.completion_reason !== null && !validCompletionReason.includes(this.completion_reason)) {
     this.completion_reason = null;
+  }
+  if (this.arrival_proximity_status !== null && !validArrivalProximityStatus.includes(this.arrival_proximity_status)) {
+    this.arrival_proximity_status = null;
   }
   next();
 });
