@@ -305,7 +305,7 @@ export default function HomeScreen() {
         }
         // Use centralized error handler to extract safe string message
         const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
-        showMessage({
+        safeShowMessage({
           type: "danger",
           message: errorMessage,
         });
@@ -427,7 +427,7 @@ export default function HomeScreen() {
         }
         // Use centralized error handler to extract safe string message
         const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
-        showMessage({
+        safeShowMessage({
           type: "danger",
           message: errorMessage,
         });
@@ -556,7 +556,7 @@ export default function HomeScreen() {
         }
         // Use centralized error handler to extract safe string message
         const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
-        showMessage({
+        safeShowMessage({
           type: "danger",
           message: errorMessage,
         });
@@ -616,7 +616,7 @@ export default function HomeScreen() {
     },
     onEvent: (event) => {
       console.log(`Event received: ${event}`);
-      showMessage({
+      safeShowMessage({
         type: "danger",
         message: "Passenger has cancelled the ride",
       });

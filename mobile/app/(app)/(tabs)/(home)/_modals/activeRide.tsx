@@ -1,4 +1,4 @@
-import { BackHandler, Dimensions, Text, View } from "react-native";
+import { BackHandler, Text, useWindowDimensions, View } from "react-native";
 import { TouchableOpacity } from "react-native-gesture-handler";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { AntDesign } from "@expo/vector-icons";
@@ -46,7 +46,7 @@ const ActiveRideSheet = ({
 }: Props) => {
   const dispatch = useDispatch();
   const { pusherReady } = useContext(AppContext);
-  const screenHeight = Dimensions.get("window").height;
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [modal, setModal] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
   /** Measured content-derived height; null until layout or child reports a stable value */
@@ -303,7 +303,7 @@ const ActiveRideSheet = ({
       resolvedScreenForLayout === "WAITING" && accepted
         ? Math.min(screenHeight * 0.52, screenHeight * 0.9)
         : screenHeight * 0.3;
-    const maxH = screenHeight * 0.9;
+    const maxH = screenHeight * 0.85;
     const target = measuredHeight ?? estimatedSheetHeight;
     return Math.max(minH, Math.min(target, maxH));
   }, [screenHeight, measuredHeight, estimatedSheetHeight, resolvedScreenForLayout, rideDataForWaiting]);
@@ -311,7 +311,7 @@ const ActiveRideSheet = ({
   const applySheetHeight = useCallback(
     (value: number) => {
       if (!value || !isFinite(value)) return;
-      const capped = Math.min(value, screenHeight * 0.92);
+      const capped = Math.min(value, screenHeight * 0.85);
       const last = lastAppliedSheetHeightRef.current;
       if (last != null && Math.abs(capped - last) <= 30) return;
       lastAppliedSheetHeightRef.current = capped;

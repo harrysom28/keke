@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, StyleSheet, Text, View } from "react-native";
-import { AntDesign } from "@expo/vector-icons";
+import { AntDesign, Ionicons } from "@expo/vector-icons";
 
 import type { RideState } from "./rideStates";
 
@@ -36,7 +36,7 @@ export function RideStatusHeader({ state, title, subtitle, arrivingBy, reassuran
   const icon = useMemo(() => {
     switch (state) {
       case "heading_to_pickup":
-        return <AntDesign name="clockcircle" size={18} color={BRAND_GREEN} />;
+        return <Ionicons name="navigate-outline" size={18} color={BRAND_GREEN} />;
       case "arrived_pickup":
         return <AntDesign name="checkcircle" size={18} color={BRAND_GREEN} />;
       case "trip_started":
@@ -88,8 +88,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 18,
     backgroundColor: "#F4FBF9",
     borderWidth: 1,

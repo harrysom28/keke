@@ -1,8 +1,9 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { Entypo } from "@expo/vector-icons";
+import { Entypo, Ionicons } from "@expo/vector-icons";
 
 const BRAND_GREEN = "#3C8F7C";
+const PIN_RED = "#EF4444";
 
 interface Props {
   fromLabel: string;
@@ -12,27 +13,16 @@ interface Props {
 export function TripDetailsCard({ fromLabel, toLabel }: Props) {
   return (
     <View style={styles.card}>
-      <Text style={styles.title}>Trip</Text>
-      <View style={styles.row}>
-        <View style={styles.pinCol}>
-          <Entypo name="location-pin" size={18} color="#EF4444" />
-          <View style={styles.dashed} />
-          <Entypo name="location-pin" size={18} color={BRAND_GREEN} />
-        </View>
-        <View style={styles.addrCol}>
-          <View style={styles.block}>
-            <Text style={styles.label}>From</Text>
-            <Text style={styles.value} numberOfLines={2}>
-              {fromLabel}
-            </Text>
-          </View>
-          <View style={[styles.block, { marginTop: 10 }]}>
-            <Text style={styles.label}>To</Text>
-            <Text style={styles.value} numberOfLines={2}>
-              {toLabel}
-            </Text>
-          </View>
-        </View>
+      <View style={styles.tripRow}>
+        <Entypo name="location-pin" size={16} color={PIN_RED} />
+        <Text style={styles.place} numberOfLines={1} ellipsizeMode="tail">
+          {fromLabel}
+        </Text>
+        <Ionicons name="arrow-forward" size={14} color="#9CA3AF" />
+        <Entypo name="location-pin" size={16} color={BRAND_GREEN} />
+        <Text style={styles.place} numberOfLines={1} ellipsizeMode="tail">
+          {toLabel}
+        </Text>
       </View>
     </View>
   );
@@ -40,60 +30,29 @@ export function TripDetailsCard({ fromLabel, toLabel }: Props) {
 
 const styles = StyleSheet.create({
   card: {
-    marginHorizontal: 16,
-    marginTop: 2,
     backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.06,
     shadowRadius: 5,
     elevation: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2F7",
   },
-  title: {
-    fontSize: 13,
-    color: "#111827",
-    fontFamily: "RobotoBold",
-    marginBottom: 10,
-  },
-  row: {
+  tripRow: {
     flexDirection: "row",
-    gap: 10,
-  },
-  pinCol: {
-    width: 22,
     alignItems: "center",
-    paddingTop: 2,
+    gap: 8,
+    minHeight: 22,
   },
-  dashed: {
-    flex: 1,
-    width: 2,
-    marginVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderStyle: "dashed",
-    borderColor: "#D1D5DB",
-  },
-  addrCol: {
-    flex: 1,
-  },
-  block: {
-    flex: 1,
-  },
-  label: {
-    fontSize: 11,
-    color: "#6B7280",
+  place: {
+    flexShrink: 1,
+    fontSize: 12,
+    color: "#444",
     fontFamily: "RobotoRegular",
-    marginBottom: 3,
-  },
-  value: {
-    fontSize: 13,
-    color: "#111827",
-    fontFamily: "RobotoMedium",
     lineHeight: 18,
   },
 });
-

@@ -16,7 +16,7 @@ const rideAuditLogSchema = new mongoose.Schema(
       type: String,
       required: true,
       index: true,
-      enum: ['force_complete', 'stale_flag', 'driver_offline', 'driver_reconnected'],
+      enum: ['force_complete', 'stale_flag', 'admin_force_complete', 'driver_offline', 'driver_reconnected'],
     },
     initiatedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -26,7 +26,7 @@ const rideAuditLogSchema = new mongoose.Schema(
     },
     initiatedByRole: {
       type: String,
-      enum: [null, 'passenger', 'driver', 'system'],
+      enum: [null, 'passenger', 'driver', 'admin', 'system'],
       default: null,
     },
     details: {

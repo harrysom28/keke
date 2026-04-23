@@ -317,6 +317,7 @@ export const WaitingView = ({
 
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [forceCompleting, setForceCompleting] = useState(false);
+  const [showOvertimeBanner, setShowOvertimeBanner] = useState(false);
 
   const lastUpdatedMs = useMemo(() => {
     const r: any = data || {};
@@ -395,6 +396,47 @@ export const WaitingView = ({
     rideStatusLower === "in_progress" ||
     rideStatusLower === "started"
   );
+
+  const isRideInProgress = liveRideState === "trip_started" || liveRideState === "near_destination";
+
+  const OVERAGE_MULTIPLIER = 1.5;
+  const estimatedDurationMs = ((data as any)?.duration ?? 0) * 60 * 1000;
+  const rideStartedAt = (data as any)?.startedAt
+    ? new Date((data as any).startedAt).getTime()
+    : (data as any)?.started_at
+      ? new Date((data as any).started_at).getTime()
+      : null;
+
+  useEffect(() => {
+    if (!rideStartedAt || !estimatedDurationMs) return;
+
+    const checkOvertime = () => {
+      const elapsed = Date.now() - rideStartedAt;
+      const threshold = estimatedDurationMs * OVERAGE_MULTIPLIER;
+      if (elapsed > threshold) {
+        setShowOvertimeBanner(true);
+      }
+    };
+
+    checkOvertime();
+    const interval = setInterval(checkOvertime, 30 * 1000);
+    return () => clearInterval(interval);
+  }, [rideStartedAt, estimatedDurationMs]);
+
+  // Reset banner when ride ends / changes
+  useEffect(() => {
+    if (!hasRideStarted) setShowOvertimeBanner(false);
+  }, [hasRideStarted, rideId]);
+
+  const driverDisplayName = useMemo(() => {
+    const d: any = (data as any)?.driver ?? null;
+    return (
+      d?.driver_name ||
+      d?.name ||
+      d?.vehicle_name ||
+      "Unknown Driver"
+    );
+  }, [data]);
 
   // ── Pulse animations ────────────────────────────────────────────────────────
   const searchPulseAnim = useRef(new RNAnimated.Value(1)).current;
@@ -691,7 +733,47 @@ export const WaitingView = ({
 
               <ProgressBar label="Pickup → Dropoff" state={liveRideState} />
 
-              {(liveRideState === "trip_started" || liveRideState === "near_destination") ? (
+              {showOvertimeBanner && isRideInProgress ? (
+                <View
+                  style={{
+                    backgroundColor: "#FFF8E1",
+                    borderColor: "#F59E0B",
+                    borderWidth: 1,
+                    borderRadius: 10,
+                    padding: 12,
+                    marginHorizontal: 16,
+                    marginBottom: 8,
+                    flexDirection: "row",
+                    alignItems: "flex-start",
+                    gap: 8,
+                  }}
+                >
+                  <Ionicons name="time-outline" size={18} color="#F59E0B" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 13, fontWeight: "600", color: "#92400E", marginBottom: 2 }}>
+                      Your trip is taking longer than expected
+                    </Text>
+                    <Text style={{ fontSize: 12, color: "#92400E" }}>
+                      This sometimes happens due to traffic. If something seems wrong, you can end the trip or contact support.
+                    </Text>
+                    <View style={{ flexDirection: "row", gap: 12, marginTop: 8 }}>
+                      <TouchableOpacity onPress={() => setShowOvertimeBanner(false)}>
+                        <Text style={{ fontSize: 12, fontWeight: "600", color: "#92400E" }}>I'm OK</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setShowOvertimeBanner(false);
+                          setIssuesOpen(true);
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: "600", color: "#DC2626" }}>Having issues?</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+
+              {isRideInProgress ? (
                 <View style={styles.issuesRow}>
                   <TouchableOpacity
                     onPress={() => setIssuesOpen(true)}
@@ -868,11 +950,7 @@ export const WaitingView = ({
                 fontFamily: "RobotoRegular",
               })}
             >
-              {`${
-                (data as any)?.driver?.driver_name ??
-                (data as any)?.driver?.name ??
-                "Driver"
-              } is waiting for you`}
+              {`${driverDisplayName} is waiting for you`}
             </Text>
             <View
               style={tw`bg-[#F8F8F8] rounded-full px-4 py-2 flex-row items-center gap-x-2 mt-3`}
@@ -956,11 +1034,7 @@ export const WaitingView = ({
               </View>
               <View style={styles.driverDetails}>
                 <Text style={styles.driverName}>
-                  {data?.driver?.driver_name ||
-                    data?.driver?.name ||
-                    (data?.driver as any)?.user?.name ||
-                    (data?.driver as any)?.user?.fullName ||
-                    "Driver"}
+                  {driverDisplayName}
                 </Text>
                 <View style={styles.driverMeta}>
                   <View style={styles.ratingRow}>

@@ -1,5 +1,6 @@
 import {
   ActivityIndicator,
+  Alert,
   Image,
   KeyboardAvoidingView,
   InteractionManager,
@@ -28,8 +29,11 @@ import { AppContext } from "@/app/context";
 import { AuthState } from "@/store/AuthSlice";
 import FlashMessage from "react-native-flash-message";
 import { Ionicons } from "@expo/vector-icons";
-import axios from "axios";
 import usePusherChannel from "@/hooks/usePusherChannel";
+import apiClient from "@/utils/apiClient";
+
+// Keep consistent with the rest of the app (ride-in-transit components)
+const BRAND_GREEN = "#3C8F7C";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -59,6 +63,23 @@ const formatSectionDate = (dateString: string | Date): string => {
 
 const getFirstName = (full: string) => String(full || "").trim().split(" ")[0] || "Driver";
 
+type RideDetailsResponse = {
+  ride_id: string;
+  status?: string;
+  origin?: { name?: string | null; address?: string; lat?: number; lng?: number };
+  destination?: { name?: string | null; address?: string; lat?: number; lng?: number };
+  duration_min?: number;
+  distance_km?: number;
+  driver?: {
+    name?: string | null;
+    phone?: string | null;
+    image?: string | null;
+    vehicle_name?: string | null;
+    vehicle_plate?: string | null;
+  } | null;
+  rider?: { name?: string | null; phone?: string | null } | null;
+};
+
 // ─── MessageItem ─────────────────────────────────────────────────────────────
 
 interface MProps {
@@ -71,6 +92,8 @@ interface MProps {
     status?: "sent" | "delivered" | "seen";
     kind?: "chat" | "system" | "date";
     label?: string;
+    pending?: boolean;
+    failed?: boolean;
   };
   showAvatar: boolean;
   driverImage?: string;
@@ -78,16 +101,15 @@ interface MProps {
 
 const MessageItem = ({ isOwner, item, showAvatar, driverImage }: MProps) => {
   if (item?.kind === "date") {
-    return <Text style={styles.dateSeparator}>{item.label}</Text>;
+    return null;
   }
 
   if (item?.kind === "system") {
     return (
       <View style={styles.systemRow}>
-        <View style={styles.systemPill}>
-          <Ionicons name="information-circle-outline" size={14} color="#2563EB" />
-          <Text style={styles.systemText}>{item.message}</Text>
-        </View>
+        <View style={styles.systemDivider} />
+        <Text style={styles.systemText}>{item.message}</Text>
+        <View style={styles.systemDivider} />
       </View>
     );
   }
@@ -96,10 +118,12 @@ const MessageItem = ({ isOwner, item, showAvatar, driverImage }: MProps) => {
     item?.created_at || item?.createdAt || item?.date || ""
   );
 
-  const status = item?.status || (isOwner ? "delivered" : undefined);
-  const statusIcon =
-    status === "seen" ? "checkmark-done" : status === "delivered" ? "checkmark-done" : "checkmark";
-  const statusColor = status === "seen" ? "#2D7A4F" : "#9CA3AF";
+  const deliveryLabel =
+    isOwner && item?.failed
+      ? "Not sent"
+      : isOwner && item?.pending
+        ? "Sending…"
+        : "";
 
   return (
     <View
@@ -131,18 +155,29 @@ const MessageItem = ({ isOwner, item, showAvatar, driverImage }: MProps) => {
           <Text style={[styles.bubbleText, isOwner ? styles.bubbleTextOwner : styles.bubbleTextOther]}>
             {item?.message}
           </Text>
+          {(!!time || !!deliveryLabel) ? (
+            <View style={styles.bubbleMetaRow}>
+              {!!deliveryLabel ? (
+                <Text
+                  style={[
+                    styles.deliveryText,
+                    item?.failed ? styles.deliveryFailed : null,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {deliveryLabel}
+                </Text>
+              ) : (
+                <View />
+              )}
+              {!!time ? (
+                <Text style={[styles.timeInBubble, isOwner ? styles.timeOwner : styles.timeOther]}>
+                  {time}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
-        {!!time && (
-          <Text style={[styles.timeText, isOwner ? styles.timeOwner : styles.timeOther]}>
-            {time}
-            {isOwner ? (
-              <Text style={styles.checkmark}>
-                {" "}
-                <Ionicons name={statusIcon as any} size={12} color={statusColor} />
-              </Text>
-            ) : null}
-          </Text>
-        )}
       </View>
     </View>
   );
@@ -153,7 +188,7 @@ const MessageItem = ({ isOwner, item, showAvatar, driverImage }: MProps) => {
 const EmptyState = ({ name }: { name: string }) => (
   <View style={styles.emptyWrap}>
     <View style={styles.emptyIconWrap}>
-      <Ionicons name="chatbubble-ellipses-outline" size={36} color="#2D7A4F" />
+      <Ionicons name="chatbubble-ellipses-outline" size={36} color={BRAND_GREEN} />
     </View>
     <Text style={styles.emptyTitle}>Say hello to {name?.split(" ")[0] || "your driver"}</Text>
     <Text style={styles.emptySubtitle}>
@@ -232,10 +267,7 @@ function DriverHeader({
                 {name}
               </Text>
               <View style={styles.driverSubRow}>
-                <View style={styles.ratingPill}>
-                  <Ionicons name="star" size={12} color="#F59E0B" />
-                  <Text style={styles.ratingText}>{rating.toFixed(1)}</Text>
-                </View>
+                <Text style={styles.ratingText}>⭐ {rating.toFixed(1)}</Text>
                 <Text style={styles.vehicleText} numberOfLines={1}>
                   {vehicleLine}
                 </Text>
@@ -252,7 +284,7 @@ function DriverHeader({
               accessibilityRole="button"
               accessibilityLabel="Call driver"
             >
-              <Ionicons name="call" size={18} color="#2D7A4F" />
+              <Ionicons name="call" size={18} color={BRAND_GREEN} />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -289,7 +321,7 @@ function StatusBarLite({
 
   return (
     <View style={[styles.statusBarLite, { backgroundColor: cfg.bg }]}>
-      <View style={[styles.statusDot, { backgroundColor: cfg.dot }]} />
+      <Ionicons name="radio-button-on" size={14} color={cfg.dot} />
       <Text style={[styles.statusBarText, { color: cfg.text }]}>{cfg.label}</Text>
       {etaText ? <Text style={[styles.statusBarEta, { color: cfg.text }]}>{etaText}</Text> : null}
     </View>
@@ -314,10 +346,7 @@ function RideSummaryCard({
           <Ionicons name="location" size={16} color="#EF4444" />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.rideTitle} numberOfLines={1}>
-            Pickup
-          </Text>
-          <Text style={styles.rideValue} numberOfLines={2}>
+          <Text style={styles.rideValue} numberOfLines={1}>
             {pickupLabel}
           </Text>
         </View>
@@ -328,15 +357,13 @@ function RideSummaryCard({
         ) : null}
       </View>
 
-      <View style={styles.rideDivider} />
-
       <View style={styles.rideBottom}>
         <View style={styles.rideMiniRow}>
-          <Ionicons name="navigate-outline" size={16} color="#2D7A4F" />
+          <Ionicons name="navigate-outline" size={16} color={BRAND_GREEN} />
           <Text style={styles.rideMiniText}>{directionLabel}</Text>
         </View>
         <View style={styles.rideMiniRow}>
-          <Ionicons name="time-outline" size={16} color="#2D7A4F" />
+          <Ionicons name="time-outline" size={16} color={BRAND_GREEN} />
           <Text style={styles.rideMiniText}>{etaLabel}</Text>
         </View>
       </View>
@@ -348,15 +375,32 @@ function ActionChips({
   onPickUp,
   onCall,
   onLate,
+  isDriverView,
 }: {
   onPickUp: () => void;
   onCall: () => void;
   onLate: () => void;
+  isDriverView: boolean;
 }) {
   const actions = [
-    { key: "pickup", label: "I’m at pickup", icon: "navigate-outline" as const, onPress: onPickUp },
-    { key: "call", label: "Call driver", icon: "call-outline" as const, onPress: onCall },
-    { key: "late", label: "Running late", icon: "time-outline" as const, onPress: onLate },
+    {
+      key: "pickup",
+      label: isDriverView ? "I’m at pickup" : "I’m at pickup",
+      icon: "navigate-outline" as const,
+      onPress: onPickUp,
+    },
+    {
+      key: "call",
+      label: isDriverView ? "Call passenger" : "Call driver",
+      icon: "call-outline" as const,
+      onPress: onCall,
+    },
+    {
+      key: "late",
+      label: isDriverView ? "On my way" : "Running late",
+      icon: "time-outline" as const,
+      onPress: onLate,
+    },
   ];
   return (
     <View style={styles.chipsWrap}>
@@ -369,7 +413,7 @@ function ActionChips({
       >
         {actions.map((a) => (
           <TouchableOpacity key={a.key} onPress={a.onPress} style={styles.chip} activeOpacity={0.85}>
-            <Ionicons name={a.icon as any} size={16} color="#2D7A4F" />
+            <Ionicons name={a.icon as any} size={12} color={BRAND_GREEN} />
             <Text style={styles.chipText}>{a.label}</Text>
           </TouchableOpacity>
         ))}
@@ -387,6 +431,7 @@ function InputBar({
   onLocation,
   bottomPad,
   keyboardOffset,
+  placeholder,
 }: {
   value: string;
   onChange: (t: string) => void;
@@ -396,6 +441,7 @@ function InputBar({
   onLocation: () => void;
   bottomPad: number;
   keyboardOffset: number;
+  placeholder: string;
 }) {
   return (
     <KeyboardAvoidingView
@@ -403,16 +449,6 @@ function InputBar({
       keyboardVerticalOffset={keyboardOffset}
     >
       <View style={[styles.inputBar, { paddingBottom: bottomPad }]}>
-        <TouchableOpacity
-          onPress={onMic}
-          style={styles.iconPill}
-          activeOpacity={0.85}
-          accessibilityRole="button"
-          accessibilityLabel="Voice message"
-        >
-          <Ionicons name="mic-outline" size={20} color="#111827" />
-        </TouchableOpacity>
-
         <View style={styles.inputField}>
           <TextInput
             value={value}
@@ -420,21 +456,14 @@ function InputBar({
             multiline
             maxLength={1000}
             style={styles.textInput}
-            placeholder="Message your driver…"
+            placeholder={disabled ? "Sending…" : placeholder}
             placeholderTextColor="#9CA3AF"
             returnKeyType="send"
-            onSubmitEditing={onSend}
+            onSubmitEditing={() => {
+              if (!disabled) onSend();
+            }}
             blurOnSubmit={false}
           />
-          <TouchableOpacity
-            onPress={onLocation}
-            style={styles.inputIcon}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Share location"
-          >
-            <Ionicons name="location-outline" size={20} color="#2D7A4F" />
-          </TouchableOpacity>
         </View>
 
         <TouchableOpacity
@@ -461,7 +490,7 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [isTyping] = useState(false); // optional; keep false by default (no constant UI updates)
-  const [rideStatus] = useState<RideStatus>("on_the_way"); // dummy, static
+  const [rideDetails, setRideDetails] = useState<RideDetailsResponse | null>(null);
   const flashMessageRef = useRef<FlashMessage | null>(null);
   const chatRefetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
@@ -472,8 +501,8 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
   const getAllChats = useCallback(() => {
     if (!data?.rideId) return;
     setLoading(true);
-    axios
-      .get(RETRIEVE_CHAT + data.rideId, apiConfig)
+    apiClient
+      .get(RETRIEVE_CHAT + data.rideId, apiConfig as any)
       .then(({ data: res }) => {
         const messages = res?.data?.messages || res?.data || [];
         setChats(messages);
@@ -512,31 +541,63 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
     },
   });
 
-  const sendChat = () => {
+  const sendChat = async () => {
     if (!data?.rideId) {
       flashMessageRef.current?.showMessage({ type: "danger", message: "Ride ID is required" });
       return;
     }
-    const trimmed = message.trim();
-    if (!trimmed) return;
+    if (sending) return;
+    const messageText = message.trim();
+    if (!messageText) return;
 
     setSending(true);
-    axios
-      .post(CREATE_CHAT, { rideId: data.rideId, message: trimmed }, apiConfig)
-      .then(({ data }) => {
-        setChats((prev) => [...prev, data?.data?.message || data?.data]);
-        setMessage("");
-      })
-      .catch((err) => {
-        const msg = err?.response?.data?.message;
-        flashMessageRef.current?.showMessage({
-          type: "danger",
-          message: msg?.includes("No driver assigned")
-            ? "Wait for a driver to accept your ride first."
-            : msg || "Something went wrong",
-        });
-      })
-      .finally(() => setSending(false));
+    setMessage(""); // clear immediately for UX
+
+    const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const optimistic = {
+      message_id: localId,
+      ride_id: data.rideId,
+      message: messageText,
+      created_at: new Date().toISOString(),
+      is_sender: true,
+      pending: true,
+    };
+    setChats((prev) => [...prev, optimistic]);
+
+    try {
+      const resp = await apiClient.post(
+        CREATE_CHAT,
+        { rideId: data.rideId, message: messageText },
+        { ...(apiConfig as any), timeout: 20000 }
+      );
+      const payload = (resp as any)?.data;
+      const serverMsg = payload?.data?.message || payload?.data;
+      setChats((prev) => {
+        const withoutOptimistic = prev.filter((m: any) => m?.message_id !== localId);
+        return [...withoutOptimistic, serverMsg];
+      });
+    } catch (err: any) {
+      // Restore message so user doesn't lose it
+      setMessage(messageText);
+      const msg = err?.response?.data?.message || err?.message || "";
+      const isTimeout =
+        err?.code === "ECONNABORTED" ||
+        /timeout/i.test(String(msg));
+      const friendly = msg?.includes("No driver assigned")
+        ? "Wait for a driver to accept your ride first."
+        : isTimeout
+          ? "Network timeout. Please check your connection and try again."
+          : "Failed to send message. Please try again.";
+
+      setChats((prev) =>
+        prev.map((m: any) =>
+          m?.message_id === localId ? { ...m, pending: false, failed: true } : m
+        )
+      );
+      Alert.alert("Message not sent", friendly, [{ text: "OK" }]);
+    } finally {
+      setSending(false);
+    }
   };
 
   useEffect(() => {
@@ -548,6 +609,29 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
     }
     else setChats([]);
   }, [visible, getAllChats]);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!visible || !data?.rideId) {
+      setRideDetails(null);
+      return;
+    }
+
+    (async () => {
+      try {
+        const res = await apiClient.get(`rides/${data.rideId}`);
+        const ride = (res as any)?.data?.data?.ride as RideDetailsResponse | undefined;
+        if (mounted) setRideDetails(ride || null);
+      } catch {
+        // non-blocking: chat still works even if ride details fail
+        if (mounted) setRideDetails(null);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [visible, data?.rideId]);
 
   useEffect(
     () => () => {
@@ -578,41 +662,55 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
     return currentIsOwner !== nextIsOwner;
   };
 
-  const driverDisplayName = data?.name || "John Doe";
+  const isDriverView = user?.profile?.role === "driver";
+
+  const counterpartName =
+    (isDriverView ? rideDetails?.rider?.name : rideDetails?.driver?.name) ||
+    data?.name ||
+    (isDriverView ? "Passenger" : "Driver");
+
+  const counterpartPhone =
+    (isDriverView ? rideDetails?.rider?.phone : rideDetails?.driver?.phone) || data?.phone || "";
+
+  const counterpartImage = (isDriverView ? undefined : rideDetails?.driver?.image) || data?.image;
+
   const driverRating = typeof data?.rating === "number" ? data.rating : 4.8;
-  const vehicleLabel = data?.vehicle || "Toyota Camry";
-  const plateLabel = data?.plate || "ABC-123";
+  const vehicleLabel = rideDetails?.driver?.vehicle_name || data?.vehicle || "Vehicle";
+  const plateLabel = rideDetails?.driver?.vehicle_plate || data?.plate || "—";
   const statusText = "Arriving soon";
 
+  const pickupLabel =
+    rideDetails?.origin?.name ||
+    rideDetails?.origin?.address ||
+    "Pickup location";
+
+  const dropoffLabel =
+    rideDetails?.destination?.name ||
+    rideDetails?.destination?.address ||
+    "Destination";
+
+  const directionLabel = isDriverView ? "Pickup → Dropoff" : "Driver → You";
+
+  const etaLabel =
+    typeof rideDetails?.duration_min === "number" && rideDetails.duration_min > 0
+      ? `${Math.round(rideDetails.duration_min)} min`
+      : "—";
+
   const renderableMessages = (() => {
-    const base = [...chats].reverse();
-    // Inject a lightweight system message (static) at the top of the timeline.
+    // Backend already returns oldest → newest for chat UI.
     const sys: any[] = [
       { kind: "system", message: statusText, createdAt: new Date().toISOString() },
     ];
 
-    const all = [...sys, ...base];
-    const withDates: any[] = [];
-    let lastLabel = "";
-    for (let i = 0; i < all.length; i++) {
-      const it = all[i] as any;
-      const d = it?.created_at || it?.createdAt || it?.date || new Date().toISOString();
-      const label = formatSectionDate(d);
-      if (label && label !== lastLabel) {
-        withDates.push({ kind: "date", label, message: "" });
-        lastLabel = label;
-      }
-      withDates.push({
-        ...it,
-        kind: it.kind || "chat",
-        status: it.status || (it.is_sender ? "delivered" : undefined),
-      });
-    }
-    return withDates;
+    return [...sys, ...chats].map((it: any) => ({
+      ...it,
+      kind: it.kind || "chat",
+      status: it.status || (it.is_sender ? "delivered" : undefined),
+    }));
   })();
 
   const handleCall = () => {
-    const num = String(data?.phone || "").trim();
+    const num = String(counterpartPhone || "").trim();
     if (!num) {
       flashMessageRef.current?.showMessage({ type: "info", message: "Phone number not available" });
       return;
@@ -637,6 +735,8 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
   };
 
   const isInitialLoading = loading && chats.length === 0;
+
+  const inputPlaceholder = isDriverView ? "Message your passenger…" : "Message your driver…";
 
   return (
     <>
@@ -665,19 +765,21 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
           onBack={onClose}
           onCall={handleCall}
           onSOS={handleSOS}
-          avatarUrl={data?.image}
-          name={driverDisplayName}
+          avatarUrl={counterpartImage}
+          name={counterpartName}
           rating={driverRating}
-          vehicleLine={`${vehicleLabel} • ${plateLabel}`}
+          vehicleLine={
+            isDriverView
+              ? "Passenger"
+              : `${vehicleLabel}${plateLabel && plateLabel !== "—" ? ` • ${plateLabel}` : ""}`
+          }
           statusText={loading ? "Syncing…" : statusText}
         />
 
-        <StatusBarLite status={rideStatus} etaText={loading ? "Updating messages…" : "Arriving soon"} />
-
         <RideSummaryCard
-          pickupLabel="Roban Stores"
-          directionLabel="Driver → You"
-          etaLabel="1 min away"
+          pickupLabel={isDriverView ? `${pickupLabel} → ${dropoffLabel}` : pickupLabel}
+          directionLabel={directionLabel}
+          etaLabel={etaLabel}
           onViewMap={handleViewMap}
         />
 
@@ -688,28 +790,36 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
             styles.scrollContent,
             renderableMessages.length === 0 ? styles.scrollCentered : null,
           ]}
-          inverted={true}
+          inverted={false}
           initialNumToRender={20}
           windowSize={5}
           removeClippedSubviews={true}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          data={[...renderableMessages].reverse()}
-          keyExtractor={(item, index) =>
-            String(
-              (item as any)?.message_id ||
-                (item as any)?._id ||
-                (item as any)?.kind + "-" + ((item as any)?.label || "") + "-" + index
-            )
-          }
+          data={renderableMessages}
+          keyExtractor={(item, index) => {
+            const anyItem = item as any;
+            const baseId =
+              anyItem?.message_id ||
+              anyItem?._id ||
+              anyItem?.id ||
+              `${anyItem?.kind || "msg"}-${anyItem?.label || ""}`;
+            const ts =
+              anyItem?.createdAt ||
+              anyItem?.created_at ||
+              anyItem?.timestamp ||
+              "";
+            // Always include index to avoid collisions when backend reuses ids (or optimistic items duplicate).
+            return `${String(baseId)}-${String(ts)}-${index}`;
+          }}
           refreshing={false}
           onRefresh={getAllChats}
           ListEmptyComponent={
             <View style={{ width: "100%" }}>
-              <EmptyState name={data?.name} />
+              <EmptyState name={counterpartName} />
               {isInitialLoading ? (
                 <View style={styles.inlineLoaderRow}>
-                  <ActivityIndicator size="small" color="#2D7A4F" />
+                  <ActivityIndicator size="small" color={BRAND_GREEN} />
                   <Text style={styles.inlineLoaderText}>Loading messages…</Text>
                 </View>
               ) : null}
@@ -731,15 +841,15 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
               item?.sender?.user_id === user?.profile?.user_id ||
               item?.sender_id === user?.profile?.user_id;
 
-            // index here is for reversed array; map back to original chats index for grouping logic
-            const originalIndex = chats.length - 1 - index;
+            // renderableMessages = [system, ...chats]; map list index to chats index
+            const chatIndex = Math.max(0, index - 1);
 
             return (
               <MessageItem
                 item={item}
                 isOwner={isOwner}
-                showAvatar={!isOwner && isLastInGroup(originalIndex)}
-                driverImage={data?.image}
+                showAvatar={!isOwner && isLastInGroup(chatIndex)}
+                  driverImage={counterpartImage}
               />
             );
           }}
@@ -748,7 +858,7 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
               <View style={styles.typingRow}>
                 <View style={styles.typingBubble}>
                   <Text style={styles.typingText}>
-                    {getFirstName(driverDisplayName)} is typing…
+                    {getFirstName(counterpartName)} is typing…
                   </Text>
                 </View>
               </View>
@@ -757,16 +867,17 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
         />
 
         <ActionChips
-          onPickUp={() => setMessage("I’m at the pickup point.")}
+          onPickUp={() => setMessage(isDriverView ? "I’m at the pickup point." : "I’m at the pickup point.")}
           onCall={handleCall}
-          onLate={() => setMessage("I’m running a bit late.")}
+          onLate={() => setMessage(isDriverView ? "I’m on my way." : "I’m running a bit late.")}
+          isDriverView={isDriverView}
         />
 
         <InputBar
           value={message}
           onChange={setMessage}
           onSend={sendChat}
-          disabled={!message.trim() || sending}
+          disabled={sending || !message.trim()}
           onMic={() =>
             flashMessageRef.current?.showMessage({ type: "info", message: "Voice message (coming soon)." })
           }
@@ -775,6 +886,7 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
           }
           bottomPad={Math.max(insets.bottom, 16)}
           keyboardOffset={keyboardOffset}
+          placeholder={inputPlaceholder}
         />
       </View>
     </>
@@ -804,7 +916,8 @@ export default memo(DriverChatModal);
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#F7F8FA",
+    // Light green tint to match brand while keeping chat readable
+    backgroundColor: "#F2FBF7",
   },
   headerSafe: {
     backgroundColor: "#fff",
@@ -825,16 +938,12 @@ const styles = StyleSheet.create({
   },
   driverCard: {
     marginTop: 8,
-    borderRadius: 18,
+    borderRadius: 14,
     backgroundColor: "#FFFFFF",
-    padding: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: "#E5E7EB",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    borderColor: "#EDEDED",
   },
   driverRow: {
     flexDirection: "row",
@@ -845,17 +954,17 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   headerAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    borderWidth: 2,
-    borderColor: "#2D7A4F",
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: BRAND_GREEN,
   },
   headerAvatarFallback: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#2D7A4F",
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: BRAND_GREEN,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -875,8 +984,8 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   driverName: {
-    fontSize: 16,
-    fontFamily: "RobotoBold",
+    fontSize: 15,
+    fontFamily: "RobotoMedium",
     color: "#111827",
   },
   driverSubRow: {
@@ -898,26 +1007,26 @@ const styles = StyleSheet.create({
   },
   ratingText: {
     fontSize: 12,
-    fontFamily: "RobotoMedium",
-    color: "#111827",
+    fontFamily: "RobotoRegular",
+    color: "#888",
   },
   vehicleText: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: "RobotoRegular",
-    color: "#6B7280",
+    color: "#888",
     flex: 1,
     minWidth: 0,
   },
   statusInline: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: "RobotoMedium",
-    color: "#2D7A4F",
-    marginTop: 6,
+    color: BRAND_GREEN,
+    marginTop: 2,
   },
   callBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "#D1FAE5",
     backgroundColor: "#ECFDF5",
@@ -925,9 +1034,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sosBtn: {
-    paddingHorizontal: 10,
-    height: 40,
-    borderRadius: 999,
+    paddingHorizontal: 0,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: "#111827",
     alignItems: "center",
     justifyContent: "center",
@@ -948,27 +1058,26 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 6,
     gap: 8,
     marginHorizontal: 12,
-    marginTop: 10,
+    marginTop: 6,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: "#FDE68A",
   },
   statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 0,
+    height: 0,
   },
   statusBarText: {
-    fontSize: 13,
-    fontFamily: "RobotoBold",
+    fontSize: 12,
+    fontFamily: "RobotoMedium",
   },
   statusBarEta: {
     marginLeft: 8,
     fontSize: 12,
-    fontFamily: "RobotoMedium",
+    fontFamily: "RobotoRegular",
   },
 
   // ── ride summary card
@@ -976,16 +1085,12 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     marginTop: 10,
     marginBottom: 6,
-    borderRadius: 18,
+    borderRadius: 16,
     backgroundColor: "#fff",
     borderWidth: 1,
     borderColor: "#E5E7EB",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-    padding: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
   },
   rideTop: {
     flexDirection: "row",
@@ -1000,12 +1105,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  rideTitle: {
-    fontSize: 11,
-    fontFamily: "RobotoRegular",
-    color: "#6B7280",
-    marginBottom: 2,
-  },
   rideValue: {
     fontSize: 13,
     fontFamily: "RobotoMedium",
@@ -1014,23 +1113,23 @@ const styles = StyleSheet.create({
   },
   viewMapBtn: {
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "#F0F9F4",
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#D1FAE5",
   },
   viewMapText: {
     fontSize: 12,
     fontFamily: "RobotoMedium",
-    color: "#2D7A4F",
+    color: BRAND_GREEN,
   },
   rideDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: "#E5E7EB",
-    marginVertical: 12,
+    height: 0,
+    marginVertical: 0,
   },
   rideBottom: {
+    marginTop: 8,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -1044,7 +1143,7 @@ const styles = StyleSheet.create({
   rideMiniText: {
     fontSize: 12,
     fontFamily: "RobotoRegular",
-    color: "#374151",
+    color: "#666",
   },
 
   // ── scroll
@@ -1053,7 +1152,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 6,
     paddingBottom: 8,
   },
   scrollCentered: {
@@ -1093,24 +1192,22 @@ const styles = StyleSheet.create({
 
   // ── system messages
   systemRow: {
-    alignItems: "center",
-    marginVertical: 6,
-  },
-  systemPill: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "#EEF2FF",
-    borderWidth: 1,
-    borderColor: "#DBEAFE",
+    marginVertical: 8,
   },
   systemText: {
-    fontSize: 12,
-    fontFamily: "RobotoMedium",
-    color: "#1D4ED8",
+    fontSize: 11,
+    fontFamily: "RobotoRegular",
+    color: "#999",
+  },
+  systemDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#E5E7EB",
+    flex: 1,
+    maxWidth: 80,
   },
 
   // ── empty state
@@ -1146,7 +1243,7 @@ const styles = StyleSheet.create({
   msgRow: {
     flexDirection: "row",
     alignItems: "flex-end",
-    marginBottom: 4,
+    marginBottom: 2,
   },
   msgRowOwner: {
     justifyContent: "flex-end",
@@ -1169,7 +1266,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "#2D7A4F",
+    backgroundColor: BRAND_GREEN,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1182,12 +1279,13 @@ const styles = StyleSheet.create({
     maxWidth: "75%",
   },
   bubble: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingTop: 7,
+    paddingBottom: 5,
+    borderRadius: 12,
   },
   bubbleOwner: {
-    backgroundColor: "#2D7A4F",
+    backgroundColor: BRAND_GREEN,
     borderBottomRightRadius: 4,
   },
   bubbleOther: {
@@ -1201,8 +1299,8 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   bubbleText: {
-    fontSize: 15,
-    lineHeight: 21,
+    fontSize: 14,
+    lineHeight: 20,
     fontFamily: "RobotoRegular",
   },
   bubbleTextOwner: {
@@ -1212,11 +1310,31 @@ const styles = StyleSheet.create({
     color: "#111827",
   },
   timeText: {
-    fontSize: 11,
+    fontSize: 10,
     fontFamily: "RobotoRegular",
     color: "#9CA3AF",
     marginTop: 3,
     marginHorizontal: 4,
+  },
+  bubbleMetaRow: {
+    marginTop: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  timeInBubble: {
+    fontSize: 10,
+    fontFamily: "RobotoRegular",
+    color: "#9CA3AF",
+  },
+  deliveryText: {
+    fontSize: 10,
+    fontFamily: "RobotoMedium",
+    color: "#6B7280",
+  },
+  deliveryFailed: {
+    color: "#DC2626",
   },
   timeOwner: {
     textAlign: "right",
@@ -1255,22 +1373,22 @@ const styles = StyleSheet.create({
   },
   chipsContent: {
     paddingHorizontal: 16,
-    gap: 10,
+    gap: 6,
     paddingRight: 24,
   },
   chip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
     backgroundColor: "#F0F9F4",
     borderWidth: 1,
     borderColor: "#D1FAE5",
   },
   chipText: {
-    fontSize: 13,
+    fontSize: 11,
     fontFamily: "RobotoMedium",
     color: "#111827",
   },
@@ -1280,7 +1398,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 8,
     backgroundColor: "#fff",
     gap: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -1323,15 +1441,15 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   sendBtn: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "#2D7A4F",
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: BRAND_GREEN,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 0,
   },
   sendBtnDisabled: {
-    backgroundColor: "#D1D5DB",
+    backgroundColor: "#ccc",
   },
 });

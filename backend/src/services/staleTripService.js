@@ -4,7 +4,7 @@ import logger from '../utils/logger.js';
 import { getSocketService } from './socketService.js';
 import { logRideAudit } from './rideAuditLogService.js';
 
-const STALE_MINUTES = 15;
+const STALE_MINUTES = 8;
 const TICK_MS = 5 * 60 * 1000;
 
 function stopRideAutomationTimers(rideId) {

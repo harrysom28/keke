@@ -1527,7 +1527,21 @@ export const rejectRide = asyncHandler(async (req, res) => {
  */
 export const markArrived = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { rideId, lat, lng } = req.body;
+  const { rideId } = req.body;
+
+  const calculateDistanceMeters = (lat1, lng1, lat2, lng2) => {
+    const R = 6371000;
+    const toRad = (x) => (x * Math.PI) / 180;
+    const dLat = toRad(parseFloat(lat2) - parseFloat(lat1));
+    const dLng = toRad(parseFloat(lng2) - parseFloat(lng1));
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(parseFloat(lat1))) *
+        Math.cos(toRad(parseFloat(lat2))) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  };
 
   const driver = await Driver.findOne({ user: userId });
   if (!driver) {
@@ -1539,6 +1553,14 @@ export const markArrived = asyncHandler(async (req, res) => {
     throw new NotFoundError('Ride');
   }
 
+  // CHECK 1: Prevent duplicate arrived calls (idempotent)
+  if (ride.status === 'arrived' || ride.arrivedAt || ride.arrived_at) {
+    return res.status(409).json({
+      success: false,
+      error: 'Arrival already marked for this ride',
+    });
+  }
+
   if (ride.driver?.toString() !== driver._id.toString()) {
     throw new ValidationError('You are not assigned to this ride');
   }
@@ -1547,21 +1569,86 @@ export const markArrived = asyncHandler(async (req, res) => {
     throw new ValidationError('Ride must be accepted or en route to mark arrived');
   }
 
-  const { getSettings } = await import('../services/settingsService.js');
   const { chargeServiceFee } = await import('../services/escrowWalletService.js');
 
+  // CHECK 2: Get most recent stored driver location ping (Mongo last-known)
+  const driverLoc = await Driver.findById(driver._id)
+    .select('currentLocation')
+    .lean();
+  const coords = driverLoc?.currentLocation?.coordinates ?? null; // [lng, lat]
+  const pingAt = driverLoc?.currentLocation?.lastUpdated ?? null;
+  const hasLocationData =
+    Array.isArray(coords) &&
+    coords.length === 2 &&
+    coords[0] != null &&
+    coords[1] != null;
+
+  // CHECK 4: Stale ping threshold (5 minutes)
+  const FIVE_MINUTES_AGO = new Date(Date.now() - 5 * 60 * 1000);
+  const locationIsFresh = !!(hasLocationData && pingAt && new Date(pingAt) > FIVE_MINUTES_AGO);
+
+  // CHECK 5: Calculate distance with GPS drift tolerance
+  const STRICT_THRESHOLD_METERS = 150;
+  const LENIENT_THRESHOLD_METERS = 400;
+  const BLOCK_THRESHOLD_METERS = 800;
+
+  let distanceMeters = null;
+  let proximityStatus = 'unknown'; // 'confirmed' | 'probable' | 'unlikely' | 'blocked' | 'unverifiable'
+
   const [pickupLng, pickupLat] = ride.pickupLocation?.coordinates ?? [];
-  if (lat != null && lng != null && pickupLat != null && pickupLng != null) {
-    const s = await getSettings();
-    const maxRadius = s.arrival?.maxRadiusMeters ?? 150;
-    const distanceKm = calculateDistance(pickupLat, pickupLng, Number(lat), Number(lng));
-    const distanceMeters = distanceKm * 1000;
-    if (distanceMeters > maxRadius) {
-      throw new ValidationError(
-        `You must be within ${maxRadius}m of the pickup point (currently ${Math.round(distanceMeters)}m)`
-      );
+  if (pickupLat == null || pickupLng == null) {
+    // Can't validate without pickup coords; allow but flag for ops visibility.
+    proximityStatus = 'unverifiable';
+    ride.arrival_flagged = true;
+    ride.arrival_flag_reason = 'Pickup coordinates missing at time of arrival mark';
+  } else if (hasLocationData && locationIsFresh) {
+    const driverLat = coords[1];
+    const driverLng = coords[0];
+    distanceMeters = calculateDistanceMeters(driverLat, driverLng, pickupLat, pickupLng);
+
+    if (distanceMeters <= STRICT_THRESHOLD_METERS) {
+      proximityStatus = 'confirmed';
+    } else if (distanceMeters <= LENIENT_THRESHOLD_METERS) {
+      proximityStatus = 'probable';
+    } else if (distanceMeters <= BLOCK_THRESHOLD_METERS) {
+      proximityStatus = 'unlikely';
+    } else {
+      proximityStatus = 'blocked';
     }
+  } else {
+    proximityStatus = 'unverifiable';
   }
+
+  // CHECK 6: Decision logic with contingencies
+  if (proximityStatus === 'blocked') {
+    return res.status(403).json({
+      success: false,
+      error: `You are ${Math.round(distanceMeters)}m from the pickup. Please get closer before marking arrival.`,
+      distance_meters: Math.round(distanceMeters),
+      threshold_meters: STRICT_THRESHOLD_METERS,
+    });
+  }
+
+  if (proximityStatus === 'unlikely') {
+    ride.arrival_flagged = true;
+    ride.arrival_flag_reason = `Driver was ${Math.round(distanceMeters)}m from pickup on arrival`;
+  }
+
+  if (proximityStatus === 'unverifiable') {
+    ride.arrival_flagged = true;
+    ride.arrival_flag_reason = hasLocationData
+      ? 'Location ping was stale at time of arrival mark'
+      : 'No location data found for driver at time of arrival mark';
+  }
+
+  // CHECK 7: Log everything for dispute resolution
+  ride.arrival_coordinates = hasLocationData
+    ? { lat: coords[1], lng: coords[0] }
+    : null;
+  ride.arrival_distance_from_pickup =
+    distanceMeters != null ? Math.round(distanceMeters) : null;
+  ride.arrival_proximity_status = proximityStatus;
+  ride.arrived_at = new Date();
 
   if (ride.paymentMethod === 'wallet' && ride.paymentStatus === 'held') {
     const riderId = ride.rider?._id ?? ride.rider;
@@ -1586,6 +1673,17 @@ export const markArrived = asyncHandler(async (req, res) => {
   const socketService = getSocketService();
   if (socketService) {
     socketService.emitRideStatusUpdate(ride, 'arrived', driver);
+  }
+
+  // Best-effort Pusher parity for newer clients (do not fail the request if it errors)
+  try {
+    const { getPusherService } = await import('../services/pusherService.js');
+    const ps = getPusherService();
+    if (ps) {
+      await ps.emitRideStatusUpdate?.(ride, 'driver_arrived', driver);
+    }
+  } catch (err) {
+    logger.warn(`Pusher emitRideStatusUpdate (driver_arrived) failed: ${err.message}`);
   }
 
   const driverUserForArrived = await User.findById(userId).select('name').lean();

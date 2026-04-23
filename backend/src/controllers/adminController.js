@@ -14,6 +14,7 @@ import DriverWallet from '../models/DriverWallet.js';
 import PayoutRequest from '../models/PayoutRequest.js';
 import DriverKyc from '../models/DriverKyc.js';
 import DriverVehicle from '../models/DriverVehicle.js';
+import RideAuditLog from '../models/RideAuditLog.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import { generateTokenPair, generateAccessToken } from '../utils/jwt.js';
@@ -24,6 +25,8 @@ import { AuthenticationError, NotFoundError, ValidationError, ConflictError } fr
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { invalidateAdminSettingsCache } from '../utils/adminSettingsCache.js';
+import { getSocketService } from '../services/socketService.js';
+import { processRidePayment, sendPaymentReceipt } from '../services/paymentService.js';
 
 /** Escape user input for safe use in MongoDB $regex (prevents ReDoS and injection). */
 function escapeRegex(str) {
@@ -1504,7 +1507,7 @@ export const getDriverRides = asyncHandler(async (req, res) => {
  * List rides - GET /api/admin/rides
  */
 export const listRides = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, status, dateFrom, dateTo, search } = req.query;
+  const { page = 1, limit = 20, status, dateFrom, dateTo, search, arrival_flagged } = req.query;
   const skip = (page - 1) * limit;
 
   const filter = {};
@@ -1517,6 +1520,11 @@ export const listRides = asyncHandler(async (req, res) => {
     filter.createdAt = {};
     if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
     if (dateTo) filter.createdAt.$lte = new Date(dateTo);
+  }
+
+  // Optional: surface flagged arrivals in admin dashboard filtering
+  if (arrival_flagged === 'true' || arrival_flagged === true) {
+    filter.arrival_flagged = true;
   }
 
   let ridesQuery = Ride.find(filter)
@@ -1554,6 +1562,95 @@ export const listRides = asyncHandler(async (req, res) => {
         pages: Math.ceil(total / limit),
       },
     },
+  });
+});
+
+/**
+ * Admin force-complete a stuck ride.
+ * POST /api/admin/rides/:rideId/complete
+ */
+export const adminForceCompleteRide = asyncHandler(async (req, res) => {
+  const { rideId } = req.params;
+  const { reason, adminNote } = req.body || {};
+
+  const ride = await Ride.findById(rideId);
+  if (!ride) {
+    return res.status(404).json({ success: false, error: 'Ride not found' });
+  }
+
+  const COMPLETABLE_STATUSES = ['in-progress', 'issue_flagged', 'driver_offline'];
+  if (!COMPLETABLE_STATUSES.includes(ride.status)) {
+    return res.status(400).json({
+      success: false,
+      error: `Cannot complete ride with status: ${ride.status}. Only in-progress or flagged rides can be admin-completed.`,
+    });
+  }
+
+  ride.status = 'completed';
+  ride.completed_by = 'admin';
+  ride.completion_reason = 'admin_resolved';
+  ride.flag = ride.flag || 'admin_completed';
+  ride.completedAt = new Date();
+  ride.adminNote = adminNote || null;
+  ride.statusHistory.push({
+    status: 'completed',
+    timestamp: new Date(),
+    note: `Ride completed by admin${reason ? `: ${reason}` : ''}`,
+  });
+
+  await ride.save();
+
+  // Immutable audit log (RideAuditLog pattern; must not break the request)
+  try {
+    await RideAuditLog.create({
+      ride: ride._id,
+      action: 'admin_force_complete',
+      initiatedBy: req.user?._id || null,
+      initiatedByRole: 'admin',
+      details: { reason: reason || 'admin_resolved', note: adminNote || null },
+    });
+  } catch (err) {
+    logger.error(`Ride audit log failed (admin_force_complete) for ride ${rideId}: ${err.message}`);
+  }
+
+  // Realtime emits (match mobile completion listeners)
+  try {
+    const socketService = getSocketService();
+    if (socketService) {
+      await socketService.emitRideCompleted(ride);
+      await socketService.emitRideStatusUpdate(ride, 'completed', null);
+    }
+  } catch (err) {
+    logger.warn(`Admin force-complete socket emits failed for ride ${rideId}: ${err.message}`);
+  }
+  try {
+    const { getPusherService } = await import('../services/pusherService.js');
+    const ps = getPusherService();
+    if (ps?.pusher && ride?._id) {
+      const payload = { rideId: ride._id.toString(), completedBy: 'admin', reason: reason || 'admin_resolved' };
+      await ps.pusher.trigger(`private.ride.${ride._id.toString()}`, 'trip:completed', payload);
+      await ps.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride.completed', payload);
+    }
+  } catch (err) {
+    logger.warn(`Admin force-complete pusher emit failed for ride ${rideId}: ${err.message}`);
+  }
+
+  // Best-effort payment processing + receipt (same as rider force-complete callsite)
+  try {
+    const paymentResult = await processRidePayment(ride);
+    if (paymentResult?.success && paymentResult?.payment?.status === 'completed') {
+      await sendPaymentReceipt(ride, paymentResult.payment);
+    }
+  } catch (err) {
+    logger.error(`Admin force-complete payment processing failed for ride ${rideId}: ${err.message}`);
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: 'Ride completed successfully by admin',
+    ride_id: rideId,
+    completed_by: 'admin',
+    reason: reason || 'admin_resolved',
   });
 });
 

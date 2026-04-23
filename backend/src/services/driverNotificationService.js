@@ -215,8 +215,23 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
     return { offersCreated: 0 };
   }
 
+  // Prevent duplicate key errors by skipping drivers who already have an offer for this ride.
+  // Unique index: (ride_id, driver_id).
+  const existing = await RideOffer.find({
+    ride_id: ride._id,
+    driver_id: { $in: eligible.map((d) => d._id) },
+  })
+    .select('driver_id')
+    .lean();
+  const existingDriverIds = new Set(existing.map((o) => String(o.driver_id)));
+  const eligibleForOffers = eligible.filter((d) => !existingDriverIds.has(d._id.toString()));
+  if (eligibleForOffers.length === 0) {
+    logger.info(`dispatchRide: offers already exist for all eligible drivers for ride ${ride._id}, skipping`);
+    return { offersCreated: 0, expiresAt };
+  }
+
   // Create offers (idempotent per ride+driver due to unique index).
-  const offerDocs = eligible.map((d) => ({
+  const offerDocs = eligibleForOffers.map((d) => ({
     ride_id: ride._id,
     driver_id: d._id,
     status: 'pending',
@@ -252,7 +267,7 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
   ).catch(() => {});
 
   // Send each offer with its own offer_id.
-  const byDriverId = new Map(eligible.map((d) => [d._id.toString(), d]));
+  const byDriverId = new Map(eligibleForOffers.map((d) => [d._id.toString(), d]));
   await Promise.all(
     newOffers.map((o) => {
       const d = byDriverId.get(String(o.driver_id || o.driver_id?.toString?.() || o.driver_id));
@@ -265,7 +280,7 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
   // Record every driver that received an offer so future rounds skip them.
   await Ride.updateOne(
     { _id: ride._id },
-    { $addToSet: { notifiedDriverIds: { $each: eligible.map((d) => d._id) } } }
+    { $addToSet: { notifiedDriverIds: { $each: eligibleForOffers.map((d) => d._id) } } }
   ).catch((err) => logger.warn(`notifiedDriverIds update failed for ride ${ride._id}: ${err.message}`));
 
   // After the offer window, either retry with fresh drivers or terminate.

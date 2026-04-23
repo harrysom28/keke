@@ -7,6 +7,7 @@ import {
   ScrollView,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
@@ -37,6 +38,7 @@ import { showMessage } from "react-native-flash-message";
 import { getErrorMessage } from "@/utils/errorHandler";
 import tw from "@/lib/tailwind";
 import { useFocusEffect } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import {
   getArrivingByLabel,
   getDriverHeaderCopy,
@@ -84,6 +86,7 @@ const NewRide = ({
   onOfferExpired,
 }: Props) => {
   const { apiConfig } = useContext(AppContext);
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [loading, setLoading] = useState({
     accept: false,
     start: false,
@@ -297,7 +300,26 @@ const NewRide = ({
         getActiveRide();
         showMessage({ type: "success", message: data?.message });
       })
-      .catch(handleRideApiError)
+      .catch((error: any) => {
+        const status = error?.response?.status;
+        if (status === 403) {
+          const distance = error?.response?.data?.distance_meters;
+          Alert.alert(
+            "Not at Pickup Location",
+            distance != null
+              ? `You are ${distance}m away. Please drive to the pickup point first.`
+              : "Please drive to the pickup point first.",
+            [{ text: "OK" }]
+          );
+          return;
+        }
+        if (status === 409) {
+          // Already marked — refresh ride state silently
+          getActiveRide();
+          return;
+        }
+        handleRideApiError(error);
+      })
       .finally(() => setLoading((prev) => ({ ...prev, arrived: false })));
   };
 
@@ -363,13 +385,13 @@ const NewRide = ({
 
   return (
     <BottomSheet
-      height={"80%"}
+      height={screenHeight * 0.85}
       ref={bottomSheetRef}
       animationType="spring"
       backdropMaskColor="#19191900"
       openDuration={1000}
       disableKeyboardHandling={false}
-      style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
+      style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px]`, { backgroundColor: "#fff" })}
     >
       <DriverChatModal
         data={{
@@ -391,54 +413,136 @@ const NewRide = ({
         loading={loading.change}
       />
       <ScrollView
+        style={{ backgroundColor: "#fff" }}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 18 }}
+        contentContainerStyle={{ flexGrow: 0, paddingBottom: 16, paddingHorizontal: 16, gap: 8 }}
       >
         {/* Light, trustworthy header + live state */}
-        <RideStatusHeader
-          state={liveRideState}
-          title={driverCopy.title}
-          subtitle={
-            accepted && headingToPickup && (arrivalDistLabel || arrivalTimeLabel)
-              ? `Pickup in ${[arrivalDistLabel, arrivalTimeLabel].filter(Boolean).join(" · ")}`
-              : driverCopy.subtitle
-          }
-          arrivingBy={arrivingBy}
-          reassurance={accepted ? "Keep your phone visible and drive safely." : undefined}
-        />
+        <View style={{ marginTop: 8 }}>
+          <RideStatusHeader
+            state={liveRideState}
+            title={driverCopy.title}
+            subtitle={
+              (() => {
+                if (!(accepted && headingToPickup)) return driverCopy.subtitle;
+                const d = String(arrivalDistLabel || "")
+                  .replace(/[^0-9.]/g, "")
+                  .trim();
+                const t = String(arrivalTimeLabel || "")
+                  .replace(/[^0-9.]/g, "")
+                  .trim();
+                const distNum = d ? Number(d) : 0;
+                const timeNum = t ? Number(t) : 0;
+                if (!(distNum > 0 || timeNum > 0)) return driverCopy.subtitle;
+                const parts: string[] = [];
+                if (distNum > 0) parts.push(`${distNum} km`);
+                if (timeNum > 0) parts.push(`${Math.round(timeNum)} min`);
+                return parts.length ? `Pickup in ${parts.join(" · ")}` : driverCopy.subtitle;
+              })()
+            }
+            arrivingBy={arrivingBy}
+            reassurance={accepted ? "Keep your phone visible and drive safely." : undefined}
+          />
+        </View>
+
+        {(accepted && liveRideState === "heading_to_pickup") ? (
+          <TouchableOpacity
+            onPress={openNavigation}
+            activeOpacity={0.85}
+            style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 2, paddingTop: 2 }}
+          >
+            <Ionicons name="navigate-outline" size={16} color="#3C8F7C" />
+            <Text style={{ color: "#3C8F7C", fontWeight: "600", fontSize: 13, fontFamily: "RobotoMedium" }}>
+              Navigate to the rider
+            </Text>
+          </TouchableOpacity>
+        ) : null}
 
         <TripDetailsCard fromLabel={tripContext.fromLabel} toLabel={tripContext.toLabel} />
 
-        <UserInfoCard
-          title="Passenger"
-          imageUrl={passengerImage || null}
-          name={passengerName}
-          subtitle={(() => {
-            const landmark =
-              (data as any)?.pickup_landmark ||
-              (data as any)?.pickupLandmark ||
-              (data as any)?.origin?.landmark ||
-              "";
-            const note = (data as any)?.note || (data as any)?.passenger_note || "";
-            const bits = [landmark && `Landmark: ${landmark}`, note && `Note: ${note}`].filter(Boolean);
-            return bits.length ? bits.join(" • ") : null;
-          })()}
-          rightSlot={
-            <Text style={tw.style(`text-base text-[#111827]`, { fontFamily: "RobotoBold" })}>
+        {/* Passenger + Fare row */}
+        <View
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: 12,
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            elevation: 2,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.06,
+            shadowRadius: 5,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+              {passengerImage ? (
+                <Image
+                  source={{ uri: String(passengerImage) }}
+                  style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "#F3F4F6" }}
+                />
+              ) : (
+                <View
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    backgroundColor: "#E8F5F2",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ fontSize: 13, color: "#3C8F7C", fontFamily: "RobotoBold" }}>
+                    {String(passengerName || "")
+                      .trim()
+                      .split(/\s+/)
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .map((p) => p[0]?.toUpperCase())
+                      .join("") || "P"}
+                  </Text>
+                </View>
+              )}
+
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 11, color: "#9CA3AF", fontFamily: "RobotoRegular", marginBottom: 1 }}>
+                  Passenger
+                </Text>
+                <Text style={{ fontSize: 15, fontWeight: "600", color: "#111827", fontFamily: "RobotoMedium" }} numberOfLines={1}>
+                  {passengerName}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={{ fontSize: 16, fontWeight: "700", color: "#3C8F7C", fontFamily: "RobotoBold" }}>
               ₦{fareDisplay}
             </Text>
-          }
-        />
+          </View>
+        </View>
 
         <ProgressBar label="Pickup → Dropoff" state={liveRideState} />
 
-        <View style={tw`mt-2 px-4 flex-row justify-between items-center`}>
-          <Text style={tw.style(`text-sm text-[#6B7280]`, { fontFamily: "RobotoRegular" })}>
-            Payment
-          </Text>
-          <Text style={tw.style(`text-sm text-[#111827] uppercase`, { fontFamily: "RobotoMedium" })}>
-            {payment_type}
-          </Text>
+        {/* Payment row (separator style) */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            paddingVertical: 6,
+            paddingHorizontal: 2,
+            borderBottomWidth: 1,
+            borderBottomColor: "#EEF2F7",
+          }}
+        >
+          <Text style={{ fontSize: 12, color: "#6B7280", fontFamily: "RobotoRegular" }}>Payment</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Ionicons name="wallet-outline" size={14} color="#3C8F7C" />
+            <Text style={{ fontSize: 13, fontWeight: "600", color: "#111827", fontFamily: "RobotoMedium" }}>
+              {String(payment_type || "wallet")
+                .toLowerCase()
+                .replace(/^\w/, (c) => c.toUpperCase())}
+            </Text>
+          </View>
         </View>
 
         {/* Primary actions */}

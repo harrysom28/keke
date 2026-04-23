@@ -97,12 +97,14 @@ export function getTripContext(data: AnyObj): { fromLabel: string; toLabel: stri
 }
 
 export function getRiderHeaderCopy(state: RideState, data: AnyObj) {
+  const driver = data?.driver ?? null;
   const driverName =
-    data?.driver?.driver_name ||
-    data?.driver?.name ||
-    data?.driver?.user?.name ||
-    data?.driver?.user?.fullName ||
-    "your driver";
+    driver?.driver_name ||
+    driver?.name ||
+    driver?.vehicle_name ||
+    driver?.user?.name ||
+    driver?.user?.fullName ||
+    "Unknown Driver";
 
   const etaMin = parseMinutesLike(data?.arrival_time ?? data?.eta ?? data?.routeEta);
   const etaLabel =
@@ -115,15 +117,15 @@ export function getRiderHeaderCopy(state: RideState, data: AnyObj) {
   switch (state) {
     case "heading_to_pickup":
       return {
-        title: `Picking up ${data?.passenger_name || data?.rider_name || "you"}`,
+        title: "Picking you up",
         subtitle: etaLabel ? `${driverName} • ${etaLabel} away` : `${driverName} is on the way`,
-        reassurance: "You’re on your way.",
+        reassurance: undefined,
       };
     case "arrived_pickup":
       return {
         title: "Driver has arrived",
         subtitle: `${driverName} is at pickup`,
-        reassurance: "Head to the pickup point when you’re ready.",
+        reassurance: undefined,
       };
     case "trip_started":
       return {

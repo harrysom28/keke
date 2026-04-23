@@ -73,14 +73,15 @@ const rideSchema = new mongoose.Schema(
      */
     completed_by: {
       type: String,
-      enum: ['driver', 'rider', 'system'],
+      enum: ['driver', 'rider', 'admin', 'system'],
       default: null,
     },
     completion_reason: {
       type: String,
-      enum: ['normal', 'force', 'timeout', 'issue_flagged'],
+      enum: ['normal', 'force', 'timeout', 'issue_flagged', 'admin_resolved'],
       default: null,
     },
+    adminNote: { type: String, default: null },
     /**
      * Generic operational flag for non-normal flows (e.g. driver_offline_during_trip, driver_not_ended).
      * String (not enum) so ops can evolve flags without schema churn.
@@ -247,6 +248,20 @@ const rideSchema = new mongoose.Schema(
       type: Number, // in minutes
       default: null,
     },
+    /** Geofence validation audit for "driver arrived at pickup" (dispute resolution). */
+    arrival_coordinates: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+    },
+    arrival_distance_from_pickup: { type: Number, default: null }, // meters
+    arrival_proximity_status: {
+      type: String,
+      enum: ['confirmed', 'probable', 'unlikely', 'unverifiable', 'blocked'],
+      default: null,
+    },
+    arrival_flagged: { type: Boolean, default: false },
+    arrival_flag_reason: { type: String, default: null },
+    arrived_at: { type: Date, default: null },
     // Real-time tracking
     tracking: {
       currentLocation: {
@@ -312,6 +327,7 @@ rideSchema.index({ driver: 1, createdAt: -1 });
 rideSchema.index({ rider: 1, status: 1 }); // findActiveRideForRider
 rideSchema.index({ driver: 1, status: 1 }); // findActiveRideForDriver
 rideSchema.index({ status: 1 });
+rideSchema.index({ arrival_flagged: 1, createdAt: -1 });
 rideSchema.index({ 'pickupLocation': '2dsphere' });
 rideSchema.index({ 'dropoffLocation': '2dsphere' });
 rideSchema.index({ paymentStatus: 1 });

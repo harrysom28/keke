@@ -79,6 +79,20 @@ export const sendMessage = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const { rideId, message, messageType, attachments } = req.body;
 
+  const withTimeout = async (promise, ms, label) => {
+    let t;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          t = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+        }),
+      ]);
+    } finally {
+      if (t) clearTimeout(t);
+    }
+  };
+
   if (!rideId) {
     throw new ValidationError('Ride ID is required');
   }
@@ -177,41 +191,6 @@ export const sendMessage = asyncHandler(async (req, res) => {
     });
   }
 
-  try {
-    const { getPusherService } = await import('../services/pusherService.js');
-    const ps = getPusherService();
-    if (ps?.pusher) {
-      await ps.pusher.trigger(`private.ride.${rideId}`, 'new-message', {
-        message: formatMessageResponse(newMessage, receiverId.toString()),
-        ride_id: rideId.toString(),
-      });
-    }
-  } catch (err) {
-    logger.warn(`Pusher new-message failed: ${err.message}`);
-  }
-
-  const preview =
-    message.trim().length > 90 ? `${message.trim().slice(0, 87)}…` : message.trim();
-  const senderFirst = newMessage.sender?.name?.trim?.()?.split(/\s+/)?.[0] || 'Your contact';
-  try {
-    const { sendToUser } = await import('../services/notificationService.js');
-    const receiverRole = isRider ? 'driver' : 'rider';
-    await sendToUser(receiverId, receiverRole, {
-      title: `Message from ${senderFirst}`,
-      message: preview,
-      type: 'alert',
-      priority: 'high',
-      screen: 'RideChat',
-      ride_id: rideId,
-      action_type: 'navigate',
-      action_payload: { screen: 'RideChat', rideId: rideId.toString() },
-      event_key: 'chat_message',
-      data: { subType: 'chat_message', rideId: rideId.toString() },
-    });
-  } catch (err) {
-    logger.error(`Chat push notification failed: ${err.message}`);
-  }
-
   logger.info(`Message sent for ride ${rideId} from user ${userId} to user ${receiverId}`);
 
   res.status(201).json({
@@ -220,6 +199,53 @@ export const sendMessage = asyncHandler(async (req, res) => {
     data: {
       message: formatMessageResponse(newMessage, userId),
     },
+  });
+
+  // Fire-and-forget: these should never block the API response (Railway can be slow / cold).
+  // If they hang, it causes client timeouts and "Message not sent" even though it saved.
+  setImmediate(async () => {
+    try {
+      const { getPusherService } = await import('../services/pusherService.js');
+      const ps = getPusherService();
+      if (ps?.pusher) {
+        await withTimeout(
+          ps.pusher.trigger(`private.ride.${rideId}`, 'new-message', {
+            message: formatMessageResponse(newMessage, receiverId.toString()),
+            ride_id: rideId.toString(),
+          }),
+          2500,
+          'pusher.trigger(new-message)'
+        );
+      }
+    } catch (err) {
+      logger.warn(`Pusher new-message failed: ${err.message}`);
+    }
+
+    const preview =
+      message.trim().length > 90 ? `${message.trim().slice(0, 87)}…` : message.trim();
+    const senderFirst = newMessage.sender?.name?.trim?.()?.split(/\s+/)?.[0] || 'Your contact';
+    try {
+      const { sendToUser } = await import('../services/notificationService.js');
+      const receiverRole = isRider ? 'driver' : 'rider';
+      await withTimeout(
+        sendToUser(receiverId, receiverRole, {
+          title: `Message from ${senderFirst}`,
+          message: preview,
+          type: 'alert',
+          priority: 'high',
+          screen: 'RideChat',
+          ride_id: rideId,
+          action_type: 'navigate',
+          action_payload: { screen: 'RideChat', rideId: rideId.toString() },
+          event_key: 'chat_message',
+          data: { subType: 'chat_message', rideId: rideId.toString() },
+        }),
+        3500,
+        'notification.sendToUser(chat_message)'
+      );
+    } catch (err) {
+      logger.error(`Chat push notification failed: ${err.message}`);
+    }
   });
 });
 

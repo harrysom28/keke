@@ -611,7 +611,8 @@ export const sendPushNotification = async (deviceToken, title, body, data = {}, 
 const PUSH_CONCURRENCY = 10;
 
 // TASK 6: Retry delays for failed push (network/server errors). Simple in-memory retry.
-const RETRY_DELAYS_MS = [10 * 1000, 60 * 1000, 5 * 60 * 1000]; // 10s, 1min, 5min
+// Keep retries minimal to avoid blocking request paths that fire-and-forget push (e.g. chat).
+const RETRY_DELAYS_MS = [10 * 1000]; // 10s (max 1 retry)
 
 /**
  * TASK 6: Retry failed push deliveries.

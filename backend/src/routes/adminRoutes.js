@@ -54,6 +54,7 @@ router.get('/drivers/:id/rides', validationRules.mongoId, validate, adminControl
 
 // Ride management
 router.get('/rides', adminController.listRides);
+router.post('/rides/:rideId/complete', validationRules.rideIdParam, validate, adminController.adminForceCompleteRide);
 router.get('/rides/:id', validationRules.mongoId, validate, adminController.getRideDetails);
 router.patch('/rides/:id', validationRules.mongoId, validate, validationRules.updateRide, validate, adminController.updateRide);
 router.post('/rides/:id/assign', validationRules.mongoId, validate, validationRules.assignRideDriver, validate, adminController.assignRideDriver);

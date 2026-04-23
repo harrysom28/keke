@@ -24,17 +24,17 @@ const Pages = [
   {
     img: require("@/assets/images/onboard-1.png"),
     title: "Fast, Reliable Rides Across Your City",
-    text: "Book safe, affordable rides in minutes with Keke. Whether you're commuting to work, heading to school, or moving around town, enjoy quick pickups and trusted drivers.",
+    text: "",
   },
   {
     img: require("@/assets/images/onboard-2.png"),
     title: "Ride with Trusted Drivers",
-    text: "Travel with confidence knowing your ride is handled by verified drivers focused on safety, professionalism, and a better customer experience.",
+    text: "",
   },
   {
     img: require("@/assets/images/onboard-3.png"),
     title: "Monitor your trip",
-    text: "Share your real-time location with friends and families. Receive updates about how close you are to your location.",
+    text: "",
   },
 ];
 
@@ -195,14 +195,16 @@ const Onboard = () => {
               >
                 {Pages[index].title}
               </Text>
-              <Text
-                style={tw.style(
-                  `text-base-green text-base text-center w-[90%] mt-1`,
-                  { fontFamily: "RobotoRegular" }
-                )}
-              >
-                {Pages[index].text}
-              </Text>
+              {Pages[index].text ? (
+                <Text
+                  style={tw.style(
+                    `text-base-green text-base text-center w-[90%] mt-1`,
+                    { fontFamily: "RobotoRegular" }
+                  )}
+                >
+                  {Pages[index].text}
+                </Text>
+              ) : null}
             </View>
           </View>
         </Animated.View>
@@ -215,7 +217,7 @@ const Onboard = () => {
           <View style={tw`self-center flex-row items-center gap-x-[32px]`}>
             {Pages.map((item, idx) => (
               <Pressable
-                key={item.text}
+                key={`${idx}-${item.title}`}
                 onPress={() => {
                   if (idx !== index) {
                     if (idx > index) {

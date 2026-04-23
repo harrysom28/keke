@@ -119,12 +119,23 @@ export function DriverActionButtons({
         style={styles.primaryBtn}
         activeOpacity={0.85}
       >
-        <Text style={styles.primaryText}>{primary.label}</Text>
+        <View style={styles.primaryRow}>
+          {primary.label === "Open Navigation" ? (
+            <Ionicons name="navigate" size={18} color="#FFFFFF" />
+          ) : null}
+          <Text style={styles.primaryText}>{primary.label}</Text>
+        </View>
       </TouchableOpacity>
 
       <View style={styles.rowBetween}>
-        <TouchableOpacity onPress={secondary.onPress} style={styles.secondaryBtn} activeOpacity={0.85}>
-          <Text style={styles.secondaryText}>{secondary.label}</Text>
+        <TouchableOpacity
+          onPress={secondary.onPress}
+          style={[styles.secondaryBtn, secondary.label === "I\u2019ve arrived" && styles.secondaryBtnArrived]}
+          activeOpacity={0.85}
+        >
+          <Text style={[styles.secondaryText, secondary.label === "I\u2019ve arrived" && styles.secondaryTextArrived]}>
+            {secondary.label}
+          </Text>
         </TouchableOpacity>
         <View style={styles.row}>
           <IconButton icon="call-outline" onPress={onCall} accessibilityLabel="Call passenger" />
@@ -154,9 +165,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   iconBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     borderWidth: 2,
     borderColor: BRAND_GREEN,
     justifyContent: "center",
@@ -166,7 +177,7 @@ const styles = StyleSheet.create({
   primaryBtn: {
     backgroundColor: BRAND_GREEN,
     borderRadius: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
     paddingHorizontal: 16,
     alignItems: "center",
     shadowColor: BRAND_GREEN,
@@ -174,11 +185,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 6,
     elevation: 4,
+    minHeight: 48,
+    justifyContent: "center",
+  },
+  primaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
   },
   primaryText: {
     fontSize: 15,
     color: "#FFFFFF",
-    fontFamily: "RobotoBold",
+    fontFamily: "RobotoMedium",
   },
   secondaryBtn: {
     flex: 1,
@@ -190,9 +209,17 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     alignItems: "center",
   },
+  secondaryBtnArrived: {
+    borderColor: BRAND_GREEN,
+    borderWidth: 1.5,
+  },
   secondaryText: {
     fontSize: 14,
     color: "#111827",
+    fontFamily: "RobotoMedium",
+  },
+  secondaryTextArrived: {
+    color: BRAND_GREEN,
     fontFamily: "RobotoMedium",
   },
   dangerBtn: {
