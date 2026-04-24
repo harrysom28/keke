@@ -954,10 +954,21 @@ export default function HomeScreen() {
 
           if (uiChanged) {
             animateToMapDirections(rideData);
-            setTimeout(() => {
-              logger.debug("Opening active ride sheet");
-              activeRideSheetRef?.current?.open();
-            }, 300);
+            // Only open/re-open the sheet if user isn't actively on the
+            // driver search or other sub-screens — prevents modal re-popping
+            // when user taps "Try another driver" and polling fires.
+            const currentScreen = rideScreenRef.current;
+            const suppressReopen =
+              currentScreen === "SEARCH" ||
+              currentScreen === "DRIVERS" ||
+              currentScreen === "SUMMARY" ||
+              currentScreen === "REVIEW";
+            if (!suppressReopen) {
+              setTimeout(() => {
+                logger.debug("Opening active ride sheet");
+                activeRideSheetRef?.current?.open();
+              }, 300);
+            }
             setTrigger(Math.random());
           }
         } else {
@@ -993,9 +1004,10 @@ export default function HomeScreen() {
         
         // Silently handle 401 errors - token refresh should happen automatically via API client
         if (status === 401) {
-          logger.debug('Authentication error (401) - token refresh should handle this');
-          clearRideState();
-          activeRideSheetRef?.current?.close();
+          // Token refresh is handled by the API client interceptor automatically.
+          // Do NOT clear ride state here — the interceptor will retry the request
+          // with a new token and getActiveRide will be called again via the retry.
+          logger.debug('Authentication error (401) - token refresh in progress, skipping clear');
           return;
         }
         
