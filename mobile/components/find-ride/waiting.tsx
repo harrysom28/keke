@@ -384,20 +384,18 @@ export const WaitingView = ({
     data?.driver && typeof data.driver === "object"
       ? Object.keys(data.driver).length > 0
       : false;
-  const isAccepted = data?.accepted_by_driver || data?.acceptedByDriver || false;
+  const isAccepted = data?.accepted_by_driver || (data as any)?.acceptedByDriver || false;
   const rideStatusLower = String((data as any)?.status ?? "").toLowerCase();
   const isDriverArrived =
     rideStatusLower === "arrived" || rideStatusLower === "driver_arrived";
   /** Trip is live on the road — prefer status when booleans are stale. */
   const hasRideStarted = !!(
     data?.is_ride_started ||
-    data?.isRideStarted ||
+    (data as any)?.isRideStarted ||
     rideStatusLower === "in-progress" ||
     rideStatusLower === "in_progress" ||
     rideStatusLower === "started"
   );
-
-  const isRideInProgress = liveRideState === "trip_started" || liveRideState === "near_destination";
 
   const OVERAGE_MULTIPLIER = 1.5;
   const estimatedDurationMs = ((data as any)?.duration ?? 0) * 60 * 1000;
@@ -430,11 +428,18 @@ export const WaitingView = ({
 
   const driverDisplayName = useMemo(() => {
     const d: any = (data as any)?.driver ?? null;
+    const u: any = d?.user ?? null;
+    const first = u?.firstName || u?.first_name || "";
+    const last = u?.lastName || u?.last_name || "";
+    const fullFromUser = [first, last].filter(Boolean).join(" ").trim();
     return (
+      fullFromUser ||
       d?.driver_name ||
+      d?.full_name ||
       d?.name ||
-      d?.vehicle_name ||
-      "Unknown Driver"
+      u?.name ||
+      u?.fullName ||
+      "Driver"
     );
   }, [data]);
 
@@ -614,17 +619,21 @@ export const WaitingView = ({
   const statusSubtext = useMemo(() => {
     if (hasRideStarted) return "Your ride is in progress";
     if (isAccepted) {
+      const rawDistance = (data as any)?.distance;
+      const distanceNum =
+        typeof rawDistance === "number" ? rawDistance : Number(rawDistance);
       const distance = data?.arrival_distance
         ? formatDistance(data.arrival_distance)
-        : data?.distance
-        ? `${data.distance.toFixed(1)} km`
+        : Number.isFinite(distanceNum)
+        ? `${distanceNum.toFixed(1)} km`
         : "0 km";
       return distance === "0 km" || distance === "0" ? "Driver is here" : `${distance} away`;
     }
     return waitingSubtitleOverride || "Searching for nearby drivers…";
-  }, [data?.arrival_distance, data?.distance, hasRideStarted, isAccepted, waitingSubtitleOverride]);
+  }, [data?.arrival_distance, (data as any)?.distance, hasRideStarted, isAccepted, waitingSubtitleOverride]);
 
   const liveRideState = useMemo(() => getRideStateFromData(data as any), [data]);
+  const isRideInProgress = liveRideState === "trip_started" || liveRideState === "near_destination";
   const arrivingBy = useMemo(() => getArrivingByLabel(data as any), [data]);
   const tripContext = useMemo(() => getTripContext(data as any), [data]);
   const headerCopy = useMemo(
@@ -642,10 +651,12 @@ export const WaitingView = ({
         <ScrollView
           style={styles.scrollContainer}
           contentContainerStyle={styles.container}
-          showsVerticalScrollIndicator={false}
+          scrollEnabled={true}
+          bounces={true}
+          showsVerticalScrollIndicator={true}
+          contentInsetAdjustmentBehavior="automatic"
           nestedScrollEnabled={true}
           keyboardShouldPersistTaps="handled"
-          bounces={false}
         >
           {/* ── Accepted / In-Transit (modernized) ── */}
           {isAccepted ? (
@@ -719,7 +730,7 @@ export const WaitingView = ({
                   subtitle={(() => {
                     const d = (data as any)?.driver || {};
                     const car =
-                      [d?.vehicle_color, d?.vehicle_name, d?.vehicle_model]
+                      [d?.vehicle_color, d?.vehicle_make, d?.vehicle_model]
                         .filter(Boolean)
                         .join(" ") ||
                       d?.vehicle_type ||
@@ -960,7 +971,8 @@ export const WaitingView = ({
               >
                 {[
                   (data as any)?.driver?.vehicle_color,
-                  (data as any)?.driver?.vehicle_name,
+                  (data as any)?.driver?.vehicle_make,
+                  (data as any)?.driver?.vehicle_model,
                 ]
                   .filter(Boolean)
                   .join(" ")
@@ -1013,14 +1025,14 @@ export const WaitingView = ({
             <View style={styles.driverInfo}>
               <View style={styles.avatarContainer}>
                 {data?.driver?.driver_image ||
-                data?.driver?.image ||
+                (data?.driver as any)?.image ||
                 (data?.driver as any)?.user?.profileImage ||
                 (data?.driver as any)?.user?.image ? (
                   <Image
                     source={{
                       uri:
                         data.driver.driver_image ||
-                        data.driver.image ||
+                        (data.driver as any)?.image ||
                         (data.driver as any)?.user?.profileImage ||
                         (data.driver as any)?.user?.image,
                     }}
@@ -1075,15 +1087,21 @@ export const WaitingView = ({
                     </Text>
                   </View>
                   {(() => {
+                    const rawDistance = (data as any)?.distance;
+                    const distanceNum =
+                      typeof rawDistance === "number" ? rawDistance : Number(rawDistance);
                     const distance = data?.arrival_distance
                       ? formatDistance(data.arrival_distance)
-                      : data?.distance
-                      ? `${data.distance.toFixed(1)} km`
+                      : Number.isFinite(distanceNum)
+                      ? `${distanceNum.toFixed(1)} km`
                       : null;
+                    const rawDuration = (data as any)?.duration;
+                    const durationNum =
+                      typeof rawDuration === "number" ? rawDuration : Number(rawDuration);
                     const time = data?.arrival_time
                       ? formatTime(data.arrival_time)
-                      : data?.duration
-                      ? `${Math.round(data.duration)} min`
+                      : Number.isFinite(durationNum)
+                      ? `${Math.round(durationNum)} min`
                       : null;
                     if (distance && time && distance !== "0 km" && time !== "0 min") {
                       return (
@@ -1156,21 +1174,20 @@ export const WaitingView = ({
               <Text style={styles.costLabel}>Estimated Fare</Text>
               <Text style={styles.costValue}>{formatCost(data?.cost)}</Text>
             </View>
-            {(data?.vehicle_type ||
-              data?.vehicleType?.name ||
-              data?.vehicleType?.displayName ||
-              (data as any)?.vehicleType) && (
-              <View style={styles.vehicleTypePill}>
-                <Ionicons name="car-outline" size={13} color={BRAND_GREEN} />
-                <Text style={styles.vehicleTypeText}>
-                  {data?.vehicle_type ||
-                    data?.vehicleType?.displayName ||
-                    data?.vehicleType?.name ||
-                    (data as any)?.vehicleType ||
-                    "Vehicle"}
-                </Text>
-              </View>
-            )}
+            {(() => {
+              const vt = (data as any)?.vehicleType;
+              const vtName =
+                typeof vt === "string" ? vt : vt?.displayName || vt?.name;
+              const vtLabel = (data as any)?.vehicle_type || vtName;
+              return vtLabel ? (
+                <View style={styles.vehicleTypePill}>
+                  <Ionicons name="car-outline" size={13} color={BRAND_GREEN} />
+                  <Text style={styles.vehicleTypeText}>
+                    {String(vtLabel) || "Vehicle"}
+                  </Text>
+                </View>
+              ) : null;
+            })()}
           </View>
         </View>
 
@@ -1253,19 +1270,15 @@ const styles = StyleSheet.create({
     width: "100%",
     backgroundColor: "#fff",
     flex: 1,
-    minHeight: 0,
     alignSelf: "stretch",
   },
   keyboardContainer: {
     width: "100%",
     flex: 1,
-    minHeight: 0,
   },
   scrollContainer: {
     width: "100%",
-    flexGrow: 1,
-    flexShrink: 1,
-    minHeight: 0,
+    flex: 1,
   },
   container: {
     flexGrow: 1,
