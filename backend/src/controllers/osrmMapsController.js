@@ -201,6 +201,17 @@ export const resolvePickupLabel = asyncHandler(async (req, res) => {
     });
   }
 
+  const { getRedisClient } = await import('../config/redis.js');
+  const redis = getRedisClient();
+  const cacheKey = `geocode:${lat.toFixed(4)}:${lng.toFixed(4)}`;
+  if (redis?.isOpen) {
+    const cached = await redis.get(cacheKey).catch(() => null);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      return res.json({ status: 'success', data: { ...parsed, source: 'cache' } });
+    }
+  }
+
   const extractBestFromGoogle = (payload) => {
     const results = payload?.results || [];
     let bestLabel = null;
@@ -288,13 +299,24 @@ export const resolvePickupLabel = asyncHandler(async (req, res) => {
       })());
     const fallbackLabel = fallbackLocality ? `Near ${fallbackLocality}` : 'Current location';
     const formattedAddress = payload?.results?.[0]?.formatted_address || null;
-    if (best?.label) {
+    const bestLabel = best?.label || null;
+    const locality = best?.locality || null;
+    if (redis?.isOpen && bestLabel) {
+      await redis
+        .setEx(
+          cacheKey,
+          86400,
+          JSON.stringify({ label: bestLabel, formatted_address: null, locality })
+        )
+        .catch(() => {});
+    }
+    if (bestLabel) {
       return res.json({
         status: 'success',
         data: {
-          label: best.label,
+          label: bestLabel,
           formatted_address: formattedAddress,
-          locality: best.locality || null,
+          locality,
           source: 'google',
         },
       });
