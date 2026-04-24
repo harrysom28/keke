@@ -10,8 +10,8 @@ import { detectCity } from '../seeds/nigerianCities.js';
 
 const Candidate = PlaceCandidate;
 
-export const MIN_RIDES_VISIBLE = 15;
-const SNAP_PRECISION = 4;
+export const MIN_RIDES_VISIBLE = 3;
+const SNAP_PRECISION = 3;
 const RIDES_BOOST = 50;
 const RIDES_SEEDED = 100;
 
@@ -100,7 +100,10 @@ async function processEndpoint(lat, lng, label) {
   });
 
   if (nearbySeeded) {
-    await Place.updateOne({ _id: nearbySeeded._id }, { $inc: { rideCount: 1 } });
+    await Place.updateOne(
+      { _id: nearbySeeded._id },
+      { $inc: { rideCount: 1 }, $set: { lastRideAt: new Date() } }
+    );
     return;
   }
 
@@ -183,6 +186,9 @@ export async function promoteCandidate(candidate, city) {
         rideCount: candidate.rideCount,
         verified: false,
         active: true,
+        lastRideAt: new Date(),
+        lastVerifiedAt: new Date(),
+        verificationSource: 'ride',
       },
       $setOnInsert: { createdAt: new Date() },
     },

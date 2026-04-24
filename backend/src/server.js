@@ -485,6 +485,26 @@ const startServer = async () => {
     // Preload places + pickup points into memory for 1–3ms autocomplete
     schedulePreloadRefresh();
 
+    // Weekly: deactivate learned places with no rides in 90 days
+    setInterval(async () => {
+      try {
+        const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        const result = await (await import('./models/Place.js')).default.updateMany(
+          {
+            source: 'learned',
+            active: true,
+            lastRideAt: { $lt: cutoff },
+          },
+          { $set: { active: false } }
+        );
+        if (result.modifiedCount > 0) {
+          logger.info(`[PlaceCleanup] Deactivated ${result.modifiedCount} stale learned places`);
+        }
+      } catch (err) {
+        logger.warn(`[PlaceCleanup] Failed: ${err.message}`);
+      }
+    }, 7 * 24 * 60 * 60 * 1000);
+
     let redisOk = false;
     if (isRedisConfigured()) {
       redisOk = await ensureRedisConnected();

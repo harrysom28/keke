@@ -918,7 +918,10 @@ export default function HomeScreen() {
 
           // Use ride_id or _id
           const rideId = rideData?.ride_id || rideData?._id;
-          const rideUiKey = `${rideId}|${rideStatus}|${String(rideData.accepted_by_driver)}|${rideData.driver_id ?? ""}|${String(rideData.updatedAt ?? "")}|${String(rideData.is_ride_started)}|${String(rideData.drop_off_completed)}|${String(rideData.payment_status ?? "")}`;
+          // Exclude updatedAt — backend updates it on every dispatch attempt,
+          // causing false uiChanged=true on every poll and re-opening the sheet.
+          // Only track fields that actually affect the UI state.
+          const rideUiKey = `${rideId}|${rideStatus}|${String(rideData.accepted_by_driver)}|${rideData.driver_id ?? ""}|${String(rideData.is_ride_started)}|${String(rideData.drop_off_completed)}|${String(rideData.payment_status ?? "")}|${rideData.internal_status ?? ""}`;
           const uiChanged = lastActiveRideUiKeyRef.current !== rideUiKey;
           lastActiveRideUiKeyRef.current = rideUiKey;
 

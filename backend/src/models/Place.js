@@ -19,6 +19,9 @@ const placeSchema = new mongoose.Schema(
     source: { type: String, default: 'seeded' }, // 'seeded' | 'learned' | 'google_cached'
     popularity: { type: Number, default: 5 },
     rideCount: { type: Number, default: 0 },
+    lastRideAt: { type: Date, default: null },
+    lastVerifiedAt: { type: Date, default: null },
+    verificationSource: { type: String, default: null }, // 'auto' | 'admin' | 'ride'
     verified: { type: Boolean, default: true },
     active: { type: Boolean, default: true },
   },
@@ -28,5 +31,7 @@ const placeSchema = new mongoose.Schema(
 placeSchema.index({ location: '2dsphere' });
 placeSchema.index({ city: 1, name: 1 });
 placeSchema.index({ city: 1, popularity: -1 });
+placeSchema.index({ lastRideAt: 1 });
+placeSchema.index({ source: 1, lastRideAt: 1 });
 
 export default mongoose.model('Place', placeSchema);
