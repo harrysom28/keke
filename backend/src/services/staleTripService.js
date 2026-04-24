@@ -6,6 +6,7 @@ import { logRideAudit } from './rideAuditLogService.js';
 
 const STALE_MINUTES = 8;
 const TICK_MS = 5 * 60 * 1000;
+const STALE_SEARCHING_MINUTES = 30;
 
 function stopRideAutomationTimers(rideId) {
   const id = rideId?.toString?.() || String(rideId || '');
@@ -113,6 +114,7 @@ class StaleTripService {
     if (this.isRunning) return;
     this.isRunning = true;
     try {
+      // ── Flag stale in-progress rides ──────────────────────────────────
       const cutoff = new Date(Date.now() - STALE_MINUTES * 60 * 1000);
       const staleRides = await Ride.find({
         status: 'in-progress',
@@ -130,6 +132,69 @@ class StaleTripService {
           logger.error(`Failed to flag stale ride ${ride?._id}: ${err.message}`);
         }
       }
+
+      // ── Cancel stale searching/requested rides ────────────────────────
+      const searchCutoff = new Date(Date.now() - STALE_SEARCHING_MINUTES * 60 * 1000);
+      const staleSearchingRides = await Ride.find({
+        status: { $in: ['searching', 'requested'] },
+        updatedAt: { $lt: searchCutoff },
+      }).select('_id rider driver status createdAt updatedAt statusHistory completed_by completion_reason');
+
+      if (staleSearchingRides.length > 0) {
+        logger.warn(`Found ${staleSearchingRides.length} stale searching/requested rides to cancel`);
+      }
+
+      for (const ride of staleSearchingRides) {
+        try {
+          ride.status = 'cancelled';
+          ride.completed_by = null;
+          ride.completion_reason = null;
+          ride.cancellation = {
+            cancelledBy: 'system',
+            reason: 'No driver found within time limit',
+            cancelledAt: new Date(),
+            cancellationFee: 0,
+          };
+          ride.statusHistory.push({
+            status: 'cancelled',
+            timestamp: new Date(),
+            note: `Auto-cancelled by system: no driver found after ${STALE_SEARCHING_MINUTES} minutes`,
+          });
+          await ride.save({ validateBeforeSave: false });
+
+          stopRideAutomationTimers(ride._id);
+
+          logger.info(`Auto-cancelled stale searching ride ${ride._id}`);
+
+          // Notify rider
+          try {
+            const { sendToUser } = await import('./notificationService.js');
+            await sendToUser(ride.rider, 'rider', {
+              title: 'No driver found',
+              message: 'We could not find a driver for your ride. Please try again.',
+              type: 'alert',
+              priority: 'high',
+              screen: 'home',
+              ride_id: ride._id,
+              event_key: 'ride_cancelled_no_driver',
+              data: { subType: 'ride_cancelled', rideId: ride._id.toString(), reason: 'no_driver' },
+            });
+          } catch (err) {
+            logger.warn(`Stale searching ride push failed for ride ${ride._id}: ${err.message}`);
+          }
+
+          // Notify via Pusher
+          await emitTripEventToRiderAndDriver(ride, 'trip:cancelled', {
+            rideId: ride._id.toString(),
+            reason: 'no_driver',
+          });
+
+        } catch (err) {
+          logger.error(`Failed to cancel stale searching ride ${ride?._id}: ${err.message}`);
+        }
+      }
+      // ── End stale searching cleanup ───────────────────────────────────
+
     } catch (err) {
       logger.error(`Stale trip tick failed: ${err.message}`);
     } finally {
