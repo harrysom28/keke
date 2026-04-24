@@ -199,6 +199,14 @@ export default function HomeScreen() {
     screen: "",
     data: { waiting: {} },
   });
+  const tripCompletedRef = useRef(false);
+  const rideScreenRef = useRef<string>("");
+  useEffect(() => {
+    tripCompletedRef.current = tripCompleted;
+  }, [tripCompleted]);
+  useEffect(() => {
+    rideScreenRef.current = ride.screen;
+  }, [ride.screen]);
   const [driverLocation, setDriverLocation] = useState<{ lat: number; long: number; eta: number | null; distance: number | null } | null>(null);
   /** When true, open Book Ride sheet as soon as ref is available (handles ref timing) */
   const [pendingOpenBookRide, setPendingOpenBookRide] = useState(false);
@@ -341,6 +349,15 @@ export default function HomeScreen() {
         ...snapshot,
         status: "completed",
       } as TRide;
+      const rawCost =
+        (merged as { cost?: unknown }).cost ??
+        (snapshot as { fare?: { totalFare?: number } } | undefined)?.fare
+          ?.totalFare;
+      if (rawCost != null && rawCost !== "") {
+        (merged as { cost?: string }).cost = String(
+          typeof rawCost === "number" ? Math.round(rawCost) : rawCost
+        );
+      }
       setTemp(merged);
       setRide({
         screen: "SUMMARY",
@@ -356,10 +373,9 @@ export default function HomeScreen() {
         destination: { latitude: 0, longitude: 0 },
       });
       setRouteKey((k) => k + 1);
-      setTripCompleted(false);
-      setTimeout(() => {
-        activeRideSheetRef?.current?.open();
-      }, 200);
+      activeRideSheetRef?.current?.close();
+      tripCompletedRef.current = true;
+      setTripCompleted(true);
     },
     [dispatch]
   );
@@ -954,6 +970,19 @@ export default function HomeScreen() {
             setTimeout(getActiveRide, 3_000);
             return;
           }
+          if (
+            rideScreenRef.current === "SUMMARY" ||
+            rideScreenRef.current === "REVIEW"
+          ) {
+            logger.debug(
+              "No active ride but post-ride sheet flow is open, skipping clear"
+            );
+            return;
+          }
+          if (tripCompletedRef.current) {
+            logger.debug("Trip completed modal is showing, skipping clear");
+            return;
+          }
           clearRideState();
           activeRideSheetRef?.current?.close();
         }
@@ -1519,7 +1548,73 @@ export default function HomeScreen() {
           duration: 5000,
         });
         getActiveRide();
+        return;
       }
+
+      // ── Ride state alerts ────────────────────────────────────────────────
+      const subType = payload?.subType ?? payload?.event_key ?? name;
+
+      if (subType === "fare_locked") {
+        const amt = payload?.amount ?? payload?.fare ?? payload?.cost ?? null;
+        safeShowMessage({
+          type: "info",
+          message: "Your fare is locked 🔒",
+          description: amt
+            ? `₦${Number(amt).toLocaleString()} is fixed — no cash needed at pickup.`
+            : "Your fare is fixed in the app. No cash needed at pickup.",
+          duration: 6000,
+        });
+        getActiveRide();
+        return;
+      }
+
+      if (subType === "ride_started") {
+        safeShowMessage({
+          type: "success",
+          message: "Ride started 🚀",
+          description: "You're on your way! Sit back and relax.",
+          duration: 6000,
+        });
+        getActiveRide();
+        return;
+      }
+
+      if (subType === "ride_completed" || subType === "trip:completed" || subType === "ride.completed") {
+        safeShowMessage({
+          type: "success",
+          message: "Ride completed ✅",
+          description: "Thanks for riding with Keke!",
+          duration: 6000,
+        });
+        getActiveRide();
+        return;
+      }
+
+      if (name === "ride:approaching_destination") {
+        safeShowMessage({
+          type: "success",
+          message: "Almost there! 🎯",
+          description: "You're approaching your destination.",
+          duration: 6000,
+        });
+        return;
+      }
+
+      if (subType === "driver_arrived" || name === "driver_arrived") {
+        const dn = payload.driverName != null ? String(payload.driverName) : "Driver";
+        const vi = payload.vehicleInfo != null ? String(payload.vehicleInfo) : "";
+        const plate = payload.plateNumber != null ? String(payload.plateNumber) : "";
+        const desc = [vi, plate].filter(Boolean).join(" • ");
+        safeShowMessage({
+          type: "success",
+          message: `${dn} has arrived 📍`,
+          ...(desc ? { description: desc } : {}),
+          duration: 8000,
+        });
+        getActiveRide();
+        return;
+      }
+      // ── End ride state alerts ─────────────────────────────────────────────
     },
   });
 
@@ -1712,6 +1807,7 @@ export default function HomeScreen() {
     }
     // Ride refresh is handled by Pusher + focus; avoid getActiveRide on every notification tick
     if (notificationEvent?.data?.sub_type === "private.completed_ride") {
+      tripCompletedRef.current = true;
       setTripCompleted(true);
       setPaymentReceipt(false);
       getActiveRide();
@@ -1856,7 +1952,10 @@ export default function HomeScreen() {
           setRide((prev) => ({ ...prev, screen: "SUMMARY" }));
           setTimeout(() => activeRideSheetRef?.current?.open(), 200);
         }}
-        onClose={() => setTripCompleted(false)}
+        onClose={() => {
+          setTripCompleted(false);
+          setTimeout(() => activeRideSheetRef?.current?.open(), 200);
+        }}
       />
 
       <DriverBookingSheet

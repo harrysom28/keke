@@ -69,30 +69,31 @@ const ActiveRideSheet = ({
         // ignore
       }
       try {
-        dispatch(clearRideState());
-      } catch {
-        // ignore
-      }
-      try {
         clearMap?.();
       } catch {
         // ignore
       }
+      // Show receipt/summary screen instead of immediately navigating away
       try {
-        bottomSheetRef?.current?.close();
+        setCurrentView((prev) => ({
+          ...prev,
+          screen: "SUMMARY",
+          data: {
+            ...((prev?.data) as any),
+            rideId,
+          } as any,
+        }));
       } catch {
         // ignore
       }
-      try {
-        setCurrentView((prev) => ({ ...prev, screen: "", data: {} as any }));
-      } catch {
-        // ignore
-      }
-      try {
-        router.push({ pathname: "/(app)/ride-details", params: { rideId } as any });
-      } catch {
-        // ignore
-      }
+      // Dispatch ride state clear after a short delay so SUMMARY has data
+      setTimeout(() => {
+        try {
+          dispatch(clearRideState());
+        } catch {
+          // ignore
+        }
+      }, 500);
     },
     [bottomSheetRef, clearMap, dispatch, setCurrentView]
   );
@@ -164,9 +165,26 @@ const ActiveRideSheet = ({
       onAnyResolution
     );
 
+    const cleanupApproaching = pusherManager.subscribe(
+      channel,
+      "ride:approaching_destination",
+      () => {
+        showMessage({
+          type: "success",
+          message: "You're almost at your destination! 🎉",
+          duration: 5000,
+        });
+      }
+    );
+
     return () => {
       try {
         cleanup();
+      } catch {
+        // ignore
+      }
+      try {
+        cleanupApproaching();
       } catch {
         // ignore
       }
@@ -257,10 +275,8 @@ const ActiveRideSheet = ({
 
     switch (resolvedScreenForLayout) {
       case "WAITING":
-        h += 320;
+        h += 520;
         if (hasDriver) h += 140;
-        // Accepted / in-trip UI (header, trip card, driver card, progress, actions, fare) needs more vertical space
-        // than the generic WAITING estimate — otherwise the bottom sheet clips and ScrollView never scrolls.
         if (accepted) {
           h += 320;
           if (tripLike) h += 240;
@@ -302,8 +318,10 @@ const ActiveRideSheet = ({
     const minH =
       resolvedScreenForLayout === "WAITING" && accepted
         ? Math.min(screenHeight * 0.52, screenHeight * 0.9)
+        : resolvedScreenForLayout === "WAITING"
+        ? screenHeight * 0.72
         : screenHeight * 0.3;
-    const maxH = screenHeight * 0.85;
+    const maxH = screenHeight * 0.92;
     const target = measuredHeight ?? estimatedSheetHeight;
     return Math.max(minH, Math.min(target, maxH));
   }, [screenHeight, measuredHeight, estimatedSheetHeight, resolvedScreenForLayout, rideDataForWaiting]);
