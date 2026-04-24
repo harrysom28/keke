@@ -430,7 +430,6 @@ function InputBar({
   onMic,
   onLocation,
   bottomPad,
-  keyboardOffset,
   placeholder,
 }: {
   value: string;
@@ -440,44 +439,37 @@ function InputBar({
   onMic: () => void;
   onLocation: () => void;
   bottomPad: number;
-  keyboardOffset: number;
   placeholder: string;
 }) {
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={keyboardOffset}
-    >
-      <View style={[styles.inputBar, { paddingBottom: bottomPad }]}>
-        <View style={styles.inputField}>
-          <TextInput
-            value={value}
-            onChangeText={onChange}
-            multiline
-            maxLength={1000}
-            style={styles.textInput}
-            placeholder={disabled ? "Sending…" : placeholder}
-            placeholderTextColor="#9CA3AF"
-            returnKeyType="send"
-            onSubmitEditing={() => {
-              if (!disabled) onSend();
-            }}
-            blurOnSubmit={false}
-          />
-        </View>
-
-        <TouchableOpacity
-          onPress={onSend}
-          disabled={disabled}
-          style={[styles.sendBtn, disabled && styles.sendBtnDisabled]}
-          activeOpacity={0.8}
-          accessibilityRole="button"
-          accessibilityLabel="Send message"
-        >
-          <Ionicons name="send" size={18} color="#fff" />
-        </TouchableOpacity>
+    <View style={[styles.inputBar, { paddingBottom: bottomPad }]}>
+      <View style={styles.inputField}>
+        <TextInput
+          value={value}
+          onChangeText={onChange}
+          multiline
+          maxLength={1000}
+          style={styles.textInput}
+          placeholder={disabled ? "Sending…" : placeholder}
+          placeholderTextColor="#9CA3AF"
+          returnKeyType="send"
+          onSubmitEditing={() => {
+            if (!disabled) onSend();
+          }}
+          blurOnSubmit={false}
+        />
       </View>
-    </KeyboardAvoidingView>
+      <TouchableOpacity
+        onPress={onSend}
+        disabled={disabled}
+        style={[styles.sendBtn, disabled && styles.sendBtnDisabled]}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Send message"
+      >
+        <Ionicons name="send" size={18} color="#fff" />
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -656,9 +648,6 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
     []
   );
 
-  const keyboardOffset =
-    Platform.OS === "ios" ? Math.max(insets.top, 12) + 8 : 0;
-
   // Group messages to know when to show avatar (last in a consecutive group)
   const isLastInGroup = (index: number): boolean => {
     const current = chats[index] as any;
@@ -764,14 +753,10 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
         titleStyle={{ fontFamily: "RobotoMedium", textAlign: "center" }}
       />
 
-      <View
-        style={[
-          styles.root,
-          {
-            paddingLeft: insets.left,
-            paddingRight: insets.right,
-          },
-        ]}
+      <KeyboardAvoidingView
+        style={[styles.root, { paddingLeft: insets.left, paddingRight: insets.right }]}
+        behavior={Platform.OS === "ios" ? "padding" : "padding"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? Math.max(insets.top, 12) + 8 : 0}
       >
         <DriverHeader
           insetsTop={insets.top}
@@ -920,10 +905,9 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
             flashMessageRef.current?.showMessage({ type: "info", message: "Share location (coming soon)." })
           }
           bottomPad={Math.max(insets.bottom, 16)}
-          keyboardOffset={keyboardOffset}
           placeholder={inputPlaceholder}
         />
-      </View>
+      </KeyboardAvoidingView>
     </>
   );
 }
