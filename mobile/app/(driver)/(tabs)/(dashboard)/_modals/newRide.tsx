@@ -190,6 +190,22 @@ const NewRide = ({
   const arrivalTimeLabel = routeEta || data?.arrival_time || "";
   const arrivalDistLabel = routeDistance || data?.arrival_distance || "";
 
+  /**
+   * Best-effort distance-to-dropoff in meters, parsed from the live route distance string
+   * (e.g. "2.5 km", "850 m"). Only meaningful while the trip is underway because that's
+   * when `routeDistance` represents driver → dropoff.
+   */
+  const distanceToDropoff = useMemo<number | null>(() => {
+    const raw = String(routeDistance || "").trim();
+    if (!raw) return null;
+    const num = parseFloat(raw);
+    if (!Number.isFinite(num)) return null;
+    const lower = raw.toLowerCase();
+    if (lower.includes("km")) return Math.round(num * 1000);
+    if (lower.includes("m")) return Math.round(num);
+    return null;
+  }, [routeDistance]);
+
   const liveRideState = getRideStateFromData({
     ...(data as any),
     routeEta,
@@ -348,7 +364,18 @@ const NewRide = ({
         }
         getActiveRide();
       })
-      .catch(handleRideApiError)
+      .catch((err: any) => {
+        const msg: string =
+          err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "";
+        if (/from the destination/i.test(msg)) {
+          Alert.alert("Too far from destination", msg, [{ text: "OK" }]);
+          return;
+        }
+        handleRideApiError(err);
+      })
       .finally(() => setLoading((prev) => ({ ...prev, complete: false })));
   };
   const ConfirmPayment = () => {
@@ -547,12 +574,43 @@ const NewRide = ({
 
         {/* Primary actions */}
         {accepted ? (
+          <>
+            {(() => {
+              const inTrip =
+                liveRideState === "trip_started" || liveRideState === "near_destination";
+              const isTooFarFromDropoff =
+                inTrip && typeof distanceToDropoff === "number" && distanceToDropoff > 1000;
+              return isTooFarFromDropoff ? (
+                <Text
+                  style={{
+                    color: "#EF4444",
+                    fontSize: 12,
+                    textAlign: "center",
+                    marginBottom: 6,
+                  }}
+                >
+                  {`${(distanceToDropoff! / 1000).toFixed(1)}km from destination — get closer to end trip`}
+                </Text>
+              ) : null;
+            })()}
           <DriverActionButtons
             state={liveRideState}
             onOpenNavigation={openNavigation}
             onMarkArrived={MarkPickupArrived}
             onStartTrip={StartRide}
             onCompleteTrip={() => {
+              const inTrip =
+                liveRideState === "trip_started" || liveRideState === "near_destination";
+              const isTooFarFromDropoff =
+                inTrip && typeof distanceToDropoff === "number" && distanceToDropoff > 1000;
+              if (isTooFarFromDropoff) {
+                Alert.alert(
+                  "Too far from destination",
+                  `You are ${(distanceToDropoff! / 1000).toFixed(1)}km away. Get closer before ending the trip.`,
+                  [{ text: "OK" }]
+                );
+                return;
+              }
               Alert.alert("Complete Trip", "Have you arrived at the destination?", [
                 { text: "Not yet", style: "cancel" },
                 {
@@ -579,6 +637,7 @@ const NewRide = ({
             onCancel={RejectRide}
             loading={{ arrived: loading.arrived, start: loading.start, complete: loading.complete }}
           />
+          </>
         ) : (
           <View style={tw`flex-col mt-5 gap-y-4`}>
             <TouchableOpacity
