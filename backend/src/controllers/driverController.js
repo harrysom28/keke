@@ -463,12 +463,65 @@ export const updateLocation = asyncHandler(async (req, res) => {
 
       const { getSocketService } = await import('../services/socketService.js');
       const socketService = getSocketService();
-      if (socketService) {
-        const activeRide = await Ride.findActiveRideForDriver(driver._id);
-        if (activeRide) {
-          await socketService.emitDriverLocationUpdate(activeRide, driver);
-        }
+      const activeRide = await Ride.findActiveRideForDriver(driver._id);
+      if (socketService && activeRide) {
+        await socketService.emitDriverLocationUpdate(activeRide, driver);
       }
+
+      // ── Notify rider when approaching dropoff ────────────────────────────
+      try {
+        if (
+          activeRide &&
+          activeRide.status === 'in-progress' &&
+          activeRide.dropoffLocation &&
+          !activeRide.approachingDestinationNotified
+        ) {
+          const dropoffCoords =
+            activeRide.dropoffLocation?.coordinates ||
+            (activeRide.dropoffLocation?.long && activeRide.dropoffLocation?.lat
+              ? [
+                  parseFloat(activeRide.dropoffLocation.long),
+                  parseFloat(activeRide.dropoffLocation.lat),
+                ]
+              : null);
+
+          if (dropoffCoords) {
+            const toRad = (deg) => (deg * Math.PI) / 180;
+            const R = 6371000;
+            const dLng = Number(longitude);
+            const dLat = Number(latitude);
+            const [pLng, pLat] = dropoffCoords;
+            const dLatR = toRad(pLat - dLat);
+            const dLngR = toRad(pLng - dLng);
+            const a =
+              Math.sin(dLatR / 2) ** 2 +
+              Math.cos(toRad(dLat)) * Math.cos(toRad(pLat)) * Math.sin(dLngR / 2) ** 2;
+            const distanceMeters = Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+
+            if (distanceMeters <= 300) {
+              activeRide.approachingDestinationNotified = true;
+              await activeRide.save({ validateBeforeSave: false });
+
+              const riderId = activeRide.rider?._id ?? activeRide.rider;
+              const { getPusherService } = await import('../services/pusherService.js');
+              const ps = getPusherService();
+              ps?.pusher?.trigger(`private-user-${String(riderId)}`, 'ride:approaching_destination', {
+                rideId: activeRide._id.toString(),
+                distanceMeters,
+                message: "You're almost at your destination!",
+              });
+              ps?.pusher?.trigger(`private.ride.${activeRide._id.toString()}`, 'ride:approaching_destination', {
+                rideId: activeRide._id.toString(),
+                distanceMeters,
+                message: "You're almost at your destination!",
+              });
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn(`approaching_destination notify skipped: ${err.message}`);
+      }
+      // ── End approaching dropoff notification ─────────────────────────────
 
       try {
         const { getPusherService } = await import('../services/pusherService.js');
@@ -1863,6 +1916,58 @@ export const completeRide = asyncHandler(async (req, res) => {
   if (ride.status !== 'in-progress') {
     throw new ValidationError('Ride is not in progress');
   }
+
+  // ── Dropoff proximity check ──────────────────────────────────────────────
+  const driverDoc = await Driver.findById(ride.driver).select('currentLocation').lean();
+  const driverCoords = driverDoc?.currentLocation?.coordinates; // [lng, lat]
+  const dropoffCoords =
+    ride.dropoffLocation?.coordinates ||
+    (ride.dropoffLocation?.long && ride.dropoffLocation?.lat
+      ? [parseFloat(ride.dropoffLocation.long), parseFloat(ride.dropoffLocation.lat)]
+      : null);
+
+  let dropoffProximityStatus = 'unverifiable';
+  let dropoffDistanceMeters = null;
+
+  if (driverCoords && dropoffCoords) {
+    const lastUpdated = driverDoc?.currentLocation?.lastUpdated;
+    const isStale = lastUpdated && (Date.now() - new Date(lastUpdated).getTime()) > 5 * 60 * 1000;
+
+    if (isStale) {
+      dropoffProximityStatus = 'unverifiable';
+    } else {
+      const toRad = (deg) => (deg * Math.PI) / 180;
+      const R = 6371000;
+      const lat1 = toRad(driverCoords[1]);
+      const lat2 = toRad(dropoffCoords[1]);
+      const dLat = toRad(dropoffCoords[1] - driverCoords[1]);
+      const dLng = toRad(dropoffCoords[0] - driverCoords[0]);
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+      dropoffDistanceMeters = Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+
+      const CONFIRMED = 200;
+      const PROBABLE = 500;
+      const BLOCKED = 1000;
+
+      if (dropoffDistanceMeters <= CONFIRMED) {
+        dropoffProximityStatus = 'confirmed';
+      } else if (dropoffDistanceMeters <= PROBABLE) {
+        dropoffProximityStatus = 'probable';
+      } else if (dropoffDistanceMeters <= BLOCKED) {
+        dropoffProximityStatus = 'unlikely';
+        ride.flag = 'dropoff_far_from_destination';
+      } else {
+        const distanceKm = (dropoffDistanceMeters / 1000).toFixed(1);
+        throw new ValidationError(
+          `You are ${distanceKm}km from the destination. Please get closer before ending the trip.`
+        );
+      }
+    }
+  }
+
+  ride.dropoff_proximity_status = dropoffProximityStatus;
+  ride.dropoff_distance_from_destination = dropoffDistanceMeters;
+  // ── End proximity check ──────────────────────────────────────────────────
 
   ride.status = 'completed';
   ride.completed_by = 'driver';

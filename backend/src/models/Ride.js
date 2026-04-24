@@ -97,6 +97,8 @@ const rideSchema = new mongoose.Schema(
     attempts: { type: Number, default: 0 },
     /** Idempotency flag: ensure "no driver found" is emitted only once per ride. */
     noDriverNotified: { type: Boolean, default: false },
+    /** Idempotency flag: ensure "approaching destination" is pushed to rider only once per ride. */
+    approachingDestinationNotified: { type: Boolean, default: false },
     acceptedByDriver: {
       type: Boolean,
       default: false,
@@ -262,6 +264,12 @@ const rideSchema = new mongoose.Schema(
     arrival_flagged: { type: Boolean, default: false },
     arrival_flag_reason: { type: String, default: null },
     arrived_at: { type: Date, default: null },
+    dropoff_proximity_status: {
+      type: String,
+      enum: ['confirmed', 'probable', 'unlikely', 'unverifiable', 'blocked', null],
+      default: null,
+    },
+    dropoff_distance_from_destination: { type: Number, default: null },
     // Real-time tracking
     tracking: {
       currentLocation: {
@@ -456,6 +464,10 @@ rideSchema.pre('validate', function (next) {
   }
   if (this.arrival_proximity_status !== null && !validArrivalProximityStatus.includes(this.arrival_proximity_status)) {
     this.arrival_proximity_status = null;
+  }
+  const validDropoffProximityStatus = ['confirmed', 'probable', 'unlikely', 'unverifiable', 'blocked'];
+  if (this.dropoff_proximity_status !== null && !validDropoffProximityStatus.includes(this.dropoff_proximity_status)) {
+    this.dropoff_proximity_status = null;
   }
   next();
 });
