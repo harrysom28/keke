@@ -146,7 +146,19 @@ export async function checkAndAwardTasks(driverId, ride) {
 /**
  * Get challenge definitions with labels for API response
  */
-export function getChallengeDefinitions() {
+export function getChallengeDefinitions(settings = null) {
+  const fromSettings = settings?.driverChallengeDefs;
+  if (Array.isArray(fromSettings) && fromSettings.length > 0) {
+    return fromSettings
+      .filter((d) => d && d.enabled !== false)
+      .map((d) => ({
+        id: d.id,
+        title: d.title,
+        description: d.description,
+        target: d.target,
+        unit: d.unit,
+      }));
+  }
   return [
     { id: 'first_ride_today', title: 'First ride of the day', description: 'Complete your first ride today', target: 1, unit: 'ride' },
     { id: 'rides_3_today', title: 'Triple threat', description: 'Complete 3 rides in a day', target: 3, unit: 'rides' },
@@ -164,7 +176,7 @@ export function getChallengeDefinitions() {
 export async function getChallengesForDriver(driverId) {
   const settings = await AdminSettings.findOne({ key: 'default' }).lean();
   const rewards = settings?.driverTasks || {};
-  const definitions = getChallengeDefinitions();
+  const definitions = getChallengeDefinitions(settings).filter((d) => (rewards[d.id] ?? 0) > 0);
   const now = new Date();
   const dailyPeriod = getDailyPeriod(now);
   const weekendPeriod = getWeekendPeriod(now);

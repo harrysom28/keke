@@ -30,6 +30,21 @@ const adminSettingsSchema = new mongoose.Schema(
     },
     // Preferred bank for Paystack Dedicated Virtual Accounts (e.g. 'wema-bank', 'titan-paystack')
     dvaPreferredBank: { type: String, default: 'wema-bank' },
+    // Driver challenge definitions (admin-editable). Controls what appears in the driver app.
+    // Rewards are still configured via driverTasks (below) for backwards compatibility.
+    driverChallengeDefs: {
+      type: [
+        {
+          id: { type: String, required: true },
+          enabled: { type: Boolean, default: true },
+          title: { type: String, required: true },
+          description: { type: String, required: true },
+          target: { type: Number, required: true },
+          unit: { type: String, required: true },
+        },
+      ],
+      default: undefined,
+    },
     // Driver challenge rewards (admin-editable). Key = taskType, value = reward amount in NGN.
     driverTasks: {
       first_ride_today: { type: Number, default: 200 },

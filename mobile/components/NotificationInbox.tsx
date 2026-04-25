@@ -116,18 +116,34 @@ export default function NotificationInbox({ userId, isDriver = false }: Props) {
   const [tab, setTab] = useState<TabId>("all");
 
   const fetchUnreadCount = useCallback(async () => {
-    const { data } = await apiClient.get("notifications/unread-count");
-    const count = Number(data?.data?.count || 0);
-    setLocalUnreadCount(count);
-    dispatch(setUnreadCount(count));
+    try {
+      const { data } = await apiClient.get("notifications/unread-count");
+      const count = Number(data?.data?.count || 0);
+      setLocalUnreadCount(count);
+      dispatch(setUnreadCount(count));
+    } catch (err: any) {
+      // 429s are expected under IP rate limits; don't crash the inbox UI.
+      if (err?.response?.status === 429) return;
+      throw err;
+    }
   }, [dispatch]);
 
   const fetchNotifications = useCallback(
     async (nextPage = 1, replace = false) => {
       const category = tab === "all" ? "all" : tab;
-      const { data } = await apiClient.get("notifications", {
-        params: { page: nextPage, limit: 20, category },
-      });
+      let data: any;
+      try {
+        const resp = await apiClient.get("notifications", {
+          params: { page: nextPage, limit: 20, category },
+        });
+        data = resp.data;
+      } catch (err: any) {
+        if (err?.response?.status === 429) {
+          // Keep current list; let the next refresh succeed.
+          return;
+        }
+        throw err;
+      }
 
       const payload = data?.data || {};
       const nextNotifications = Array.isArray(payload.notifications)

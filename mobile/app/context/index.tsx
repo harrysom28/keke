@@ -6,7 +6,7 @@ import {
 } from "@/store/AuthSlice";
 import { PUSHER_AUTH } from "@/constants";
 import { PUSHER_API_CLUSTER, PUSHER_API_KEY } from "@/constants/Keys";
-import React, { ReactNode, createContext, useEffect, useState, useRef } from "react";
+import React, { ReactNode, createContext, useCallback, useEffect, useState, useRef } from "react";
 import { TRemoteNotification, TUser } from "@/types";
 import { useDispatch, useSelector } from "react-redux";
 
@@ -75,6 +75,10 @@ export default function GlobalContext({
   const pusherInitializedRef = useRef(false);
   const [pusherReady, setPusherReady] = useState(false);
   const [roleLoaded, setRoleLoaded] = useState(false);
+  /** Coalesce /auth/user/me: avoids blowing the global API IP limiter (driver map + home tab + location PATCH). */
+  const getCurrentUserInFlightRef = useRef(false);
+  const getCurrentUserLastStartRef = useRef(0);
+  const GET_CURRENT_USER_MIN_MS = 8000;
 
   const apiConfig = {
     headers: {
@@ -174,22 +178,27 @@ export default function GlobalContext({
     },
   };
 
-  const getCurrentUser = () => {
-    // Only fetch user if authenticated
+  const getCurrentUser = useCallback(() => {
     if (!token) {
       console.log("⚠️ Skipping getCurrentUser: No authentication token");
       setRoleLoaded(false);
       return;
     }
 
+    const now = Date.now();
+    if (getCurrentUserInFlightRef.current) {
+      return;
+    }
+    if (now - getCurrentUserLastStartRef.current < GET_CURRENT_USER_MIN_MS) {
+      return;
+    }
+    getCurrentUserLastStartRef.current = now;
+    getCurrentUserInFlightRef.current = true;
+
     setRoleLoaded(false);
     apiClient
-      // Use relative path so apiClient baseURL + interceptors behave correctly
       .get("auth/user/me")
       .then(({ data }) => {
-        // Backend may return either:
-        // - { profile: {...} }  (legacy/mobile-friendly)
-        // - { data: { user: {...} } } (Laravel-style)
         const profile = data?.profile ?? data?.data?.user;
         if (profile) {
           const payload = { profile };
@@ -199,12 +208,7 @@ export default function GlobalContext({
         setRoleLoaded(true);
       })
       .catch((err) => {
-        // Suppress all errors during initialization to prevent app crashes
-        // 401 = not authenticated (expected)
-        // 404 = driver profile not found (expected for passengers)
-        // Only log errors for debugging, don't show messages during app initialization
         if (err?.response?.status !== 401 && err?.response?.status !== 404) {
-          // Safely log error data without rendering
           const errorData = err?.response?.data;
           if (errorData) {
             const errorMessage = errorData?.message || 
@@ -212,12 +216,13 @@ export default function GlobalContext({
               'An error occurred';
             console.log('getCurrentUser error:', errorMessage);
           }
-          // Don't show error messages during app initialization to prevent crashes
-          // Errors will be handled by individual screens when they load
         }
         setRoleLoaded(true);
+      })
+      .finally(() => {
+        getCurrentUserInFlightRef.current = false;
       });
-  };
+  }, [token, dispatch]);
 
   const clearCache = async () => {
     if (pusherInitializedRef.current) {
@@ -325,9 +330,10 @@ export default function GlobalContext({
 
   useEffect(() => {
     if (token) {
+      getCurrentUserLastStartRef.current = 0;
       getCurrentUser();
     }
-  }, [token]);
+  }, [token, getCurrentUser]);
 
   const notificationEvent = React.useMemo<TRemoteNotification>(
     () => ({

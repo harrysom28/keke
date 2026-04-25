@@ -17,6 +17,8 @@ function ConfigPage({ showToast, defaultTab }) {
   const [dvaPreferredBank, setDvaPreferredBank] = useState('wema-bank');
   const [driverTasks, setDriverTasks] = useState(null);
   const [driverTasksSaving, setDriverTasksSaving] = useState(false);
+  const [driverChallengeDefs, setDriverChallengeDefs] = useState(null);
+  const [driverChallengeDefsSaving, setDriverChallengeDefsSaving] = useState(false);
   const [pricing, setPricing] = useState(null);
   const [pricingSaving, setPricingSaving] = useState(false);
   const [fees, setFees] = useState(null);
@@ -49,6 +51,7 @@ function ConfigPage({ showToast, defaultTab }) {
           setTopup(d?.topup || null);
           setDvaPreferredBank(d?.dvaPreferredBank || 'wema-bank');
           setDriverTasks(d?.driverTasks || null);
+          setDriverChallengeDefs(d?.driverChallengeDefs || null);
           setPricing(d?.pricing || null);
           setFees(d?.fees || null);
           setCancellation(d?.cancellation || null);
@@ -106,6 +109,21 @@ function ConfigPage({ showToast, defaultTab }) {
       if (r.error) showToast(r.error, 'error');
       else showToast('Driver task reward saved');
     }).finally(() => setDriverTasksSaving(false));
+  };
+
+  const patchDriverChallengeDefs = (next) => {
+    setDriverChallengeDefs(next);
+    setDriverChallengeDefsSaving(true);
+    Api.patch('/api/admin/settings', { driverChallengeDefs: next }).then((r) => {
+      if (r.error) showToast(r.error, 'error');
+      else showToast('Driver challenges saved');
+    }).finally(() => setDriverChallengeDefsSaving(false));
+  };
+
+  const updateChallengeDef = (id, patch) => {
+    const current = Array.isArray(driverChallengeDefs) ? driverChallengeDefs : [];
+    const next = current.map((d) => d.id === id ? { ...d, ...patch } : d);
+    patchDriverChallengeDefs(next);
   };
 
   const updatePricing = (next) => {
@@ -546,8 +564,50 @@ function ConfigPage({ showToast, defaultTab }) {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 max-w-2xl">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Driver challenge rewards (₦)</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Set the cash reward (in Naira) for each gamified task. Drivers earn these amounts when they complete the challenge. Rewards are added to driver earnings.</p>
-          {loading ? <C.Skeleton className="h-64 w-full" /> : driverTasks ? (
-            <div className="space-y-4">
+          {loading ? <C.Skeleton className="h-64 w-full" /> : (driverTasks && driverChallengeDefs) ? (
+            <div className="space-y-8">
+              <div className="space-y-4">
+                <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Which challenges appear in the driver app</h4>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Disable a challenge to hide it from drivers (awards also stop if reward is set to ₦0).</p>
+                <div className="space-y-3">
+                  {(driverChallengeDefs || []).map((d) => (
+                    <div key={d.id} className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-gray-900 dark:text-white truncate">{d.title}</div>
+                          <div className="text-xs text-gray-500 dark:text-gray-400">{d.id}</div>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                          <input type="checkbox" checked={d.enabled !== false} onChange={(e) => updateChallengeDef(d.id, { enabled: e.target.checked })} />
+                          Enabled
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-gray-600 dark:text-gray-400">Title</label>
+                          <input value={d.title || ''} onChange={(e) => updateChallengeDef(d.id, { title: e.target.value })} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-gray-600 dark:text-gray-400">Target</label>
+                          <input type="number" min={1} value={d.target ?? 1} onChange={(e) => updateChallengeDef(d.id, { target: parseInt(e.target.value, 10) || 1 })} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                        </div>
+                        <div className="flex flex-col gap-1 sm:col-span-2">
+                          <label className="text-xs text-gray-600 dark:text-gray-400">Description</label>
+                          <input value={d.description || ''} onChange={(e) => updateChallengeDef(d.id, { description: e.target.value })} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-gray-600 dark:text-gray-400">Unit</label>
+                          <input value={d.unit || ''} onChange={(e) => updateChallengeDef(d.id, { unit: e.target.value })} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {driverChallengeDefsSaving && <p className="text-sm text-gray-500">Saving…</p>}
+              </div>
+
+              <div className="space-y-4">
+                <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Rewards (₦)</h4>
               {[
                 { key: 'first_ride_today', label: 'First ride of the day', hint: 'Complete first ride today' },
                 { key: 'rides_3_today', label: 'Triple threat (3 rides today)', hint: 'Complete 3 rides in a day' },
@@ -574,8 +634,9 @@ function ConfigPage({ showToast, defaultTab }) {
                 </div>
               ))}
               {driverTasksSaving && <p className="text-sm text-gray-500">Saving…</p>}
+              </div>
             </div>
-          ) : <p className="text-gray-500">Could not load driver task settings.</p>}
+          ) : <p className="text-gray-500">Could not load driver challenge settings.</p>}
         </div>
       )}
 

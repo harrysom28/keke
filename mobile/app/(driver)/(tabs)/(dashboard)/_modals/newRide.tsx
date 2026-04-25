@@ -25,6 +25,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -111,7 +112,10 @@ const NewRide = ({
   const [show, setShow] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
   const rideId = String(
-    data?.ride_id ?? data?.rideId ?? (data as { _id?: string })?._id ?? ""
+    data?.ride_id ??
+      (data as unknown as { rideId?: string })?.rideId ??
+      (data as { _id?: string })?._id ??
+      ""
   ).trim();
   const hasValidRideId = /^[a-f\d]{24}$/i.test(rideId);
   const guardRideId = () => {
@@ -138,7 +142,9 @@ const NewRide = ({
     (data?.passenger as { image?: string } | undefined)?.image;
   const fareDisplay =
     data?.cost ??
-    (data?.fare != null ? String(Math.round(Number(data.fare))) : "");
+    ((data as unknown as { fare?: unknown })?.fare != null
+      ? String(Math.round(Number((data as unknown as { fare?: unknown })?.fare)))
+      : "");
 
   useEffect(() => {
     offerExpiredFiredRef.current = false;
@@ -425,7 +431,7 @@ const NewRide = ({
           id: (data?.passenger?.passenger_id ||
             (data?.passenger as { user_id?: string } | undefined)?.user_id ||
             "") as string,
-          rideId: (data?.ride_id ?? data?.rideId) as string,
+          rideId: (data?.ride_id ?? (data as unknown as { rideId?: string })?.rideId) as string,
           name: passengerName,
           image: (passengerImage || "") as string,
         }}

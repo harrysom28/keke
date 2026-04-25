@@ -2,10 +2,15 @@ import BottomTabBar from "./_customTab";
 import React from "react";
 import { Tabs } from "expo-router";
 
+export const unstable_settings = {
+  initialRouteName: "(dashboard)/home",
+};
+
 export default function TabLayout() {
   return (
     <Tabs
       tabBar={(props) => <BottomTabBar {...props} />}
+      initialRouteName="(dashboard)/home"
       screenOptions={{
         headerShown: false,
       }}

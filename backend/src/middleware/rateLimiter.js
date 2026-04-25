@@ -4,7 +4,8 @@ import logger from '../utils/logger.js';
 import { getRedisClient } from '../config/redis.js';
 
 const windowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10);
-const maxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10);
+/** Mobile apps poll several endpoints; default 100/15min per IP was too easy to hit from one driver session. */
+const maxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '400', 10);
 
 /**
  * Set in server startup after ensureRedisConnected():

@@ -545,7 +545,6 @@ export default function HomeScreen() {
         longitude: location.long,
         address: location.name ?? '',
       }, apiConfig)
-      .then(() => getCurrentUser())
       .catch((err) => {
         console.log(err?.response?.data);
 
@@ -561,7 +560,7 @@ export default function HomeScreen() {
           message: errorMessage,
         });
       });
-  }, [apiConfig, getCurrentUser]);
+  }, [apiConfig]);
 
   // Debounced location update to prevent rate limiting
   const debouncedUpdateLocation = useMemo(

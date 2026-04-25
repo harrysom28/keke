@@ -250,10 +250,15 @@ const Home = () => {
     if (!isFocused) return;
     fetchDriverDashboard();
     getCurrentUserRef.current?.();
+    let dashboardTick = 0;
     const id = setInterval(() => {
       fetchDriverDashboard();
-      getCurrentUserRef.current?.();
-    }, 10000);
+      dashboardTick += 1;
+      // Profile changes less often than earnings; refresh /me every 60s to stay under API IP limits
+      if (dashboardTick % 2 === 0) {
+        getCurrentUserRef.current?.();
+      }
+    }, 30000);
     return () => clearInterval(id);
   }, [isFocused, fetchDriverDashboard]);
 
@@ -965,8 +970,10 @@ const Home = () => {
                 >
                   {formatBookingDate(
                     (booking?.booking_date as string) ||
-                      (booking?.scheduled_at
-                        ? getLocalBookingDateAndTime(booking.scheduled_at as string).booking_date
+                      ((booking as unknown as { scheduled_at?: string })?.scheduled_at
+                        ? getLocalBookingDateAndTime(
+                            (booking as unknown as { scheduled_at?: string })?.scheduled_at as string
+                          ).booking_date
                         : "")
                   )}
                 </Text>
@@ -1028,8 +1035,10 @@ const Home = () => {
                   >
                     {formatBookingTime(
                       (booking?.booking_time as string) ||
-                        (booking?.scheduled_at
-                          ? getLocalBookingDateAndTime(booking.scheduled_at as string).booking_time
+                        ((booking as unknown as { scheduled_at?: string })?.scheduled_at
+                          ? getLocalBookingDateAndTime(
+                              (booking as unknown as { scheduled_at?: string })?.scheduled_at as string
+                            ).booking_time
                           : "")
                     )}
                   </Text>
@@ -1046,7 +1055,7 @@ const Home = () => {
         >
           {Object.keys(activeRide).length > 0 ? (
             <TouchableOpacity
-              onPress={() => router.push("/(dashboard)/home-map")}
+              onPress={() => router.push("/(dashboard)/home-map" as any)}
               style={tw.style(
                 `flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[8px]`
               )}
@@ -1062,7 +1071,7 @@ const Home = () => {
           ) : (
             <>
               <TouchableOpacity
-                onPress={() => router.push("/(dashboard)/home-map")}
+                onPress={() => router.push("/(dashboard)/home-map" as any)}
                 style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[8px]`}
               >
                 <Text

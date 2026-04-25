@@ -47,7 +47,7 @@ const ROUTE_COLOR = "#3C8F7C";
 const ROUTE_STROKE_WIDTH = 4;
 const ROUTE_SHADOW_WIDTH = 5.5;
 const FIT_EDGE_PADDING = { top: 80, right: 60, bottom: 60, left: 60 };
-const ZOOM_DELTA = 0.007; // Slightly wider idle zoom
+const ZOOM_DELTA = 0.012; // Rider home default zoom (match driver home-map level)
 const MAX_FIT_DISTANCE_KM = 150; // beyond this, center on pickup to avoid continental zoom
 const ABAKALIKI_REGION = {
   latitude: 6.3249,

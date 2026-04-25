@@ -379,6 +379,15 @@ export const getSettings = asyncHandler(async (req, res) => {
     night_owl: 300,
     weekend_warrior: 1500,
   };
+  const defaultDriverChallengeDefs = [
+    { id: 'first_ride_today', enabled: true, title: 'First ride of the day', description: 'Complete your first ride today', target: 1, unit: 'ride' },
+    { id: 'rides_3_today', enabled: true, title: 'Triple threat', description: 'Complete 3 rides in a day', target: 3, unit: 'rides' },
+    { id: 'rides_5_today', enabled: true, title: 'High five', description: 'Complete 5 rides in a day', target: 5, unit: 'rides' },
+    { id: 'rides_10_today', enabled: true, title: 'Ten for the win', description: 'Complete 10 rides in a day', target: 10, unit: 'rides' },
+    { id: 'early_bird', enabled: true, title: 'Early bird', description: 'Complete a ride before 8:00 AM', target: 1, unit: 'ride' },
+    { id: 'night_owl', enabled: true, title: 'Night owl', description: 'Complete a ride after 10:00 PM', target: 1, unit: 'ride' },
+    { id: 'weekend_warrior', enabled: true, title: 'Weekend warrior', description: 'Complete 5 rides on Saturday or Sunday', target: 5, unit: 'rides' },
+  ];
   const defaultPricing = {
     baseFare: 500,
     perKmRate: 150,
@@ -422,6 +431,9 @@ export const getSettings = asyncHandler(async (req, res) => {
       topup: doc.topup || { bankName: null, accountName: null, accountNumber: null },
       dvaPreferredBank: doc.dvaPreferredBank || 'wema-bank',
       driverTasks: doc.driverTasks ? { ...defaultDriverTasks, ...doc.driverTasks.toObject?.() || doc.driverTasks } : defaultDriverTasks,
+      driverChallengeDefs: Array.isArray(doc.driverChallengeDefs) && doc.driverChallengeDefs.length
+        ? doc.driverChallengeDefs
+        : defaultDriverChallengeDefs,
     },
   });
 });
@@ -430,7 +442,7 @@ export const getSettings = asyncHandler(async (req, res) => {
  * Update admin settings - PATCH /api/admin/settings
  */
 export const updateSettings = asyncHandler(async (req, res) => {
-  const { alerts, referral, topup, dvaPreferredBank, driverTasks, pricing, fees, cancellation, arrival, wallet } = req.body;
+  const { alerts, referral, topup, dvaPreferredBank, driverTasks, driverChallengeDefs, pricing, fees, cancellation, arrival, wallet } = req.body;
   let doc = await AdminSettings.findOne({ key: 'default' });
   if (!doc) {
     doc = await AdminSettings.create({ key: 'default' });
@@ -475,6 +487,23 @@ export const updateSettings = asyncHandler(async (req, res) => {
       }
     }
     doc.markModified('driverTasks');
+  }
+  if (Array.isArray(driverChallengeDefs)) {
+    const allowedIds = new Set(['first_ride_today', 'rides_3_today', 'rides_5_today', 'rides_10_today', 'early_bird', 'night_owl', 'weekend_warrior']);
+    const next = driverChallengeDefs
+      .filter((d) => d && allowedIds.has(String(d.id)))
+      .map((d) => ({
+        id: String(d.id),
+        enabled: d.enabled !== undefined ? !!d.enabled : true,
+        title: String(d.title || '').trim() || String(d.id),
+        description: String(d.description || '').trim() || '',
+        target: Math.max(1, parseInt(d.target, 10) || 1),
+        unit: String(d.unit || '').trim() || 'rides',
+      }));
+    if (next.length > 0) {
+      doc.driverChallengeDefs = next;
+      doc.markModified('driverChallengeDefs');
+    }
   }
   if (pricing && typeof pricing === 'object') {
     if (!doc.pricing) doc.pricing = {};
@@ -570,6 +599,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
       topup: doc.topup,
       dvaPreferredBank: doc.dvaPreferredBank,
       driverTasks: doc.driverTasks,
+      driverChallengeDefs: doc.driverChallengeDefs,
       pricing: doc.pricing,
       fees: doc.fees,
       cancellation: doc.cancellation,

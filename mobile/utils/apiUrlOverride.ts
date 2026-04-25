@@ -93,11 +93,16 @@ const extraApiUrlRaw = asTrimmedString(Constants.expoConfig?.extra?.apiUrl);
  * Constants.isDevice === false on a real phone, which would otherwise force 10.0.2.2.
  */
 export const API_URL_OVERRIDE: string | null = (() => {
+  if (!IS_PHYSICAL_DEVICE) {
+    // Simulator: allow overriding to staging/prod via extra.apiUrl / EXPO_PUBLIC_API_URL,
+    // but never use the physical-device LAN override (that is for real devices).
+    if (extraApiUrlRaw && !isEmulatorOnlyUrl(extraApiUrlRaw)) {
+      return normalizeBaseUrl(extraApiUrlRaw);
+    }
+    return SIMULATOR_URL;
+  }
   if (PHYSICAL_DEVICE_API_URL) {
     return normalizeBaseUrl(PHYSICAL_DEVICE_API_URL);
-  }
-  if (!IS_PHYSICAL_DEVICE) {
-    return SIMULATOR_URL;
   }
   if (extraApiUrlRaw && !isEmulatorOnlyUrl(extraApiUrlRaw)) {
     return normalizeBaseUrl(extraApiUrlRaw);

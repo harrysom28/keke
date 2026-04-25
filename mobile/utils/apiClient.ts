@@ -214,7 +214,13 @@ apiClient.interceptors.response.use(
           typeof url === 'string' &&
           (url.includes('nearby-count') ||
             url.includes('special/offers') ||
-            url.includes('notifications/unread-count'));
+            url.includes('notifications/unread-count') ||
+            // Driver dashboard polls
+            url.includes('driver/earnings') ||
+            url.includes('booking/active-ride') ||
+            url.includes('schedule/latest/booking') ||
+            url.includes('locations/drivers-passengers') ||
+            url.includes('auth/user/me'));
 
         if (isNonCritical && (isTimeout || isErrNetwork)) {
           if (now - lastLog >= throttleMs) {
@@ -247,7 +253,8 @@ apiClient.interceptors.response.use(
           if (isNgrokUrl && __DEV__) {
             console.warn(lines.join('\n'));
           } else {
-            console.error(lines.join('\n'));
+            // In RN dev, console.error triggers a red screen. Network-down is expected while developing.
+            console.warn(lines.join('\n'));
           }
         }
       } else {
