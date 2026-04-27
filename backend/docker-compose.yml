@@ -38,12 +38,15 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: 8000
       MONGODB_URI: mongodb://admin:password123@mongodb:27017/keke-ride-hailing?authSource=admin
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      TRUST_PROXY: "1"
     depends_on:
       - mongodb
       - redis
