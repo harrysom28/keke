@@ -309,6 +309,17 @@ const rideSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    /**
+     * Driver hand-picked by the rider in the picker. We try them exclusively
+     * in dispatch round 1; if they let the offer expire/decline, the existing
+     * fallback in `dispatchRide` rolls forward to nearby drivers (excluded via
+     * `notifiedDriverIds`).
+     */
+    preferredDriver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Driver',
+      default: null,
+    },
     /** Per-offer ACK tracking (sent → delivered → accept) */
     offerTracking: [
       {

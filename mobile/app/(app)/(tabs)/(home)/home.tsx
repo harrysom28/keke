@@ -68,6 +68,8 @@ import { useRoute } from "@/hooks/useRoute";
 import { haversineKm } from "@/utils/haversine";
 import { useFocusRefresh } from "@/hooks/useFocusRefresh";
 import { invalidateRecentPlacesCache } from "@/utils/recentPlacesCache";
+import { invalidateWalletCache } from "@/utils/walletCache";
+import { requestManager } from "@/utils/requestManager";
 
 // Max distance (km) for fitting map to route; beyond this we center on pickup to avoid continental zoom
 const MAX_FIT_DISTANCE_KM = 150;
@@ -167,6 +169,11 @@ export default function HomeScreen() {
    *  wipe state — the DB write may still be propagating (replica lag) or the first poll fires too fast. */
   const justBookedRef = useRef(false);
   const justBookedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Coalesce GET /booking/active-ride: Pusher events, focus, polling and just-booked retries can all fire
+   *  in close succession; a single in-flight request + short min-interval prevents bursting the endpoint. */
+  const getActiveRideInFlightRef = useRef(false);
+  const getActiveRideLastStartRef = useRef(0);
+  const GET_ACTIVE_RIDE_MIN_MS = 400;
   const locationRef = useRef({ latitude: 0, longitude: 0 });
   const { location, address, loading: locationLoading, locationError, getLocation: refreshLocation } = useCurrentLocation({ isFocused });
 
@@ -286,6 +293,7 @@ export default function HomeScreen() {
   // Clear ride state function - resets all ride-related state cleanly
   // This function must be defined before getActiveRide and other functions that use it
   const clearRideState = useCallback(() => {
+    invalidateWalletCache();
     logger.info('🧹 Clearing ride state completely');
     lastActiveRideUiKeyRef.current = "";
     // Ensure Redux ride slice is cleared (prevents any persisted/stale rideId from driving UI).
@@ -411,12 +419,17 @@ export default function HomeScreen() {
     }
   }, [temp?.status, ride?.data?.waiting, dispatch]);
 
-  // Milestone offer countdown: show one toast per session when rider is close or can claim
+  // Milestone offer countdown: show one toast per session when rider is close or can claim.
+  // Re-uses a 5-minute cached response so repeated home focuses don't re-hit the endpoint.
   useEffect(() => {
     if (!isFocused || !token) return;
     if (milestoneToastShownRef.current) return;
-    apiClient
-      .get("special/offers/milestone")
+    requestManager
+      .execute(
+        "milestone-offers",
+        () => apiClient.get("special/offers/milestone"),
+        5 * 60 * 1000
+      )
       .then(({ data: res }) => {
         const d = res?.data;
         if (!d?.available || d?.claimed) return;
@@ -856,6 +869,18 @@ export default function HomeScreen() {
   ]);
 
   const getActiveRide = () => {
+    if (getActiveRideInFlightRef.current) {
+      logger.debug("getActiveRide skipped — request already in flight");
+      return;
+    }
+    const now = Date.now();
+    if (now - getActiveRideLastStartRef.current < GET_ACTIVE_RIDE_MIN_MS) {
+      logger.debug("getActiveRide skipped — fired within min-interval window");
+      return;
+    }
+    getActiveRideInFlightRef.current = true;
+    getActiveRideLastStartRef.current = now;
+
     setLoading(true);
     // Add timeout to prevent infinite loading
     const timeoutId = setTimeout(() => {
@@ -1040,6 +1065,7 @@ export default function HomeScreen() {
       .finally(() => {
         clearTimeout(timeoutId);
         setLoading(false);
+        getActiveRideInFlightRef.current = false;
       });
   };
 

@@ -14,6 +14,7 @@ export interface RideSummaryProps {
     duration?: string | { text: string };
     payment_type?: string;
     driver?: { driver_name?: string; driver_image?: string; rating?: number };
+    fareBreakdown?: { baseFare?: number; serviceCharge?: number; total?: number };
   };
   onContinue: () => void;
   onDone: () => void;
@@ -36,6 +37,9 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
           : paymentMethod;
 
   const fareNum = Number(fare);
+  const baseFare = ride?.fareBreakdown?.baseFare ?? (Number.isFinite(fareNum) ? fareNum : 0);
+  const serviceCharge = ride?.fareBreakdown?.serviceCharge ?? 100;
+  const total = ride?.fareBreakdown?.total ?? baseFare + serviceCharge;
   const fareDisplay = Number.isFinite(fareNum) ? fareNum.toLocaleString() : String(fare);
 
   return (
@@ -67,6 +71,31 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
         <Text style={tw.style(`text-white text-5xl`, { fontFamily: "RobotoBold" })}>
           ₦{fareDisplay}
         </Text>
+        <View style={{ marginTop: 8 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+            <Text style={{ color: "#666", fontSize: 13 }}>Ride fare</Text>
+            <Text style={{ fontSize: 13 }}>₦{baseFare.toLocaleString()}</Text>
+          </View>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+            <Text style={{ color: "#666", fontSize: 13 }}>Service charge</Text>
+            <Text style={{ fontSize: 13 }}>₦{serviceCharge.toLocaleString()}</Text>
+          </View>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              borderTopWidth: 1,
+              borderTopColor: "#E5E7EB",
+              paddingTop: 6,
+              marginTop: 4,
+            }}
+          >
+            <Text style={{ fontWeight: "700", fontSize: 14 }}>Total charged</Text>
+            <Text style={{ fontWeight: "700", fontSize: 14, color: "#3C8F7C" }}>
+              ₦{total.toLocaleString()}
+            </Text>
+          </View>
+        </View>
         <Text
           style={tw.style(`text-white text-sm mt-2 opacity-80`, {
             fontFamily: "RobotoMedium",

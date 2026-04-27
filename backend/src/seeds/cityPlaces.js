@@ -369,6 +369,65 @@ const CITY_PLACES = {
       category: 'hospital',     coords: [8.8952, 9.9120], popularity: 8 },
   ],
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // LAGOS — Lagos State
+  // ════════════════════════════════════════════════════════════════════════════
+  lagos: [
+    // Universities
+    { name: 'University of Lagos', aliases: ['unilag', 'akoka', 'university of lagos akoka'],
+      category: 'university',   coords: [3.3898, 6.5158], popularity: 10 },
+    { name: 'Lagos State University', aliases: ['lasu', 'lagos state university ojo'],
+      category: 'university',   coords: [3.1897, 6.4662], popularity: 9 },
+    { name: 'Yaba College of Technology', aliases: ['yabatech', 'yaba tech'],
+      category: 'university',   coords: [3.3753, 6.5097], popularity: 9 },
+
+    // Markets
+    { name: 'Balogun Market', aliases: ['balogun', 'lagos island market'],
+      category: 'market',       coords: [3.3946, 6.4531], popularity: 10 },
+    { name: 'Oshodi Market', aliases: ['oshodi', 'oshodi market'],
+      category: 'market',       coords: [3.3490, 6.5567], popularity: 9 },
+    { name: 'Mile 12 Market', aliases: ['mile 12', 'mile twelve market'],
+      category: 'market',       coords: [3.3880, 6.6031], popularity: 9 },
+    { name: 'Alaba International Market', aliases: ['alaba', 'alaba market', 'alaba international'],
+      category: 'market',       coords: [3.1808, 6.4472], popularity: 9 },
+    { name: 'Computer Village Ikeja', aliases: ['computer village', 'ikeja computer village'],
+      category: 'market',       coords: [3.3467, 6.5944], popularity: 9 },
+
+    // Junctions & landmarks
+    { name: 'Ojota Bus Stop', aliases: ['ojota', 'ojota junction'],
+      category: 'junction',     coords: [3.3831, 6.5914], popularity: 9 },
+    { name: 'Ikeja Along', aliases: ['ikeja along', 'along'],
+      category: 'junction',     coords: [3.3167, 6.5833], popularity: 8 },
+    { name: 'Oshodi Bus Terminal', aliases: ['oshodi terminal', 'oshodi bustop'],
+      category: 'transport',    coords: [3.3490, 6.5567], popularity: 9 },
+    { name: 'CMS Bus Stop', aliases: ['cms', 'christian mission society', 'cms lagos'],
+      category: 'junction',     coords: [3.3947, 6.4541], popularity: 9 },
+    { name: 'Lekki Phase 1', aliases: ['lekki phase 1', 'lekki 1'],
+      category: 'junction',     coords: [3.4696, 6.4477], popularity: 8 },
+    { name: 'Victoria Island', aliases: ['vi', 'victoria island lagos'],
+      category: 'junction',     coords: [3.4219, 6.4281], popularity: 9 },
+    { name: 'Ajah Bus Stop', aliases: ['ajah', 'ajah junction'],
+      category: 'junction',     coords: [3.5653, 6.4676], popularity: 8 },
+
+    // Hospitals
+    { name: 'Lagos Island General Hospital', aliases: ['island general hospital', 'lagos general hospital'],
+      category: 'hospital',     coords: [3.3947, 6.4537], popularity: 8 },
+    { name: 'LUTH Teaching Hospital', aliases: ['luth', 'lagos university teaching hospital'],
+      category: 'hospital',     coords: [3.3488, 6.5160], popularity: 9 },
+
+    // Transport
+    { name: 'Murtala Muhammed Airport', aliases: ['mma', 'lagos airport', 'muritala airport', 'international airport lagos'],
+      category: 'transport',    coords: [3.3214, 6.5774], popularity: 10 },
+    { name: 'Lagos Island Ferry Terminal', aliases: ['ferry terminal', 'lagos ferry'],
+      category: 'transport',    coords: [3.3957, 6.4545], popularity: 8 },
+
+    // Government
+    { name: 'Lagos State Secretariat', aliases: ['secretariat ikeja', 'lagos secretariat'],
+      category: 'government',   coords: [3.3428, 6.5958], popularity: 8 },
+    { name: 'Alausa Secretariat', aliases: ['alausa', 'alausa ikeja'],
+      category: 'government',   coords: [3.3500, 6.5969], popularity: 8 },
+  ],
+
 };
 
 export { CITY_PLACES };

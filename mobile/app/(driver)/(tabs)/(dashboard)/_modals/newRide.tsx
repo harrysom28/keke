@@ -220,34 +220,54 @@ const NewRide = ({
   const arrivingBy = getArrivingByLabel({ ...(data as any), routeEta });
   const tripContext = getTripContext(data as any);
 
+  const inTripProgress =
+    liveRideState === "trip_started" || liveRideState === "near_destination";
+
   const openNavigation = async () => {
-    const pickCoord = (o: any) => {
-      const lat = o?.lat ?? o?.latitude ?? o?.location?.lat ?? o?.geometry?.location?.lat;
-      const lng =
-        o?.long ?? o?.lng ?? o?.longitude ?? o?.location?.lng ?? o?.location?.long ?? o?.geometry?.location?.lng;
-      const nLat = lat != null ? parseFloat(String(lat)) : NaN;
-      const nLng = lng != null ? parseFloat(String(lng)) : NaN;
-      return Number.isFinite(nLat) && Number.isFinite(nLng) ? { lat: nLat, lng: nLng } : null;
-    };
+    const toPickup = liveRideState === "heading_to_pickup";
+    const dest = toPickup
+      ? (data as any)?.origin
+      : (data as any)?.dropoffLocation || (data as any)?.destination;
 
-    const target =
-      liveRideState === "heading_to_pickup" || liveRideState === "arrived_pickup"
-        ? pickCoord((data as any)?.origin)
-        : pickCoord((data as any)?.destination);
+    const lat =
+      dest?.coordinates?.[1] ??
+      dest?.lat ??
+      dest?.latitude ??
+      dest?.location?.lat ??
+      dest?.geometry?.location?.lat;
+    const lng =
+      dest?.coordinates?.[0] ??
+      dest?.long ??
+      dest?.lng ??
+      dest?.longitude ??
+      dest?.location?.lng ??
+      dest?.location?.long ??
+      dest?.geometry?.location?.lng;
 
-    const destParam = target ? `${target.lat},${target.lng}` : encodeURIComponent(
-      liveRideState === "heading_to_pickup" || liveRideState === "arrived_pickup"
-        ? tripContext.fromLabel
-        : tripContext.toLabel
-    );
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${destParam}&travelmode=driving`;
+    const nLat = lat != null ? parseFloat(String(lat)) : NaN;
+    const nLng = lng != null ? parseFloat(String(lng)) : NaN;
+    if (!Number.isFinite(nLat) || !Number.isFinite(nLng)) {
+      showMessage({ type: "warning", message: "Unable to open navigation — location is missing." });
+      return;
+    }
+
+    // Try Google Maps first, fall back to Apple Maps, then the Google Maps web URL
+    const googleUrl = `google.navigation:q=${nLat},${nLng}`;
+    const appleMapsUrl = `maps://maps.apple.com/?daddr=${nLat},${nLng}&dirflg=d`;
+    const googleWebUrl = `https://www.google.com/maps/dir/?api=1&destination=${nLat},${nLng}&travelmode=driving`;
+
     try {
-      const can = await Linking.canOpenURL(url);
-      if (!can) {
-        showMessage({ type: "warning", message: "Unable to open navigation." });
+      const canOpenGoogle = await Linking.canOpenURL(googleUrl);
+      if (canOpenGoogle) {
+        await Linking.openURL(googleUrl);
         return;
       }
-      Linking.openURL(url);
+      const canOpenApple = await Linking.canOpenURL(appleMapsUrl);
+      if (canOpenApple) {
+        await Linking.openURL(appleMapsUrl);
+        return;
+      }
+      await Linking.openURL(googleWebUrl);
     } catch {
       showMessage({ type: "warning", message: "Unable to open navigation." });
     }
@@ -487,6 +507,19 @@ const NewRide = ({
             <Ionicons name="navigate-outline" size={16} color="#3C8F7C" />
             <Text style={{ color: "#3C8F7C", fontWeight: "600", fontSize: 13, fontFamily: "RobotoMedium" }}>
               Navigate to the rider
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {accepted && inTripProgress ? (
+          <TouchableOpacity
+            onPress={openNavigation}
+            activeOpacity={0.85}
+            style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 2, paddingTop: 2 }}
+          >
+            <Ionicons name="navigate-outline" size={16} color="#3C8F7C" />
+            <Text style={{ color: "#3C8F7C", fontWeight: "600", fontSize: 13, fontFamily: "RobotoMedium" }}>
+              Navigate to destination
             </Text>
           </TouchableOpacity>
         ) : null}

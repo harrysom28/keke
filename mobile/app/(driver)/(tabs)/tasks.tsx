@@ -343,18 +343,6 @@ const Tasks = () => {
             selected === Tab[0] ? "-mt-20" : "-mt-16"
           )}
         >
-          <View
-            style={tw.style(`mx-6`, {
-              display: selected === Tab[0] ? "flex" : "none",
-            })}
-          >
-            <Image
-              resizeMode="contain"
-              source={require("@images/driver.png")}
-              style={tw`w-full h-[265px] my-2 self-center`}
-            />
-          </View>
-
           <View style={tw`flex-row items-center justify-between mx-4`}>
             {Tab.map((item) => (
               <Pressable

@@ -321,6 +321,12 @@ export const validationRules = {
     body('paymentMethod')
       .isIn(['cash', 'wallet', 'card', 'bank_transfer'])
       .withMessage('Invalid payment method'),
+    // Rider may pre-select a specific driver from the picker. When present we
+    // try them exclusively in round 1 before falling back to broadcast.
+    body('driverId')
+      .optional({ nullable: true })
+      .isMongoId()
+      .withMessage('Invalid driver ID'),
   ],
 
   // ID parameter validation

@@ -20,6 +20,7 @@ import {
 import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
 import { geocodeAddress, resolvePickupLabel } from "@/utils/mapsApi";
 import apiClient from "@/utils/apiClient";
+import { getCachedWallet, setCachedWallet } from "@/utils/walletCache";
 import { router } from "expo-router";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import { AuthState } from "@/store/AuthSlice";
@@ -384,12 +385,19 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
     setFareLoading(true);
     setFareError(null);
 
+    const cachedWallet = getCachedWallet<any>();
+    const walletPromise = cachedWallet
+      ? Promise.resolve(cachedWallet)
+      : apiClient.get("wallet", { timeout: 10000 }).then((res) => {
+          setCachedWallet(res);
+          return res;
+        });
     Promise.all([
       apiClient.get("rides/fare-estimate", {
         params: { originLat: oLat, originLng: oLng, destLat: dLat, destLng: dLng },
         timeout: 10000,
       }),
-      apiClient.get("wallet", { timeout: 10000 }),
+      walletPromise,
     ])
       .then(([fareRes, walletRes]) => {
         if (!mounted) return;

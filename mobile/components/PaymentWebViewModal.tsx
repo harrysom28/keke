@@ -16,6 +16,7 @@ import { WebView } from "react-native-webview";
 import { AntDesign } from "@expo/vector-icons";
 import tw from "@/lib/tailwind";
 import apiClient from "@/utils/apiClient";
+import { invalidateWalletCache } from "@/utils/walletCache";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const MODAL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.6);
@@ -104,6 +105,7 @@ export function PaymentWebViewModal({
       if (reference) {
         try {
           await apiClient.post("payment/verify-wallet-topup", { reference });
+          invalidateWalletCache();
         } catch (_) {}
       }
       await getCurrentUser();

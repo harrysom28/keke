@@ -1,5 +1,6 @@
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
+import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import logger from '../utils/logger.js';
 import { getSocketService } from './socketService.js';
 import { logRideAudit } from './rideAuditLogService.js';
@@ -7,6 +8,12 @@ import { logRideAudit } from './rideAuditLogService.js';
 const STALE_MINUTES = 8;
 const TICK_MS = 5 * 60 * 1000;
 const STALE_SEARCHING_MINUTES = 30;
+/**
+ * Driver accepted (or marked en-route / arrived) but the ride hasn't progressed.
+ * When the ride doc has had no updates for this many minutes we treat the driver
+ * as a no-show, refund the rider's escrow hold in full and free the driver.
+ */
+const STALE_PRE_PICKUP_MINUTES = 12;
 
 function stopRideAutomationTimers(rideId) {
   const id = rideId?.toString?.() || String(rideId || '');
@@ -195,12 +202,162 @@ class StaleTripService {
       }
       // ── End stale searching cleanup ───────────────────────────────────
 
+      // ── Cancel rides stuck after accept (driver no-show) ──────────────
+      const prePickupCutoff = new Date(Date.now() - STALE_PRE_PICKUP_MINUTES * 60 * 1000);
+      const stuckPrePickupRides = await Ride.find({
+        status: { $in: ['accepted', 'driver_en_route', 'arrived'] },
+        updatedAt: { $lt: prePickupCutoff },
+      }).select(
+        '_id rider driver status paymentMethod paymentStatus fare statusHistory acceptedAt arrivedAt completed_by completion_reason cancellation'
+      );
+
+      if (stuckPrePickupRides.length > 0) {
+        logger.warn(
+          `Found ${stuckPrePickupRides.length} stuck pre-pickup rides to auto-cancel (driver no-show)`
+        );
+      }
+
+      for (const ride of stuckPrePickupRides) {
+        try {
+          await autoCancelStuckPrePickupRide(ride);
+        } catch (err) {
+          logger.error(`Failed to auto-cancel stuck ride ${ride?._id}: ${err.message}`);
+        }
+      }
+      // ── End stuck pre-pickup cleanup ──────────────────────────────────
+
     } catch (err) {
       logger.error(`Stale trip tick failed: ${err.message}`);
     } finally {
       this.isRunning = false;
     }
   }
+}
+
+async function autoCancelStuckPrePickupRide(ride) {
+  const previousStatus = ride.status;
+  const rideId = ride._id;
+
+  if (ride.paymentMethod === 'wallet') {
+    try {
+      const riderId = ride.rider?._id ?? ride.rider;
+      const fareAmount = Number(ride.fare?.totalFare) || 0;
+      if (riderId) {
+        const hasHold = await UserWalletTransaction.findOne({
+          idempotencyKey: `hold:${rideId}`,
+          type: 'hold',
+        })
+          .select('_id')
+          .lean();
+        if (hasHold) {
+          const { processCancellation } = await import('./escrowWalletService.js');
+          await processCancellation(rideId, riderId, null, fareAmount, 'driverCancel');
+          logger.info(`Escrow released for stuck pre-pickup ride ${rideId}`);
+        }
+      }
+    } catch (escrowErr) {
+      logger.error(
+        `Escrow release failed for stuck pre-pickup ride ${rideId}: ${escrowErr.message}`
+      );
+    }
+  }
+
+  ride.status = 'cancelled';
+  ride.completed_by = 'system';
+  ride.completion_reason = 'timeout';
+  ride.cancellation = {
+    cancelledBy: 'system',
+    reason: `Auto-cancelled: stuck in ${previousStatus} > ${STALE_PRE_PICKUP_MINUTES}m without progress`,
+    cancelledAt: new Date(),
+    cancellationFee: 0,
+    cancellationScenario: 'driverCancel',
+  };
+  ride.statusHistory.push({
+    status: 'cancelled',
+    timestamp: new Date(),
+    note: `Auto-cancelled by system: no progress from ${previousStatus} for ${STALE_PRE_PICKUP_MINUTES}m`,
+  });
+  if (ride.paymentMethod === 'wallet') ride.paymentStatus = 'refunded';
+  await ride.save({ validateBeforeSave: false });
+
+  stopRideAutomationTimers(rideId);
+
+  // Free the driver
+  if (ride.driver) {
+    try {
+      await Driver.findByIdAndUpdate(ride.driver, { isAvailable: true });
+    } catch (err) {
+      logger.warn(`Failed to free driver ${ride.driver} after auto-cancel: ${err.message}`);
+    }
+  }
+
+  await logRideAudit({
+    rideId,
+    action: 'auto_cancel_no_progress',
+    initiatedBy: null,
+    initiatedByRole: 'system',
+    details: {
+      reason: 'driver_no_show',
+      previousStatus,
+      staleMinutes: STALE_PRE_PICKUP_MINUTES,
+    },
+  });
+
+  // Notify rider
+  const wasArrived = previousStatus === 'arrived';
+  const refundNote =
+    ride.paymentMethod === 'wallet' ? ' Your wallet hold has been released.' : '';
+  const riderMessage = wasArrived
+    ? `Your ride was cancelled because it never started.${refundNote}`
+    : `Your driver did not arrive in time.${refundNote}`;
+  try {
+    const { sendToUser } = await import('./notificationService.js');
+    await sendToUser(ride.rider, 'rider', {
+      title: 'Ride cancelled',
+      message: riderMessage,
+      type: 'alert',
+      priority: 'high',
+      screen: 'home',
+      ride_id: rideId,
+      event_key: 'ride_cancelled_no_show',
+      data: {
+        subType: 'ride_cancelled',
+        rideId: rideId.toString(),
+        reason: wasArrived ? 'no_pickup' : 'driver_no_show',
+      },
+    });
+  } catch (err) {
+    logger.warn(`No-show rider push failed for ride ${rideId}: ${err.message}`);
+  }
+
+  // Notify driver (so the dashboard clears the stale ride card)
+  if (ride.driver) {
+    try {
+      const driverDoc = await Driver.findById(ride.driver).select('user').lean();
+      if (driverDoc?.user) {
+        const { sendToUser } = await import('./notificationService.js');
+        await sendToUser(driverDoc.user, 'driver', {
+          title: 'Ride auto-cancelled',
+          message: `A ride was auto-cancelled by the system after ${STALE_PRE_PICKUP_MINUTES}m of no progress.`,
+          type: 'alert',
+          priority: 'normal',
+          ride_id: rideId,
+          event_key: 'ride_auto_cancelled',
+          data: { subType: 'ride_auto_cancelled', rideId: rideId.toString() },
+        });
+      }
+    } catch (err) {
+      logger.warn(`No-show driver push failed for ride ${rideId}: ${err.message}`);
+    }
+  }
+
+  await emitTripEventToRiderAndDriver(ride, 'trip:cancelled', {
+    rideId: rideId.toString(),
+    reason: wasArrived ? 'no_pickup' : 'driver_no_show',
+    previousStatus,
+  });
+
+  logger.info(`Auto-cancelled stuck pre-pickup ride ${rideId} (was ${previousStatus})`);
 }
 
 const staleTripService = new StaleTripService();

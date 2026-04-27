@@ -50,6 +50,7 @@ import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
+import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
 
 /** Map schedule/closest API shape (ride_id, nested pickup/dropoff, scheduled_at) to home card fields. */
 function mapClosestBookingForHome(raw: Record<string, unknown>): Partial<TBooking> & Record<string, unknown> {
@@ -91,6 +92,10 @@ const Home = () => {
   const insets = useSafeAreaInsets();
   const { apiConfig, notificationEvent, getCurrentUser } = useContext(AppContext);
   const isFocused = useIsFocused();
+
+  useEffect(() => {
+    markInitialDriverRouteHandled();
+  }, []);
   const { subscription, unread_count } = useSelector(AppDetailsState);
   const [activeRide, setActiveRide] = useState<Partial<TDriverActiveRide>>({});
   const [booking, setBooking] = useState<Partial<TBooking>>({});

@@ -5,7 +5,6 @@ import {
   Pressable,
   Text,
   View,
-  ActivityIndicator,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
@@ -37,249 +36,98 @@ import { ProgressBar } from "@/components/ride-in-transit/ProgressBar";
 import { RiderActionButtons } from "@/components/ride-in-transit/ActionButtons";
 
 const BRAND_GREEN = "#3C8F7C";
+const TEAL = "#1D9E75";
 const ERROR_RED = "#EF4444";
 
-const FALLBACK_ROTATING_MSG = ["Searching for drivers nearby…"];
+type StatusPair = { heading: string; subtext: string };
+const STATUS_MESSAGES: readonly StatusPair[] = [
+  { heading: "Finding your driver…", subtext: "Looking for nearby drivers" },
+  { heading: "Still looking…", subtext: "This may take a moment" },
+  { heading: "Hang tight", subtext: "Almost there…" },
+  { heading: "Connecting you now", subtext: "Won't be long" },
+];
 
-function getSearchRotatingMessages(driversNotified: number, fareDisplay: string): string[] {
-  const n = Math.max(0, Math.floor(driversNotified));
-  return [
-    n > 0
-      ? `${n} driver${n !== 1 ? "s" : ""} notified`
-      : "Searching for drivers nearby…",
-    "Most rides match within 60 seconds",
-    `Your fare is locked in at ${fareDisplay}`,
-    "Expanding search if needed…",
-    "Hang tight, almost there…",
-  ];
-}
+// ─── Pulsing rings loader ─────────────────────────────────────────────────────
+const RING_BASE_SIZE = 80;
 
-// ─── Animated dots loader ─────────────────────────────────────────────────────
-const AnimatedDots = () => {
-  const dot1 = useRef(new RNAnimated.Value(0)).current;
-  const dot2 = useRef(new RNAnimated.Value(0)).current;
-  const dot3 = useRef(new RNAnimated.Value(0)).current;
+const PulsingRings = () => {
+  const a1 = useRef(new RNAnimated.Value(0)).current;
+  const a2 = useRef(new RNAnimated.Value(0)).current;
+  const a3 = useRef(new RNAnimated.Value(0)).current;
 
   useEffect(() => {
-    const makeDot = (anim: RNAnimated.Value, delay: number) =>
-      RNAnimated.loop(
-        RNAnimated.sequence([
-          RNAnimated.delay(delay),
-          RNAnimated.timing(anim, {
-            toValue: 1,
-            duration: 350,
-            useNativeDriver: true,
-          }),
-          RNAnimated.timing(anim, {
-            toValue: 0,
-            duration: 350,
-            useNativeDriver: true,
-          }),
-          RNAnimated.delay(700),
-        ])
+    const start = (anim: RNAnimated.Value, delay: number) => {
+      const loop = RNAnimated.loop(
+        RNAnimated.timing(anim, {
+          toValue: 1,
+          duration: 2200,
+          useNativeDriver: true,
+        }),
+        { resetBeforeIteration: true }
       );
+      const t = setTimeout(() => loop.start(), delay);
+      return () => {
+        clearTimeout(t);
+        loop.stop();
+      };
+    };
+    const stops = [start(a1, 0), start(a2, 400), start(a3, 800)];
+    return () => stops.forEach((s) => s());
+  }, [a1, a2, a3]);
 
-    const loops = [makeDot(dot1, 0), makeDot(dot2, 200), makeDot(dot3, 400)];
-    loops.forEach((l) => l.start());
-    return () => loops.forEach((l) => l.stop());
-  }, [dot1, dot2, dot3]);
-
-  const dotStyle = (anim: RNAnimated.Value) => ({
-    opacity: anim,
+  const ringStyle = (anim: RNAnimated.Value, fromScale: number) => ({
+    opacity: anim.interpolate({
+      inputRange: [0, 0.1, 1],
+      outputRange: [0, 0.7, 0],
+    }),
     transform: [
       {
-        translateY: anim.interpolate({
+        scale: anim.interpolate({
           inputRange: [0, 1],
-          outputRange: [0, -5],
+          outputRange: [fromScale, fromScale + 1.2],
         }),
       },
     ],
   });
 
   return (
-    <View style={dotStyles.row}>
-      {[dot1, dot2, dot3].map((anim, i) => (
-        <RNAnimated.View key={i} style={[dotStyles.dot, dotStyle(anim)]} />
-      ))}
+    <View style={pulsingStyles.wrap}>
+      <RNAnimated.View style={[pulsingStyles.ring, ringStyle(a1, 1.0)]} />
+      <RNAnimated.View style={[pulsingStyles.ring, ringStyle(a2, 0.6)]} />
+      <RNAnimated.View style={[pulsingStyles.ring, ringStyle(a3, 0.4)]} />
+      <View style={pulsingStyles.center}>
+        <Ionicons name="car-outline" size={22} color={TEAL} />
+      </View>
     </View>
   );
 };
 
-const dotStyles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
+const pulsingStyles = StyleSheet.create({
+  wrap: {
+    width: 140,
+    height: 140,
     alignItems: "center",
-    gap: 6,
-    marginTop: 4,
+    justifyContent: "center",
+    marginBottom: 14,
   },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: BRAND_GREEN,
+  ring: {
+    position: "absolute",
+    width: RING_BASE_SIZE,
+    height: RING_BASE_SIZE,
+    borderRadius: RING_BASE_SIZE / 2,
+    borderWidth: 2,
+    borderColor: TEAL,
+    backgroundColor: "transparent",
+  },
+  center: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#E8F5F1",
+    alignItems: "center",
+    justifyContent: "center",
   },
 });
-
-// ─── Status header (searching state) ─────────────────────────────────────────
-const StatusHeader = ({
-  pulseAnim,
-  subtitleOverride,
-  isCountdown,
-  rotatingMessages,
-}: {
-  pulseAnim: RNAnimated.Value;
-  subtitleOverride?: string;
-  isCountdown: boolean;
-  rotatingMessages: readonly string[];
-}) => {
-  const [msgIndex, setMsgIndex] = useState(0);
-  const fadeAnim = useRef(new RNAnimated.Value(1)).current;
-  const messages =
-    rotatingMessages.length > 0 ? rotatingMessages : FALLBACK_ROTATING_MSG;
-
-  useEffect(() => {
-    setMsgIndex(0);
-  }, [rotatingMessages]);
-
-  useEffect(() => {
-    if (isCountdown || subtitleOverride) return;
-    const len = Math.max(1, messages.length);
-
-    const rotate = () => {
-      RNAnimated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }).start(() => {
-        setMsgIndex((i) => (i + 1) % len);
-        RNAnimated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 400,
-          useNativeDriver: true,
-        }).start();
-      });
-    };
-
-    const id = setInterval(rotate, 2800);
-    return () => clearInterval(id);
-  }, [isCountdown, subtitleOverride, fadeAnim, rotatingMessages, messages]);
-
-  return (
-    <View style={styles.statusHeader}>
-      {/* Pulsing ring + spinner */}
-      <RNAnimated.View
-        style={[styles.loaderRing, { transform: [{ scale: pulseAnim }] }]}
-      >
-        <ActivityIndicator size="large" color={BRAND_GREEN} />
-      </RNAnimated.View>
-
-      <Text style={styles.statusTitle}>Finding your driver…</Text>
-
-      {/* Keep this block height stable so the bottom sheet doesn't "bounce" when text changes */}
-      <View style={styles.subtitleSlot}>
-        {isCountdown && subtitleOverride ? (
-          <View style={styles.countdownRow}>
-            <ActivityIndicator size="small" color={BRAND_GREEN} />
-            <Text style={styles.countdownText}>{subtitleOverride}</Text>
-          </View>
-        ) : (
-          <RNAnimated.Text style={[styles.rotatingMsg, { opacity: fadeAnim }]}>
-            {subtitleOverride ?? messages[msgIndex % messages.length]}
-          </RNAnimated.Text>
-        )}
-      </View>
-
-      <AnimatedDots />
-    </View>
-  );
-};
-
-// ─── Search info card ─────────────────────────────────────────────────────────
-const RideSearchInfoCard = ({
-  driversNearby,
-  radiusKm,
-  estWaitMin,
-}: {
-  driversNearby: number;
-  radiusKm: number;
-  estWaitMin: number;
-}) => (
-  <View style={styles.infoCard}>
-    <View style={styles.infoItem}>
-      <Ionicons name="time-outline" size={14} color={BRAND_GREEN} />
-      <Text style={styles.infoLabel}>Est. wait</Text>
-      <Text style={styles.infoValue}>~{estWaitMin} min</Text>
-    </View>
-    <View style={styles.infoDivider} />
-    <View style={styles.infoItem}>
-      <Ionicons name="radio-button-on-outline" size={14} color={BRAND_GREEN} />
-      <Text style={styles.infoLabel}>Radius</Text>
-      <Text style={styles.infoValue}>{radiusKm} km</Text>
-    </View>
-    <View style={styles.infoDivider} />
-    <View style={styles.infoItem}>
-      <Ionicons name="car-outline" size={14} color={BRAND_GREEN} />
-      <Text style={styles.infoLabel}>Drivers</Text>
-      <Text style={styles.infoValue}>
-        {driversNearby} nearby
-      </Text>
-    </View>
-  </View>
-);
-
-// ─── Progress steps ───────────────────────────────────────────────────────────
-const STEPS = ["Searching drivers", "Notifying drivers", "Driver accepted"];
-
-const ProgressSteps = ({
-  currentStep,
-}: {
-  currentStep: number;
-}) => (
-  <View style={styles.stepsRow}>
-    {STEPS.map((label, i) => {
-      const done = i < currentStep;
-      const active = i === currentStep;
-      return (
-        <View key={i} style={styles.stepItem}>
-          <View
-            style={[
-              styles.stepDot,
-              done && styles.stepDotDone,
-              active && styles.stepDotActive,
-            ]}
-          >
-            {done ? (
-              <AntDesign name="check" size={10} color="#fff" />
-            ) : (
-              <Text
-                style={[
-                  styles.stepNum,
-                  active && { color: "#fff" },
-                ]}
-              >
-                {i + 1}
-              </Text>
-            )}
-          </View>
-          <Text
-            style={[
-              styles.stepLabel,
-              active && styles.stepLabelActive,
-              done && styles.stepLabelDone,
-            ]}
-          >
-            {label}
-          </Text>
-          {i < STEPS.length - 1 && (
-            <View
-              style={[styles.stepLine, (done || active) && styles.stepLineActive]}
-            />
-          )}
-        </View>
-      );
-    })}
-  </View>
-);
 
 // ─── Main interface ───────────────────────────────────────────────────────────
 interface Props {
@@ -443,35 +291,8 @@ export const WaitingView = ({
     );
   }, [data]);
 
-  // ── Pulse animations ────────────────────────────────────────────────────────
-  const searchPulseAnim = useRef(new RNAnimated.Value(1)).current;
+  // ── Pulse animation (driver-arrived state only) ─────────────────────────────
   const arrivedPulseAnim = useRef(new RNAnimated.Value(1)).current;
-
-  useEffect(() => {
-    if (isDriverArrived || hasRideStarted || isAccepted) {
-      searchPulseAnim.setValue(1);
-      return;
-    }
-    const loop = RNAnimated.loop(
-      RNAnimated.sequence([
-        RNAnimated.timing(searchPulseAnim, {
-          toValue: 1.08,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-        RNAnimated.timing(searchPulseAnim, {
-          toValue: 1,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    loop.start();
-    return () => {
-      loop.stop();
-      searchPulseAnim.setValue(1);
-    };
-  }, [isDriverArrived, hasRideStarted, isAccepted, searchPulseAnim]);
 
   useEffect(() => {
     if (!isDriverArrived || hasRideStarted) {
@@ -499,18 +320,34 @@ export const WaitingView = ({
     };
   }, [isDriverArrived, hasRideStarted, arrivedPulseAnim]);
 
-  // ── Progress step tracker ───────────────────────────────────────────────────
-  const [progressStep, setProgressStep] = useState(0);
+  // ── Rotating status copy (12s cadence) ──────────────────────────────────────
+  const [statusIdx, setStatusIdx] = useState(0);
+  const statusFade = useRef(new RNAnimated.Value(1)).current;
+
+  const isSearchingState = !isAccepted && !hasRideStarted && !isDriverArrived;
 
   useEffect(() => {
-    if (isAccepted) {
-      setProgressStep(2);
+    if (!isSearchingState) {
+      setStatusIdx(0);
+      statusFade.setValue(1);
       return;
     }
-    setProgressStep(0);
-    const t = setTimeout(() => setProgressStep(1), 5000);
-    return () => clearTimeout(t);
-  }, [isAccepted]);
+    const id = setInterval(() => {
+      RNAnimated.timing(statusFade, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: true,
+      }).start(() => {
+        setStatusIdx((i) => (i + 1) % STATUS_MESSAGES.length);
+        RNAnimated.timing(statusFade, {
+          toValue: 1,
+          duration: 350,
+          useNativeDriver: true,
+        }).start();
+      });
+    }, 12000);
+    return () => clearInterval(id);
+  }, [isSearchingState, statusFade]);
 
   // ── Derived state ───────────────────────────────────────────────────────────
   const isCountdown = waitingSubtitleOverride?.includes("s)") ?? false;
@@ -566,23 +403,6 @@ export const WaitingView = ({
     return str;
   };
 
-  const driversNotified = useMemo(() => {
-    const r = data as any;
-    const v = r?.drivers_notified;
-    if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, Math.floor(v));
-    if (typeof v === "string" && v.trim() !== "") {
-      const p = parseInt(v, 10);
-      if (!Number.isNaN(p)) return Math.max(0, p);
-    }
-    return 0;
-  }, [data]);
-
-  const searchRadiusKm = useMemo(() => {
-    const v = (data as any)?.search_radius_km;
-    if (typeof v === "number" && Number.isFinite(v) && v > 0) return Math.round(v * 10) / 10;
-    return 10;
-  }, [data]);
-
   const estWaitMin = useMemo(() => {
     const raw = (data as any)?.duration;
     const n = raw == null || raw === "" ? 2 : Number(raw);
@@ -601,11 +421,6 @@ export const WaitingView = ({
     if (isNaN(num) || num === 0) return "₦0";
     return `₦${Math.round(num).toLocaleString()}`;
   }, [data]);
-
-  const searchRotatingMessages = useMemo(
-    () => getSearchRotatingMessages(driversNotified, searchFareDisplay),
-    [driversNotified, searchFareDisplay]
-  );
 
   const statusText = useMemo(() => {
     if (hasRideStarted) return "In Transit";
@@ -986,37 +801,77 @@ export const WaitingView = ({
               </Text>
             </View>
           </View>
+        ) : isSearchingState ? (
+          /* ── WAITING / SEARCHING STATE: redesigned panel ── */
+          <View style={styles.searchPanel}>
+            <PulsingRings />
+
+            <RNAnimated.Text
+              style={[styles.searchHeading, { opacity: statusFade }]}
+            >
+              {STATUS_MESSAGES[statusIdx].heading}
+            </RNAnimated.Text>
+
+            <View style={styles.searchSubtextSlot}>
+              {isCountdown && waitingSubtitleOverride ? (
+                <Text style={styles.searchSubtext}>
+                  {waitingSubtitleOverride}
+                </Text>
+              ) : (
+                <RNAnimated.Text
+                  style={[styles.searchSubtext, { opacity: statusFade }]}
+                >
+                  {waitingSubtitleOverride ?? STATUS_MESSAGES[statusIdx].subtext}
+                </RNAnimated.Text>
+              )}
+            </View>
+
+            <View style={styles.searchInfoStrip}>
+              <View style={styles.searchInfoCol}>
+                <Text style={styles.searchInfoLabel}>ESTIMATED FARE</Text>
+                <Text style={styles.searchInfoValue}>{searchFareDisplay}</Text>
+              </View>
+              <View style={styles.searchInfoStripDivider} />
+              <View style={styles.searchInfoCol}>
+                <Text style={styles.searchInfoLabel}>EST. WAIT</Text>
+                <Text style={styles.searchInfoValue}>~{estWaitMin} min</Text>
+              </View>
+            </View>
+
+            <View
+              style={[
+                styles.searchActions,
+                { paddingBottom: Math.max(insets.bottom + 8, 16) },
+              ]}
+            >
+              <TouchableOpacity
+                onPress={cancel}
+                style={styles.searchCancelBtn}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel ride"
+              >
+                <Text style={styles.searchCancelText}>Cancel ride</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={onSearchAgain ?? action}
+                style={styles.searchChangePickup}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Change pickup"
+              >
+                <Text style={styles.searchChangePickupText}>Change pickup</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         ) : (
-          /* ── Searching / accepted / in-transit ── */
-          <>
-            {!isAccepted && !hasRideStarted ? (
-              /* ── WAITING STATE: upgraded UI ── */
-              <>
-                <StatusHeader
-                  pulseAnim={searchPulseAnim}
-                  subtitleOverride={waitingSubtitleOverride}
-                  isCountdown={isCountdown}
-                  rotatingMessages={searchRotatingMessages}
-                />
-
-                <RideSearchInfoCard
-                  driversNearby={driversNotified}
-                  radiusKm={searchRadiusKm}
-                  estWaitMin={estWaitMin}
-                />
-
-                <ProgressSteps currentStep={progressStep} />
-              </>
-            ) : (
-              /* ── Accepted / In-Transit header ── */
-              // handled above (modernized accepted view)
-              <View />
-            )}
-          </>
+          /* ── Accepted / In-Transit header handled above (modernized accepted view) ── */
+          <View />
         )}
 
-        {/* ── Legacy driver card (keep only for non-accepted states) ── */}
-        {hasDriver && !isAccepted && (
+        {/* ── Legacy driver card (skip in pure searching state) ── */}
+        {hasDriver && !isAccepted && !isSearchingState && (
           <TouchableOpacity
             onPress={() => info(data?.driver?.driver_id)}
             style={styles.driverCard}
@@ -1167,29 +1022,31 @@ export const WaitingView = ({
           </View>
         ) : null}
 
-        {/* ── Fare card ── */}
-        <View style={styles.tripCard}>
-          <View style={styles.costRow}>
-            <View>
-              <Text style={styles.costLabel}>Estimated Fare</Text>
-              <Text style={styles.costValue}>{formatCost(data?.cost)}</Text>
+        {/* ── Fare card (skip in searching state — info strip already shows fare) ── */}
+        {!isSearchingState && (
+          <View style={styles.tripCard}>
+            <View style={styles.costRow}>
+              <View>
+                <Text style={styles.costLabel}>Estimated Fare</Text>
+                <Text style={styles.costValue}>{formatCost(data?.cost)}</Text>
+              </View>
+              {(() => {
+                const vt = (data as any)?.vehicleType;
+                const vtName =
+                  typeof vt === "string" ? vt : vt?.displayName || vt?.name;
+                const vtLabel = (data as any)?.vehicle_type || vtName;
+                return vtLabel ? (
+                  <View style={styles.vehicleTypePill}>
+                    <Ionicons name="car-outline" size={13} color={BRAND_GREEN} />
+                    <Text style={styles.vehicleTypeText}>
+                      {String(vtLabel) || "Vehicle"}
+                    </Text>
+                  </View>
+                ) : null;
+              })()}
             </View>
-            {(() => {
-              const vt = (data as any)?.vehicleType;
-              const vtName =
-                typeof vt === "string" ? vt : vt?.displayName || vt?.name;
-              const vtLabel = (data as any)?.vehicle_type || vtName;
-              return vtLabel ? (
-                <View style={styles.vehicleTypePill}>
-                  <Ionicons name="car-outline" size={13} color={BRAND_GREEN} />
-                  <Text style={styles.vehicleTypeText}>
-                    {String(vtLabel) || "Vehicle"}
-                  </Text>
-                </View>
-              ) : null;
-            })()}
           </View>
-        </View>
+        )}
 
         {/* ── Progress bar (ride started) ── */}
         {hasRideStarted && (
@@ -1223,8 +1080,8 @@ export const WaitingView = ({
           </View>
         )}
 
-        {/* ── Action buttons (waiting-state only; accepted handled above) ── */}
-        {!isAccepted ? (
+        {/* ── Action buttons (driver-arrived state only; searching has its own, accepted handled above) ── */}
+        {!isAccepted && !isSearchingState ? (
           <View style={[styles.actionButtons, { paddingBottom: Math.max(insets.bottom + 8, 16) }]}>
             <TouchableOpacity
               onPress={onRequestNewDriver ?? action}
@@ -1354,19 +1211,10 @@ const styles = StyleSheet.create({
     fontFamily: "RobotoMedium",
   },
 
-  // ── Status header ───────────────────────────────────────────────────────────
+  // ── Driver-arrived header (legacy) ──────────────────────────────────────────
   statusHeader: {
     alignItems: "center",
     marginBottom: 16,
-  },
-  loaderRing: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "#E8F5F2",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 12,
   },
   statusTitle: {
     fontSize: 18,
@@ -1376,136 +1224,99 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     textAlign: "center",
   },
-  countdownRow: {
-    flexDirection: "row",
+
+  // ── Searching panel (redesigned) ────────────────────────────────────────────
+  searchPanel: {
     alignItems: "center",
-    gap: 6,
+    paddingTop: 6,
+    width: "100%",
+  },
+  searchHeading: {
+    fontSize: 18,
+    fontWeight: "500",
+    color: "#1A1A1A",
+    fontFamily: "RobotoMedium",
+    textAlign: "center",
     marginTop: 2,
   },
-  subtitleSlot: {
+  searchSubtextSlot: {
     minHeight: 22,
     alignItems: "center",
     justifyContent: "center",
+    marginTop: 6,
+    marginBottom: 18,
   },
-  countdownText: {
+  searchSubtext: {
     fontSize: 13,
-    color: BRAND_GREEN,
-    fontFamily: "RobotoMedium",
-  },
-  rotatingMsg: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: "#8F92A1",
+    fontWeight: "400",
+    color: "#6B7280",
     fontFamily: "RobotoRegular",
     textAlign: "center",
-    marginTop: 2,
   },
-  checkIconContainer: {
-    marginBottom: 6,
-  },
-  statusSubtext: {
-    fontSize: 13,
-    color: "#8F92A1",
-    fontFamily: "RobotoRegular",
-    textAlign: "center",
-    marginTop: 2,
-  },
-
-  // ── Search info card ────────────────────────────────────────────────────────
-  infoCard: {
+  searchInfoStrip: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#F4FBF9",
-    borderRadius: 16,
-    paddingVertical: 12,
+    alignItems: "stretch",
+    width: "100%",
+    backgroundColor: "#F5F5F5",
+    borderRadius: 14,
+    paddingVertical: 14,
     paddingHorizontal: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#D3EDE8",
-  },
-  infoItem: {
-    flex: 1,
-    alignItems: "center",
-    gap: 3,
-  },
-  infoLabel: {
-    fontSize: 10,
-    color: "#8F92A1",
-    fontFamily: "RobotoRegular",
-    marginTop: 2,
-  },
-  infoValue: {
-    fontSize: 12,
-    color: "#1A1A1A",
-    fontFamily: "RobotoMedium",
-    fontWeight: "600",
-  },
-  infoDivider: {
-    width: 1,
-    height: 32,
-    backgroundColor: "#D3EDE8",
-  },
-
-  // ── Progress steps ──────────────────────────────────────────────────────────
-  stepsRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "center",
     marginBottom: 20,
-    paddingHorizontal: 4,
   },
-  stepItem: {
+  searchInfoCol: {
     flex: 1,
     alignItems: "center",
-    position: "relative",
-  },
-  stepDot: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "#E5E7EB",
-    alignItems: "center",
     justifyContent: "center",
-    marginBottom: 5,
-    zIndex: 1,
+    gap: 6,
   },
-  stepDotActive: {
-    backgroundColor: BRAND_GREEN,
+  searchInfoStripDivider: {
+    width: 1,
+    backgroundColor: "#E5E7EB",
+    marginHorizontal: 8,
   },
-  stepDotDone: {
-    backgroundColor: BRAND_GREEN,
-  },
-  stepNum: {
-    fontSize: 11,
-    color: "#8F92A1",
-    fontFamily: "RobotoMedium",
-  },
-  stepLabel: {
+  searchInfoLabel: {
     fontSize: 10,
+    fontWeight: "400",
     color: "#8F92A1",
     fontFamily: "RobotoRegular",
-    textAlign: "center",
+    letterSpacing: 1,
+    textTransform: "uppercase",
   },
-  stepLabelActive: {
-    color: BRAND_GREEN,
-    fontFamily: "RobotoMedium",
-  },
-  stepLabelDone: {
+  searchInfoValue: {
+    fontSize: 16,
+    fontWeight: "500",
     color: "#1A1A1A",
     fontFamily: "RobotoMedium",
   },
-  stepLine: {
-    position: "absolute",
-    top: 11,
-    left: "50%",
-    right: "-50%",
-    height: 2,
-    backgroundColor: "#E5E7EB",
-    zIndex: 0,
+  searchActions: {
+    width: "100%",
+    gap: 8,
   },
-  stepLineActive: {
-    backgroundColor: BRAND_GREEN,
+  searchCancelBtn: {
+    backgroundColor: TEAL,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  searchCancelText: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#FFFFFF",
+    fontFamily: "RobotoMedium",
+  },
+  searchChangePickup: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    backgroundColor: "transparent",
+  },
+  searchChangePickupText: {
+    fontSize: 14,
+    fontWeight: "400",
+    color: "#6B7280",
+    fontFamily: "RobotoRegular",
   },
 
   // ── Driver card ─────────────────────────────────────────────────────────────

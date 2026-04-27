@@ -11,6 +11,7 @@ import DriverVehicle from '../models/DriverVehicle.js';
 import User from '../models/User.js';
 import Ride from '../models/Ride.js';
 import Payment from '../models/Payment.js';
+import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import VehicleType from '../models/VehicleType.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
@@ -1438,6 +1439,105 @@ export const rejectRide = asyncHandler(async (req, res) => {
     throw new NotFoundError('Ride');
   }
 
+  // Pre-acceptance branch (Bolt/Uber-style "Decline" on a pending offer):
+  // the ride has not been assigned yet but this driver has an active offer.
+  // Mark the offer rejected and, if no other drivers are still considering,
+  // immediately roll the ride forward to the next batch instead of waiting
+  // out the 60s offer window.
+  if (!ride.driver) {
+    const pendingOffer = await RideOffer.findOne({
+      ride_id: ride._id,
+      driver_id: driver._id,
+      status: 'pending',
+    });
+
+    if (!pendingOffer) {
+      // No active offer for this driver — nothing for them to reject.
+      throw new ValidationError('You have no pending offer for this ride');
+    }
+
+    pendingOffer.status = 'rejected';
+    pendingOffer.rejected_at = new Date();
+    await pendingOffer.save();
+
+    logger.info(
+      `offer_rejected: ride=${ride._id} driver=${driver._id} offer=${pendingOffer._id}`
+    );
+
+    // Update driver cancellation rate (declining counts toward it).
+    try {
+      const { updateDriverCancellationRate } = await import(
+        '../services/driverStatisticsService.js'
+      );
+      await updateDriverCancellationRate(driver._id);
+    } catch (statErr) {
+      logger.error(
+        `Failed to update driver cancellation rate: ${statErr.message}`
+      );
+    }
+
+    // If any other drivers still have pending offers, let the existing
+    // dispatchRide timeout play out — we don't want to undercut a parallel
+    // accept that's mid-flight.
+    const remainingPending = await RideOffer.countDocuments({
+      ride_id: ride._id,
+      status: 'pending',
+    });
+
+    if (
+      remainingPending === 0 &&
+      ['searching', 'requested'].includes(ride.status) &&
+      !ride.isScheduled
+    ) {
+      // Fast-path: reach the next driver immediately. We exclude everyone
+      // who's already been offered (preferred driver included) via
+      // notifiedDriverIds so we don't loop back to the same person.
+      setImmediate(() => {
+        (async () => {
+          try {
+            const fresh = await Ride.findById(ride._id)
+              .populate('rider', 'name phone profileImage rating deviceToken')
+              .populate('vehicleType');
+            if (!fresh || fresh.driver) return;
+            if (!['searching', 'requested'].includes(fresh.status)) return;
+
+            const excludeIds = (fresh.notifiedDriverIds || []).map((id) =>
+              id.toString()
+            );
+            const next = await rideMatchingService.findAndMatchDrivers(
+              fresh,
+              10,
+              5,
+              excludeIds
+            );
+            if (next.length > 0) {
+              logger.info(
+                `rejectRide fast-path: rolling ride ${fresh._id} to ${next.length} fresh driver(s) ` +
+                  `after decline by ${driver._id}`
+              );
+              await dispatchRide(fresh, next);
+            } else {
+              logger.info(
+                `rejectRide fast-path: no fresh drivers after decline for ride ${fresh._id}`
+              );
+              await cancelUnacceptedRide(fresh._id);
+            }
+          } catch (e) {
+            logger.error(
+              `rejectRide fast-path failed for ride ${ride._id}: ${e.message}`
+            );
+          }
+        })();
+      });
+    }
+
+    return res.json({
+      status: 'success',
+      message: 'Ride declined',
+      data: { rideId: ride._id.toString(), offerId: pendingOffer._id.toString() },
+    });
+  }
+
   // Check if driver is assigned to this ride
   if (String(ride.driver) !== String(driver._id)) {
     throw new ValidationError('You are not assigned to this ride');
@@ -1494,6 +1594,24 @@ export const rejectRide = asyncHandler(async (req, res) => {
 
   // If ride is assigned but trip not started, driver can bail — return ride to matching pool
   if (ride.status === 'accepted' || ride.status === 'driver_en_route') {
+    try {
+      const riderId = ride.rider?._id ?? ride.rider;
+      const fareAmount = ride.fare?.totalFare ?? 0;
+      if (riderId && fareAmount > 0 && ride.paymentMethod === 'wallet') {
+        const hasHold = await UserWalletTransaction.findOne({
+          idempotencyKey: `hold:${ride._id}`,
+          type: 'hold',
+        }).lean();
+        if (hasHold) {
+          const { processCancellation } = await import('../services/escrowWalletService.js');
+          await processCancellation(ride._id, riderId, null, fareAmount, 'driverCancel');
+          logger.info(`Escrow released for driver-rejected ride ${ride._id}`);
+        }
+      }
+    } catch (escrowErr) {
+      logger.error(`Escrow release failed for driver-rejected ride ${ride._id}: ${escrowErr.message}`);
+    }
+    ride.paymentStatus = 'pending';
     ride.driver = null;
     ride.status = 'searching';
     ride.acceptedByDriver = false;
@@ -2118,11 +2236,19 @@ export const completeRide = asyncHandler(async (req, res) => {
     },
   }).catch((err) => logger.warn('[Learn]', err.message));
 
+  const { getSettings } = await import('../services/settingsService.js');
+  const s = await getSettings();
+
   res.json({
     status: 'success',
     message: 'Ride completed successfully',
     data: {
       ride: formatRideForDriver(ride),
+      fareBreakdown: {
+        baseFare: ride.fare?.totalFare ?? 0,
+        serviceCharge: s?.fees?.riderServiceCharge ?? 100,
+        total: (ride.fare?.totalFare ?? 0) + (s?.fees?.riderServiceCharge ?? 100),
+      },
     },
   });
 });

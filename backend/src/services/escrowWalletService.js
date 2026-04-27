@@ -177,12 +177,16 @@ export async function holdRideFunds(riderId, rideId, fareAmount) {
   const existing = await UserWalletTransaction.findOne({ idempotencyKey });
   if (existing) return existing;
 
-  // Ensure wallet exists and perform safe legacy sync if needed (see getOrCreateRiderWallet).
   await getOrCreateRiderWallet(riderId);
 
+  // Get service charge from settings and include in hold
+  const s = await getSettings();
+  const serviceCharge = s.fees.riderServiceCharge ?? 100;
+  const totalHold = fareAmount + serviceCharge;
+
   const wallet = await UserWallet.findOneAndUpdate(
-    { userId: riderId, userType: 'rider', frozen: false, availableBalance: { $gte: fareAmount } },
-    { $inc: { availableBalance: -fareAmount, heldBalance: fareAmount } },
+    { userId: riderId, userType: 'rider', frozen: false, availableBalance: { $gte: totalHold } },
+    { $inc: { availableBalance: -totalHold, heldBalance: totalHold } },
     { new: true }
   );
 
@@ -199,10 +203,10 @@ export async function holdRideFunds(riderId, rideId, fareAmount) {
     userId: riderId,
     rideId,
     type: 'hold',
-    amount: -fareAmount,
-    balanceBefore: wallet.availableBalance + fareAmount,
+    amount: -totalHold,
+    balanceBefore: wallet.availableBalance + totalHold,
     balanceAfter: wallet.availableBalance,
-    description: 'Fare held for ride',
+    description: `Fare ₦${fareAmount} + service charge ₦${serviceCharge} held for ride`,
     idempotencyKey,
   });
   return tx;
@@ -212,33 +216,22 @@ export async function holdRideFunds(riderId, rideId, fareAmount) {
  * Charge service charge when driver marks arrived. Idempotent by rideId. Amount from admin settings.
  */
 export async function chargeServiceFee(riderId, rideId) {
+  // Service charge is now bundled into holdRideFunds at booking time.
+  // This function is kept for backward compatibility but does nothing.
   const idempotencyKey = `service_charge:${rideId}`;
   const existing = await UserWalletTransaction.findOne({ idempotencyKey });
   if (existing) return existing;
-
-  const s = await getSettings();
-  const serviceCharge = s.fees.riderServiceCharge ?? 100;
-  const wallet = await UserWallet.findOneAndUpdate(
-    { userId: riderId, userType: 'rider', frozen: false, availableBalance: { $gte: serviceCharge } },
-    { $inc: { availableBalance: -serviceCharge, totalSpent: serviceCharge } },
-    { new: true }
-  );
-
-  if (!wallet) throw new EscrowWalletError('SERVICE_CHARGE_FAILED', 'Cannot charge service fee');
-
-  await syncLegacyUserBalanceFromWallet(riderId, wallet);
-
-  const tx = await UserWalletTransaction.create({
+  // Create a zero-amount record for idempotency so old code paths don't error
+  return UserWalletTransaction.create({
     userId: riderId,
     rideId,
     type: 'service_charge',
-    amount: -serviceCharge,
-    balanceBefore: wallet.availableBalance + serviceCharge,
-    balanceAfter: wallet.availableBalance,
-    description: 'Service charge — driver arrived',
+    amount: 0,
+    balanceBefore: 0,
+    balanceAfter: 0,
+    description: 'Service charge bundled into ride hold',
     idempotencyKey,
   });
-  return tx;
 }
 
 /**
@@ -252,6 +245,14 @@ export async function settleRide(rideId, riderId, driverUserId, fareAmount) {
 
   const breakdown = await calculateFareBreakdown(fareAmount);
 
+  // Recover actual hold amount (fare + service charge) from hold tx
+  const holdTx = await UserWalletTransaction.findOne({
+    idempotencyKey: `hold:${rideId}`,
+    type: 'hold',
+  }).lean();
+  const totalHeld = holdTx ? Math.abs(Number(holdTx.amount) || 0) : fareAmount;
+  const serviceCharge = totalHeld - fareAmount;
+
   const runSettlement = async (useSession) => {
     const session = useSession ? await mongoose.startSession().catch(() => null) : null;
     const opts = session ? { session } : {};
@@ -261,7 +262,7 @@ export async function settleRide(rideId, riderId, driverUserId, fareAmount) {
 
       const riderWallet = await UserWallet.findOneAndUpdate(
         { userId: riderId },
-        { $inc: { heldBalance: -fareAmount, totalSpent: fareAmount } },
+        { $inc: { heldBalance: -totalHeld, totalSpent: totalHeld } },
         { new: true, ...opts }
       );
 
@@ -273,10 +274,13 @@ export async function settleRide(rideId, riderId, driverUserId, fareAmount) {
             userId: riderId,
             rideId,
             type: 'fare_debit',
-            amount: -fareAmount,
-            balanceBefore: riderWallet.heldBalance + fareAmount,
+            amount: -totalHeld,
+            balanceBefore: riderWallet.heldBalance + totalHeld,
             balanceAfter: riderWallet.heldBalance,
-            description: 'Ride fare paid',
+            description:
+              serviceCharge > 0
+                ? `Ride paid (₦${fareAmount} fare + ₦${serviceCharge} service)`
+                : 'Ride fare paid',
             idempotencyKey,
             status: 'completed',
           },

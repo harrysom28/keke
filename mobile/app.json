@@ -17,7 +17,9 @@
       "bundleIdentifier": "com.keke.app",
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
-        "NSContactsUsageDescription": "We need access to your contacts to help you share rides with friends."
+        "NSContactsUsageDescription": "We need access to your contacts to help you share rides with friends.",
+        "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to take photos for document and vehicle verification.",
+        "NSPhotoLibraryUsageDescription": "Allow $(PRODUCT_NAME) to access your photos for document and vehicle verification."
       }
     },
     "android": {
@@ -32,7 +34,10 @@
         "ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.READ_CONTACTS"
+        "android.permission.READ_CONTACTS",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ],
       "package": "com.keke.app",
       "config": {
@@ -49,6 +54,13 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to access your photos for document and vehicle verification.",
+          "cameraPermission": "Allow $(PRODUCT_NAME) to take photos for document and vehicle verification."
+        }
+      ],
       [
         "expo-location",
         {

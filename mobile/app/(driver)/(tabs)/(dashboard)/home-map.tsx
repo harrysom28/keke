@@ -55,6 +55,7 @@ import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import Svg, { Path } from "react-native-svg";
+import { consumeInitialDriverRouteRedirect } from "@/utils/driverInitialRoute";
 
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
@@ -78,6 +79,20 @@ export default function HomeScreen() {
   const emergencySheetRef = useRef<BottomSheetMethods>(null);
   const { user } = useSelector(AuthState);
   const dispatch = useDispatch();
+
+  // Cold-start guard: if Expo Router restored this screen as the entry route
+  // (e.g. dev reload, deep link with no notification context), bounce back to
+  // the dashboard home. Intentional in-session pushes (button tap, ride-offer
+  // notification handler) run after the initial route is already marked
+  // handled, so they fall through and render normally.
+  const [initialRedirecting, setInitialRedirecting] = useState(() =>
+    consumeInitialDriverRouteRedirect()
+  );
+  useEffect(() => {
+    if (!initialRedirecting) return;
+    router.replace("/(driver)/(tabs)/(dashboard)/home");
+    setInitialRedirecting(false);
+  }, [initialRedirecting]);
   // ref
 
   const newRideSheetRef = useRef<BottomSheetMethods>(null);
@@ -657,6 +672,14 @@ export default function HomeScreen() {
       getActiveRide();
     },
   });
+
+  if (initialRedirecting) {
+    return (
+      <View style={tw`flex-1 bg-white items-center justify-center`}>
+        <ActivityIndicator size="large" color={tw.color("base-green")} />
+      </View>
+    );
+  }
 
   return (
     <>

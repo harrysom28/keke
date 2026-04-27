@@ -13,6 +13,7 @@
 import * as WebBrowser from "expo-web-browser";
 import { Linking } from "react-native";
 import apiClient from "@/utils/apiClient";
+import { invalidateWalletCache } from "@/utils/walletCache";
 
 /** Compatible with react-native-flash-message showMessage and safeShowMessage */
 export type ShowMessageFn = (opts: {
@@ -90,6 +91,7 @@ export async function openPaymentBrowser({
     if (reference) {
       try {
         await apiClient.post("payment/verify-wallet-topup", { reference });
+        invalidateWalletCache();
         console.log("✅ verify-wallet-topup succeeded for ref:", reference);
       } catch (e: unknown) {
         const err = e as { response?: { data?: unknown } };

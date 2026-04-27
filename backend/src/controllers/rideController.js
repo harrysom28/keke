@@ -41,8 +41,20 @@ const RIDER_MATCH_SEARCH_RADIUS_KM = 10;
  * Request ride - matches mobile app endpoint /api/booking/request-ride
  */
 export const requestRide = asyncHandler(async (req, res) => {
-  const { pickupLocation, dropoffLocation, vehicleTypeId, paymentMethod, promoCode, scheduledAt } = req.body;
+  const {
+    pickupLocation,
+    dropoffLocation,
+    vehicleTypeId,
+    paymentMethod,
+    promoCode,
+    scheduledAt,
+    driverId: preferredDriverIdRaw,
+  } = req.body;
   const riderId = req.user._id;
+  const preferredDriverId =
+    typeof preferredDriverIdRaw === 'string' && preferredDriverIdRaw.trim()
+      ? preferredDriverIdRaw.trim()
+      : null;
 
   // Log received location data for debugging
   logger.info('📍 Ride request received:', {
@@ -212,6 +224,7 @@ export const requestRide = asyncHandler(async (req, res) => {
     },
     paymentMethod,
     promoCode: promoCode || null,
+    ...(preferredDriverId && { preferredDriver: preferredDriverId }),
     statusHistory: [{
       status: scheduledAt ? 'scheduled' : 'searching',
       timestamp: new Date(),
@@ -233,22 +246,73 @@ export const requestRide = asyncHandler(async (req, res) => {
   await ride.populate('rider', 'name phone profileImage rating');
   await ride.populate('vehicleType', 'name displayName image');
 
-  // Find and match drivers using ride matching algorithm
-  const matchedDrivers = await rideMatchingService.findAndMatchDrivers(
-    ride,
-    RIDER_MATCH_SEARCH_RADIUS_KM,
-    5
-  );
-  
-  logger.info(`Found ${matchedDrivers.length} matched drivers for ride ${ride._id}`);
+  // Round 1: if the rider hand-picked a driver, send the offer to that driver
+  // ALONE (Bolt/Uber-style sequential offer). If they let it expire/decline,
+  // `dispatchRide` already retries with a fresh batch (excluding everyone in
+  // `notifiedDriverIds`), so the trip rolls forward to the next available
+  // driver automatically.
+  let matchedDrivers = [];
+  let usedPreferredDriver = false;
 
-  if (matchedDrivers.length > 0) {
-    const notifiedIds = matchedDrivers
-      .map((m) => m.driver?._id || m.driver)
-      .filter(Boolean);
-    await Ride.findByIdAndUpdate(ride._id, { $set: { notifiedDriverIds: notifiedIds } });
-    ride.notifiedDriverIds = notifiedIds;
+  if (preferredDriverId) {
+    try {
+      const preferred = await Driver.findById(preferredDriverId).populate(
+        'user',
+        'name deviceToken fcm_token role'
+      );
+
+      const rideVehicleTypeId =
+        ride.vehicleType?._id?.toString() || ride.vehicleType?.toString();
+      const preferredVehicleTypeId =
+        preferred?.vehicleDetails?.vehicleType?._id?.toString() ||
+        preferred?.vehicleDetails?.vehicleType?.toString();
+
+      const sameVehicle =
+        !!rideVehicleTypeId &&
+        !!preferredVehicleTypeId &&
+        preferredVehicleTypeId === rideVehicleTypeId;
+
+      if (
+        preferred &&
+        preferred.isAvailable &&
+        preferred.isOnline &&
+        sameVehicle &&
+        String(preferred.user?.role || '') === 'driver'
+      ) {
+        // dispatchRide expects [{ driver, score, distance }] — score/distance
+        // are unused for single-target dispatch.
+        matchedDrivers = [{ driver: preferred, score: 100, distance: 0 }];
+        usedPreferredDriver = true;
+      } else {
+        logger.info(
+          `requestRide: preferred driver ${preferredDriverId} unavailable for ride ${ride._id} ` +
+            `(found=${!!preferred} online=${preferred?.isOnline} avail=${preferred?.isAvailable} ` +
+            `vehicleMatch=${sameVehicle}) — falling back to broadcast`
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        `requestRide: failed to resolve preferred driver ${preferredDriverId} for ride ${ride._id}: ${err.message}`
+      );
+    }
   }
+
+  if (matchedDrivers.length === 0) {
+    matchedDrivers = await rideMatchingService.findAndMatchDrivers(
+      ride,
+      RIDER_MATCH_SEARCH_RADIUS_KM,
+      5
+    );
+  }
+
+  logger.info(
+    `Ride ${ride._id} dispatching to ${matchedDrivers.length} driver(s) ` +
+      `(preferred=${usedPreferredDriver})`
+  );
+
+  // NOTE: do NOT pre-fill `notifiedDriverIds` here. `dispatchRide` adds the
+  // drivers it actually offered to via $addToSet, which is what the round-2
+  // fallback (inside dispatchRide's setTimeout) relies on to skip them.
 
   // Sequential driver offers (FCM + Pusher + Socket.io), background — instant HTTP response for rider
   if (!ride.isScheduled && (ride.status === 'searching' || ride.status === 'requested')) {

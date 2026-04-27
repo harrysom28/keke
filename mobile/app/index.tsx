@@ -11,6 +11,7 @@ import { resetSubscription } from "@/store/AppSlice";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import { AppContext } from "@/app/context";
+import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
 
 const Index = () => {
   const rootNavigationState = useRootNavigationState();
@@ -36,6 +37,7 @@ const Index = () => {
     if (roleLoaded && user?.profile?.role) {
       console.log(user?.profile?.role, "idx");
       if (user?.profile?.role === "driver") {
+        markInitialDriverRouteHandled();
         router.replace("/(driver)/(tabs)/(dashboard)/home");
       } else {
         router.replace("/(app)/(tabs)/(home)/home");

@@ -246,17 +246,26 @@ const DriverInfo = () => {
   const { apiConfig } = useContext(AppContext);
   const { user } = useSelector(AuthState);
   const router = useRouter();
-  const { name: nameFromParams } = useLocalSearchParams<{ name?: string }>();
-  const [index, setIndex] = useState(0);
+  const { name: nameFromParams, initialIndex: initialIndexParam } = useLocalSearchParams<{ name?: string; initialIndex?: string }>();
+
+  // If an initialIndex param was passed (e.g. from Account Settings "jump to step"),
+  // parse it and derive the matching step number for the upload stages (index >= 3).
+  const parsedInitialIndex = (() => {
+    const n = parseInt(initialIndexParam ?? "", 10);
+    return Number.isFinite(n) && n >= 0 && n <= 6 ? n : 0;
+  })();
+  const initialStep = parsedInitialIndex >= 3 ? parsedInitialIndex - 1 : 1;
+
+  const [index, setIndex] = useState(parsedInitialIndex);
   const [current, setCurrent] = useState(Tab[0]);
-  const { selectedImage, showImagePicker, clearImage } = useImagePicker({
+  const { selectedImage, showImagePicker, showImagePickerWithOptions, clearImage } = useImagePicker({
     filetype: "image",
   });
   const [selected, setSelected] = useState<any>(selectedImage);
   const [currentIndex, setcurrentIndex] = useState({
-    step: 1,
+    step: initialStep,
     total: 5,
-    btn: "Next",
+    btn: parsedInitialIndex >= 3 ? "Continue" : "Next",
   });
   
   // Get name from route params, user profile, or empty string
@@ -981,7 +990,7 @@ const DriverInfo = () => {
           </Text>
           {selected === null ? (
             <TouchableOpacity
-              onPress={showImagePicker}
+              onPress={showImagePickerWithOptions}
               style={tw.style(
                 `flex-col mt-5 justify-center items-center rounded-[40px] border-[6px] border-base-green border-dashed`,
                 { height: verticalScale(180) }
@@ -1028,7 +1037,7 @@ const DriverInfo = () => {
           )}
 
           <TouchableOpacity
-            onPress={showImagePicker}
+            onPress={showImagePickerWithOptions}
             disabled={selected === null}
             style={tw.style(
               `flex-row justify-center items-center px-12 border border-base-green rounded-[8px]`,

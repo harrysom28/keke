@@ -761,8 +761,27 @@ const SharedAccountSettings = ({ type }: Props) => {
                 <TouchableOpacity
                   activeOpacity={0.8}
                   onPress={() => {
-                    // Open the actual driver setup form (license, vehicle, bank, etc.). It lives at (auth)/driverinfo; back from there returns to driver app.
-                    router.navigate("/driverinfo");
+                    // Navigate directly to the first incomplete setup step instead of
+                    // always starting the wizard from page 1.
+                    const steps = setupStatus?.steps ?? [];
+                    const firstIncomplete = steps.find((s) => !s.completed);
+                    if (!firstIncomplete) {
+                      // Everything complete — open the full form to let the driver edit
+                      router.navigate("/driverinfo");
+                      return;
+                    }
+                    const stepToIndex: Record<string, string> = {
+                      license: "3",        // driver license image upload
+                      vehicle_details: "0", // personal info + vehicle details
+                      vehicle_images: "6",  // vehicle photos
+                    };
+                    if (firstIncomplete.id === "bank_account") {
+                      // Bank account is managed in Daily Activities
+                      router.navigate("/(driver)/dailyActivities");
+                      return;
+                    }
+                    const idx = stepToIndex[firstIncomplete.id] ?? "0";
+                    router.navigate(`/driverinfo?initialIndex=${idx}` as any);
                   }}
                   style={tw`bg-base-green py-3.5 flex-row items-center justify-center gap-x-2`}
                 >

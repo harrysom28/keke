@@ -6,6 +6,7 @@
  */
 
 export const NIGERIAN_CITIES = [
+  { slug: 'lagos', name: 'Lagos', state: 'Lagos', center: { lat: 6.5000, lng: 3.4000 }, radiusKm: 45, tier: 1 },
   { slug: 'lagos-island', name: 'Lagos Island', state: 'Lagos', center: { lat: 6.4541, lng: 3.3947 }, radiusKm: 15, tier: 1 },
   { slug: 'lagos-mainland', name: 'Lagos Mainland', state: 'Lagos', center: { lat: 6.5244, lng: 3.3792 }, radiusKm: 20, tier: 1 },
   { slug: 'abuja', name: 'Abuja', state: 'FCT', center: { lat: 9.0765, lng: 7.3986 }, radiusKm: 25, tier: 1 },

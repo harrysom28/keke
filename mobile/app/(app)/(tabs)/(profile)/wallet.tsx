@@ -28,6 +28,11 @@ import apiClient from "@/utils/apiClient";
 import * as Clipboard from "expo-clipboard";
 import { PaymentWebViewModal } from "@/components/PaymentWebViewModal";
 import { useKeyboardInset } from "@/hooks/useKeyboardInset";
+import {
+  getCachedWallet,
+  invalidateWalletCache,
+  setCachedWallet,
+} from "@/utils/walletCache";
 
 interface Transaction {
   payment_id: string;
@@ -89,16 +94,18 @@ const WalletScreen = () => {
   useEffect(() => {
     void Promise.all([fetchTransactions(), fetchWalletSummary()]);
   }, []);
-  const fetchWalletSummary = async () => {
+  const fetchWalletSummary = async (force = false) => {
     setWalletSummaryLoading(true);
     try {
-      const { data } = await apiClient.get("wallet");
-      const walletData = data?.data || {};
+      const cached = force ? null : getCachedWallet<any>();
+      const res = cached ?? (await apiClient.get("wallet"));
+      if (!cached) setCachedWallet(res);
+      const walletData = res?.data?.data || {};
       const available = Number(walletData.availableBalance ?? walletData.balance ?? 0);
       const held = Number(walletData.heldBalance ?? 0);
       setWalletAvailableBalance(Number.isFinite(available) ? available : 0);
       setWalletHeldBalance(Number.isFinite(held) ? held : 0);
-    } catch (error) {
+    } catch (error: any) {
       if (error?.response?.data?.message) {
         showMessage({ type: "danger", message: String(error.response.data.message) });
       }
@@ -164,7 +171,8 @@ const WalletScreen = () => {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchTransactions(), fetchWalletSummary(), getCurrentUser()]);
+    invalidateWalletCache();
+    await Promise.all([fetchTransactions(), fetchWalletSummary(true), getCurrentUser()]);
     setRefreshing(false);
   };
 
