@@ -39,14 +39,18 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       NODE_ENV: production
-      PORT: 8000
-      MONGODB_URI: mongodb://admin:password123@mongodb:27017/keke-ride-hailing?authSource=admin
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      PORT: "8000"
       TRUST_PROXY: "1"
+      # These can be overridden by Dokploy / .env at deploy time
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:password123@mongodb:27017/keke-ride-hailing?authSource=admin}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
     depends_on:
       - mongodb
       - redis

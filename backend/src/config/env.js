@@ -2,15 +2,18 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { existsSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Load .env file from project root (two levels up from src/config)
+// Load .env file from project root (two levels up from src/config).
+// When deploying via Dokploy / Docker the file won't exist — env vars are
+// injected by the platform, so we only load the file when it's present.
 const envPath = join(__dirname, '../../.env');
-
-// Load environment variables
-dotenv.config({ path: envPath });
+if (existsSync(envPath)) {
+  dotenv.config({ path: envPath });
+}
 
 // Verify required environment variables
 const requiredEnvVars = ['MONGODB_URI', 'JWT_SECRET', 'JWT_REFRESH_SECRET'];
