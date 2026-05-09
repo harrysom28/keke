@@ -40,7 +40,7 @@ async function handleChargeSuccess(event, ip) {
   const amountKobo = Number(data.amount);
   const amountNaira = amountKobo / 100;
   const metadata = data.metadata || {};
-  const channel = (data.authorization?.channel || '').toLowerCase();
+  const channel = (data.channel || data.authorization?.channel || '').toLowerCase();
   const customerCode = data.customer?.customer_code;
 
   paystackLog('info', 'Paystack charge.success', {
