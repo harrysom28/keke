@@ -1,6 +1,7 @@
 import {
   ActivityIndicator,
   Pressable,
+  ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
@@ -110,7 +111,11 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
       disableKeyboardHandling={false}
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
-      <View>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
+        showsVerticalScrollIndicator={false}
+      >
         <View
           style={tw.style(
             `flex-row items-center bg-[#F6F6F6] w-[99%] py-3 px-4 mb-6 rounded-t-[16px]`,
@@ -170,7 +175,7 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
             </Text>
           )}
         </Pressable>
-      </View>
+      </ScrollView>
     </BottomSheet>
   );
 };

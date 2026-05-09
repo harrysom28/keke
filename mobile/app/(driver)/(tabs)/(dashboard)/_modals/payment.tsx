@@ -2,6 +2,7 @@ import { AntDesign, Ionicons } from "@expo/vector-icons";
 import {
   BackHandler,
   Image,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -124,7 +125,11 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
       {display === "payment" ? (
         <ConfirmPayment bottomSheetRef={bottomSheetRef} />
       ) : (
-        <View>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
+          showsVerticalScrollIndicator={false}
+        >
           <View
             style={tw`flex-row items-center justify-between px-4 py-4 bg-[#F6F6F6] rounded-t-[16px]`}
           >
@@ -222,7 +227,7 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
               </Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </ScrollView>
       )}
     </BottomSheet>
   );

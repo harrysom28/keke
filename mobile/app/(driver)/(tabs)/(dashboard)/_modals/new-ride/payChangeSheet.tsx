@@ -3,6 +3,7 @@ import {
   BackHandler,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -96,6 +97,11 @@ const RequestChangeModal = ({
             { marginBottom: keyboardInset },
           ]}
         >
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
+            showsVerticalScrollIndicator={false}
+          >
           <View
             style={tw.style(
               `flex-row items-center justify-between bg-[#F6F6F6] w-[99%] py-3 px-4 mb-6 rounded-t-[16px]`,
@@ -153,6 +159,7 @@ const RequestChangeModal = ({
               </Text>
             )}
           </TouchableOpacity>
+          </ScrollView>
         </View>
       </View>
     </Modal>

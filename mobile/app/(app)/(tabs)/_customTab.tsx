@@ -1,4 +1,4 @@
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
 import React, { ReactElement } from "react";
 import Svg, { Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -183,7 +183,15 @@ const BottomTabBar = ({
           tw.style(
             `flex-row justify-between rounded-t-[33px] items-end px-4 pt-2.5`
           ),
-          { paddingBottom: insets.bottom > 0 ? insets.bottom : 12 },
+          {
+            paddingBottom:
+              insets.bottom > 0
+                ? insets.bottom
+                : Platform.OS === "android"
+                ? 20
+                : 12,
+            minHeight: 64,
+          },
         ]}
       >
         {RIDER_TAB_ITEMS.map((tab) => (

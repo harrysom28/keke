@@ -8,6 +8,7 @@ import {
   Image,
   ImageBackground,
   Pressable,
+  ScrollView,
   StatusBar,
   Text,
   TouchableOpacity,
@@ -20,6 +21,7 @@ import { useDispatch, useSelector } from "react-redux";
 
 import tw from "@/lib/tailwind";
 import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface IUsers {
   title: string;
@@ -134,6 +136,7 @@ const Register = () => {
   const { registration } = useSelector(AuthState);
   const [current, setCurrent] = useState<string>(registration?.type);
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const handleSelect = useCallback(
     (type: IUsers["type"]) => {
@@ -147,67 +150,79 @@ const Register = () => {
     <ImageBackground
       source={require("@/assets/images/register-bg.png")}
       resizeMode="cover"
-      style={tw.style(`flex-1 flex-col gap-y-6 pb-[90px] text-white bg-white`, {
+      style={tw.style(`flex-1 flex-col text-white bg-white`, {
         width: WINDOW_WIDTH,
       })}
     >
       <StatusBar barStyle="light-content" />
 
-      <View style={tw`overflow-hidden`}>
-        <Image
-          source={require("@/assets/images/register.png")}
-          resizeMode="cover"
-          style={tw.style({
-            width: WINDOW_WIDTH,
-            height: WINDOW_HEIGHT * 0.6,
-          })}
-          accessibilityIgnoresInvertColors
-        />
-      </View>
-
-      <View
-        style={tw.style(` flex-row  text-white`, {
-          width: WINDOW_WIDTH,
+      <ScrollView
+        style={tw`flex-1`}
+        contentContainerStyle={tw.style(`flex-col gap-y-6`, {
+          paddingBottom: insets.bottom + 16,
         })}
+        showsVerticalScrollIndicator={false}
       >
-        <View style={tw.style(`flex-col  px-8 w-full`)}>
-          <Text
-            style={tw.style(`text-[#2a2a2a] text-xl`, {
-              fontFamily: "RobotoBold",
+        <View style={tw`overflow-hidden`}>
+          <Image
+            source={require("@/assets/images/register.png")}
+            resizeMode="cover"
+            style={tw.style({
+              width: WINDOW_WIDTH,
+              height: Math.min(WINDOW_HEIGHT * 0.45, 280),
             })}
-          >
-            Register as:
-          </Text>
+            accessibilityIgnoresInvertColors
+          />
+        </View>
 
-          <View style={tw`flex-col gap-y-4 my-5`}>
-            {Users.map((item) => (
-              <CheckItem
-                key={item.title}
-                item={item}
-                isActive={item.type === current}
-                onSelect={handleSelect}
-              />
-            ))}
+        <View
+          style={tw.style(` flex-row  text-white`, {
+            width: WINDOW_WIDTH,
+          })}
+        >
+          <View style={tw.style(`flex-col  px-8 w-full`)}>
+            <Text
+              style={tw.style(`text-[#2a2a2a] text-xl`, {
+                fontFamily: "RobotoBold",
+              })}
+            >
+              Register as:
+            </Text>
+
+            <View style={tw`flex-col gap-y-4 my-5`}>
+              {Users.map((item) => (
+                <CheckItem
+                  key={item.title}
+                  item={item}
+                  isActive={item.type === current}
+                  onSelect={handleSelect}
+                />
+              ))}
+            </View>
           </View>
         </View>
-      </View>
 
-      <View style={tw`flex-col gap-y-5 px-6`}>
-        <TouchableOpacity
-          onPress={() => router.push("/signup")}
-          style={tw`bg-base-green py-4 rounded-[8px]`}
-          accessibilityRole="button"
-          accessibilityLabel="Continue to sign up"
+        <View
+          style={tw.style(`flex-col gap-y-5 px-6`, {
+            paddingBottom: Math.max(insets.bottom, 16),
+          })}
         >
-          <Text
-            style={tw.style(`text-white text-base text-center`, {
-              fontFamily: "RobotoBold",
-            })}
+          <TouchableOpacity
+            onPress={() => router.push("/signup")}
+            style={tw`bg-base-green py-4 rounded-[8px]`}
+            accessibilityRole="button"
+            accessibilityLabel="Continue to sign up"
           >
-            Continue
-          </Text>
-        </TouchableOpacity>
-      </View>
+            <Text
+              style={tw.style(`text-white text-base text-center`, {
+                fontFamily: "RobotoBold",
+              })}
+            >
+              Continue
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     </ImageBackground>
   );
 };

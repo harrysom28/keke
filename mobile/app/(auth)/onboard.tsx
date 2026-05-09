@@ -9,7 +9,7 @@ import {
   View,
   Dimensions,
 } from "react-native";
-import { WINDOW_WIDTH, verticalScale } from "@/constants/Metrics";
+import { WINDOW_HEIGHT, WINDOW_WIDTH, verticalScale } from "@/constants/Metrics";
 import { useEffect, useRef, useState } from "react";
 
 import { AntDesign } from "@expo/vector-icons";
@@ -149,9 +149,11 @@ const Onboard = () => {
       <ImageBackground
         source={require("@/assets/images/onboard-bg.png")}
         style={tw.style(
-          `flex-1 flex-col justify-between py-[70px] bg-white text-white`,
+          `flex-1 flex-col justify-between bg-white text-white`,
           {
             width: WINDOW_WIDTH,
+            paddingTop: Math.min(70, WINDOW_HEIGHT * 0.09),
+            paddingBottom: 0,
           }
         )}
       >
@@ -177,7 +179,7 @@ const Onboard = () => {
               resizeMode="contain"
               style={tw.style({
                 width: WINDOW_WIDTH,
-                height: verticalScale(200),
+                height: Math.min(verticalScale(200), WINDOW_HEIGHT * 0.28),
               })}
             />
           </View>
@@ -211,7 +213,7 @@ const Onboard = () => {
         <View
           style={tw.style(
             `flex-col justify-between px-11 absolute bottom-6 left-0 right-0`,
-            { height: verticalScale(120), bottom: Math.max(insets.bottom + 6, 16) }
+            { minHeight: 80, bottom: Math.max(insets.bottom + 6, 16) }
           )}
         >
           <View style={tw`self-center flex-row items-center gap-x-[32px]`}>

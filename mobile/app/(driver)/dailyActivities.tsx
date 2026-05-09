@@ -4,9 +4,12 @@ import {
   Image,
   ImageBackground,
   Keyboard,
+  KeyboardAvoidingView,
   KeyboardTypeOptions,
   Modal,
+  Platform,
   Pressable,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -278,35 +281,46 @@ const DailyActivities = () => {
           </View>
         </View>
       </Modal>
-      <ImageBackground
-        style={tw.style(`bg-white`, {
-          flex: 1,
-        })}
-        source={require("@images/pattern-bg.png")}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
-        <StatusBar barStyle="light-content" />
-        <View style={tw.style(`bg-[#3C8F7CE6] mb-1 px-4 pt-14 pb-5 h-[188px]`)}>
-          <View style={tw`flex-row items-center justify-between w-[75%]`}>
-            <TouchableOpacity
-              onPress={() => router.back()}
-              style={tw`bg-black p-1 rounded-full`}
-            >
-              <AntDesign name="left" size={24} color="white" />
-            </TouchableOpacity>
-            <Text
-              style={tw.style(`text-white text-2xl`, {
-                fontFamily: "RobotoBold",
-              })}
-            >
-              Daily Activities
-            </Text>
+        <ImageBackground
+          style={tw.style(`bg-white`, {
+            flex: 1,
+          })}
+          source={require("@images/pattern-bg.png")}
+        >
+          <StatusBar barStyle="light-content" />
+          <View style={tw.style(`bg-[#3C8F7CE6] mb-1 px-4 pt-14 pb-5 h-[188px]`)}>
+            <View style={tw`flex-row items-center justify-between w-[75%]`}>
+              <TouchableOpacity
+                onPress={() => router.back()}
+                style={tw`bg-black p-1 rounded-full`}
+              >
+                <AntDesign name="left" size={24} color="white" />
+              </TouchableOpacity>
+              <Text
+                style={tw.style(`text-white text-2xl`, {
+                  fontFamily: "RobotoBold",
+                })}
+              >
+                Daily Activities
+              </Text>
+            </View>
           </View>
-        </View>
-        {loading ? (
-          <View>
-            <ActivityIndicator color={tw.color("base-green")} size={"large"} />
-          </View>
-        ) : (
+          <ScrollView
+            style={tw`flex-1`}
+            contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {loading ? (
+              <View>
+                <ActivityIndicator color={tw.color("base-green")} size={"large"} />
+              </View>
+            ) : (
           <View style={tw.style(`-mt-20 z-50 pt-4 pb-8 px-6`)}>
             <View
               style={tw.style(`flex-col px-3.5 py-10 bg-white rounded-[10px]`, {
@@ -469,8 +483,10 @@ const DailyActivities = () => {
               </Text>
             </Pressable>
           </View>
-        )}
-      </ImageBackground>
+            )}
+          </ScrollView>
+        </ImageBackground>
+      </KeyboardAvoidingView>
       <Portal>
         <BottomSheet
           index={-1}

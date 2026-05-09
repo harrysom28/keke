@@ -5,6 +5,7 @@ import {
   KeyboardTypeOptions,
   Platform,
   Pressable,
+  ScrollView,
   StatusBar,
   Text,
   TextInput,
@@ -223,66 +224,73 @@ const SharedCreateEmergencyContact = ({ params }) => {
         </View>
       </View>
       <KeyboardAvoidingView
-        behavior="position"
-        keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
-        <View style={tw`flex-col mt-14 gap-y-2 pt-4 pb-5 px-6`}>
-          <InputItem
-            value={state.name}
-            onChange={(name) => setState((prev) => ({ ...prev, name }))}
-            placeholder="Name of Contact"
-            processError={(text, setErrorState) => {
-              if (text.length > 0 && text.length < 5) {
-                setErrorState({
-                  status: true,
-                  text: "Too short! minumum length is 5",
-                });
-                setHasError(true);
-              } else {
-                setErrorState({ status: false, text: "" });
-                setHasError(false);
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={tw`flex-col mt-14 gap-y-2 pt-4 pb-5 px-6`}>
+            <InputItem
+              value={state.name}
+              onChange={(name) => setState((prev) => ({ ...prev, name }))}
+              placeholder="Name of Contact"
+              processError={(text, setErrorState) => {
+                if (text.length > 0 && text.length < 5) {
+                  setErrorState({
+                    status: true,
+                    text: "Too short! minumum length is 5",
+                  });
+                  setHasError(true);
+                } else {
+                  setErrorState({ status: false, text: "" });
+                  setHasError(false);
+                }
+              }}
+            />
+            <InputItem
+              value={state.phone_number}
+              onChange={(phone_number) =>
+                setState((prev) => ({ ...prev, phone_number }))
               }
-            }}
-          />
-          <InputItem
-            value={state.phone_number}
-            onChange={(phone_number) =>
-              setState((prev) => ({ ...prev, phone_number }))
-            }
-            type="number-pad"
-            placeholder="Contact Phone"
-            processError={(text, setErrorState) => {
-              if (text.length > 0 && !nigerianPhoneRegex.test(text.trim())) {
-                setErrorState({
-                  status: true,
-                  text: "Enter a valid number",
-                });
-                setHasError(true);
-              } else {
-                setErrorState({ status: false, text: "" });
-                setHasError(false);
-              }
-            }}
-          />
-        </View>
-      </KeyboardAvoidingView>
-      <Pressable
-        disabled={hasError}
-        onPress={handleSubmit}
-        style={tw`bg-base-green mt-14 mx-6 py-3.5`}
-      >
-        {loading ? (
-          <ActivityIndicator color="white" />
-        ) : (
-          <Text
-            style={tw.style(`text-center text-base text-white`, {
-              fontFamily: "RobotoRegular",
-            })}
+              type="number-pad"
+              placeholder="Contact Phone"
+              processError={(text, setErrorState) => {
+                if (text.length > 0 && !nigerianPhoneRegex.test(text.trim())) {
+                  setErrorState({
+                    status: true,
+                    text: "Enter a valid number",
+                  });
+                  setHasError(true);
+                } else {
+                  setErrorState({ status: false, text: "" });
+                  setHasError(false);
+                }
+              }}
+            />
+          </View>
+          <Pressable
+            disabled={hasError}
+            onPress={handleSubmit}
+            style={tw`bg-base-green mt-14 mx-6 py-3.5`}
           >
-            Save
-          </Text>
-        )}
-      </Pressable>
+            {loading ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <Text
+                style={tw.style(`text-center text-base text-white`, {
+                  fontFamily: "RobotoRegular",
+                })}
+              >
+                Save
+              </Text>
+            )}
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </ImageBackground>
   );
 };

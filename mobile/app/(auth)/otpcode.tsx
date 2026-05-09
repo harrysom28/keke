@@ -5,6 +5,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StatusBar,
   Text,
   TouchableOpacity,
@@ -262,19 +263,33 @@ const OtpCode = () => {
   };
 
   return (
-    <ImageBackground
-      source={require("@/assets/images/register-bg.png")}
-      style={tw.style(
-        `flex-1 flex-col justify-between py-[54px] px-6 text-white`,
-        {
-          width: WINDOW_WIDTH,
-        }
-      )}
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
     >
-      <View>
-        <StatusBar barStyle="dark-content" />
+      <ImageBackground
+        source={require("@/assets/images/register-bg.png")}
+        style={tw.style(`flex-1 flex-col text-white`, {
+          width: WINDOW_WIDTH,
+        })}
+      >
+        <ScrollView
+          style={tw`flex-1`}
+          contentContainerStyle={{
+            flexGrow: 1,
+            justifyContent: "space-between",
+            paddingTop: 54,
+            paddingBottom: 32,
+            paddingHorizontal: 24,
+          }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View>
+            <StatusBar barStyle="dark-content" />
 
-        <TouchableOpacity onPress={() => router.back()}>
+            <TouchableOpacity onPress={() => router.back()}>
           <Svg width="39" height="39" viewBox="0 0 39 39" fill="none">
             <Circle cx="19.5" cy="19.5" r="19" stroke="black" />
             <Path
@@ -355,23 +370,25 @@ const OtpCode = () => {
           </View>
         </View>
       </View>
-      <TouchableOpacity
-        onPress={() => handleConfirm()}
-        style={tw`bg-base-green py-4 rounded-[8px]`}
-      >
-        {loading ? (
-          <ActivityIndicator color="white" />
-        ) : (
-          <Text
-            style={tw.style(`text-white text-base text-center`, {
-              fontFamily: "RobotoBold",
-            })}
+          <TouchableOpacity
+            onPress={() => handleConfirm()}
+            style={tw`bg-base-green py-4 rounded-[8px]`}
           >
-            Verify
-          </Text>
-        )}
-      </TouchableOpacity>
-    </ImageBackground>
+            {loading ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <Text
+                style={tw.style(`text-white text-base text-center`, {
+                  fontFamily: "RobotoBold",
+                })}
+              >
+                Verify
+              </Text>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+      </ImageBackground>
+    </KeyboardAvoidingView>
   );
 };
 
