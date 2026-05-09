@@ -17,6 +17,7 @@ if (process.env.NODE_ENV === 'production' && process.env.SKIP_RATE_LIMIT === 'tr
 }
 
 import express from 'express';
+import { handlePaystackWebhook } from './controllers/paystackWebhookController.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
@@ -96,7 +97,6 @@ const paystackWebhookMiddleware = [
     next();
   },
   (req, res) => {
-    const { handlePaystackWebhook } = require('./controllers/paystackWebhookController.js');
     handlePaystackWebhook(req, res);
   },
 ];
