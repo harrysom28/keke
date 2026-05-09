@@ -24,6 +24,7 @@ import { protect, restrictTo } from '../middleware/auth.js';
 import { validationRules, validate } from '../middleware/validation.js';
 import { limiters } from '../middleware/rateLimiter.js';
 import { getRedisClient } from '../config/redis.js';
+import { handlePaystackWebhook } from '../controllers/paystackWebhookController.js';
 
 const router = express.Router();
 
@@ -146,5 +147,8 @@ router.get('/locations/drivers-passengers', protect, driverController.getLocatio
 
 // Tasks route (matching mobile app endpoint)
 router.get('/tasks/daily/', protect, driverController.getDailyTasks);
+
+// Paystack webhook - must be raw body, no auth
+router.post('/paystack/webhook', express.raw({ type: 'application/json' }), handlePaystackWebhook);
 
 export default router;
