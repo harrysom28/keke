@@ -201,7 +201,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
     },
   });
 
-  // Fire-and-forget: these should never block the API response (Railway can be slow / cold).
+  // Fire-and-forget: these should never block the API response (downstream services can be slow / cold).
   // If they hang, it causes client timeouts and "Message not sent" even though it saved.
   setImmediate(async () => {
     try {

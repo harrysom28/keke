@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from "react-native";
 import React, { ReactElement } from "react";
 import Svg, { Path } from "react-native-svg";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 
 import { AntDesign } from "@expo/vector-icons";
@@ -141,8 +141,9 @@ const TabItem = ({ item, currentRouteName }: TProps) => {
       <View
         style={tw.style(
           isFocused
-            ? `flex-col items-center justify-center h-[52px] w-[52px] bg-base-green rounded-full`
-            : `bg-transparent`
+            ? `flex-col items-center justify-center bg-base-green rounded-full`
+            : `bg-transparent`,
+          isFocused ? { width: 52, height: 52 } : {}
         )}
       >
         {icon(isFocused)}
@@ -173,15 +174,16 @@ const BottomTabBar = ({
     return null;
   }
   return (
-    <SafeAreaView
+    <View
       key={i18n.language ?? "en"}
-      edges={[]}
       style={tw.style(`bg-white`, { elevation: 32 })}
     >
       <View
         style={[
-          tw.style(`flex-row justify-between rounded-t-[33px] items-end px-4 pt-2.5`),
-          { paddingBottom: Math.max(insets.bottom, 8) },
+          tw.style(
+            `flex-row justify-between rounded-t-[33px] items-end px-4 pt-2.5`
+          ),
+          { paddingBottom: insets.bottom > 0 ? insets.bottom : 12 },
         ]}
       >
         {RIDER_TAB_ITEMS.map((tab) => (
@@ -192,7 +194,7 @@ const BottomTabBar = ({
           />
         ))}
       </View>
-    </SafeAreaView>
+    </View>
   );
 };
 

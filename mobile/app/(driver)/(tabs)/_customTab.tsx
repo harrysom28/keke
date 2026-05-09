@@ -2,6 +2,7 @@ import { Pressable, Text, View } from "react-native";
 import React, { ReactElement } from "react";
 import Svg, { Path } from "react-native-svg";
 import { useTranslation } from "react-i18next";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSelector } from "react-redux";
 
 import { router } from "expo-router";
@@ -147,8 +148,9 @@ const TabItem = ({ item, currentRouteName, showOfferBadge }: TProps) => {
         style={tw.style(
           `relative`,
           isFocused
-            ? `flex-col items-center justify-center h-[52px] w-[52px] bg-base-green rounded-full`
-            : `bg-transparent`
+            ? `flex-col items-center justify-center bg-base-green rounded-full`
+            : `bg-transparent`,
+          isFocused ? { width: 52, height: 52 } : {}
         )}
       >
         {icon(isFocused)}
@@ -189,6 +191,7 @@ const BottomTabBar = ({
   state?: { routes: { name: string }[]; index: number };
 }) => {
   const { i18n } = useTranslation();
+  const insets = useSafeAreaInsets();
   const { driverPendingRideOffer } = useSelector(AppDetailsState);
   const routeName = state?.routes?.[state?.index ?? 0]?.name ?? "";
   if (!state?.routes?.length) {
@@ -197,21 +200,27 @@ const BottomTabBar = ({
   return (
     <View
       key={i18n.language ?? "en"}
-      style={tw.style(
-        `flex-row justify-between rounded-t-[33px] items-center bg-white px-4 py-3.5`,
-        { elevation: 32 }
-      )}
+      style={tw.style(`bg-white`, { elevation: 32 })}
     >
-      {DRIVER_TAB_ITEMS.map((tab) => (
-        <TabItem
-          key={tab.routeMatch}
-          item={tab}
-          currentRouteName={routeName}
-          showOfferBadge={
-            tab.routeMatch === "home" && Boolean(driverPendingRideOffer)
-          }
-        />
-      ))}
+      <View
+        style={[
+          tw.style(
+            `flex-row justify-between rounded-t-[33px] items-end px-4 pt-2.5`
+          ),
+          { paddingBottom: insets.bottom > 0 ? insets.bottom : 12 },
+        ]}
+      >
+        {DRIVER_TAB_ITEMS.map((tab) => (
+          <TabItem
+            key={tab.routeMatch}
+            item={tab}
+            currentRouteName={routeName}
+            showOfferBadge={
+              tab.routeMatch === "home" && Boolean(driverPendingRideOffer)
+            }
+          />
+        ))}
+      </View>
     </View>
   );
 };

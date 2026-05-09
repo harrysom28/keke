@@ -101,7 +101,7 @@
       "router": {
         "origin": false
       },
-      "apiUrl": "https://charming-enthusiasm-production-8514.up.railway.app",
+      "apiUrl": "https://api.getkekeapp.com",
       "googleMapsApiKey": "",
       "googleClientId": "YOUR_GOOGLE_CLIENT_ID_HERE",
       "pusherKey": "1c30639ede328b1be2fc",

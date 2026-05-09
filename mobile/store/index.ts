@@ -90,6 +90,7 @@ const appRideStripTransform = createTransform(
         hasBookedRide: false,
         pendingOpenChatRideId: null,
         driverPendingRideOffer: false,
+        latest_notification: null,
         ride: {
           status: false,
           data: {},
@@ -117,6 +118,7 @@ const appRideStripTransform = createTransform(
         hasBookedRide: false,
         pendingOpenChatRideId: null,
         driverPendingRideOffer: false,
+        latest_notification: null,
         ride: {
           status: false,
           data: {},

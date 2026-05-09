@@ -8,7 +8,7 @@ const serviceAccount = JSON.parse(
   process.env.FIREBASE_SERVICE_ACCOUNT_JSON
 );
 
-// Railway (and some other platforms) can strip literal newlines from env vars.
+// Some hosting platforms strip literal newlines from env vars.
 // Firebase expects the private key to contain real newline characters.
 if (serviceAccount && typeof serviceAccount.private_key === "string") {
   serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");

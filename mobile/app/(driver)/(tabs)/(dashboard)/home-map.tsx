@@ -46,6 +46,13 @@ import PayChangeSheet from "./_modals/payChange";
 import { Portal } from "@gorhom/portal";
 import { TDriverActiveRide } from "@/types";
 import axios from "axios";
+import {
+  getActiveRideId,
+  getRideStatusLower,
+  isActiveRidePayloadStale,
+  isRestorableRideStatus,
+  isTerminalRideStatus,
+} from "@/utils/activeRidePayload";
 import { getGreeting } from "@/lib/getGreeting";
 import { router } from "expo-router";
 import { getErrorMessage } from "@/utils/errorHandler";
@@ -77,6 +84,7 @@ export default function HomeScreen() {
     useContext(AppContext);
   const isFocused = useIsFocused();
   const emergencySheetRef = useRef<BottomSheetMethods>(null);
+  const notificationEventMountGuardRef = useRef(false);
   const { user } = useSelector(AuthState);
   const dispatch = useDispatch();
 
@@ -352,68 +360,82 @@ export default function HomeScreen() {
       .get(DRIVER_ACTIVE_RIDE, apiConfig)
       .then(({ data }) => {
         console.log(data?.data, "ar");
-        const rideData = data?.data?.ride || data?.data || {};
-        if (Object.keys(rideData).length > 0) {
-          // Check if ride is cancelled or completed - treat as no active ride
-          const rideStatus = rideData?.status;
-          if (rideStatus === 'cancelled' || rideStatus === 'completed') {
-            console.log('Driver: Ride is cancelled or completed, clearing map', { status: rideStatus });
-            dispatch(setAppData({ driverPendingRideOffer: false }));
-            newRideSheetRef.current?.close();
-            setRide({});
-            setMaps({
-              origin: { latitude: 0, longitude: 0 },
-              destination: { latitude: 0, longitude: 0 },
-            });
-            setRouteKey((prev) => prev + 1);
-            routeFittedRef.current = false;
-            // Center map on user location when clearing route
-            if (hasValidLocation && mapRef.current) {
-              setTimeout(() => {
-                mapRef.current?.animateToRegion({
-                  latitude: location.latitude,
-                  longitude: location.longitude,
-                  ...mapDelta,
-                }, 500);
-                console.log('Driver map centered on user location after clearing cancelled/completed ride');
-              }, 100);
-            }
-            getPendingRide();
-            return;
-          }
-          
-          setOfferDeadlineMs(null);
-          setRide(rideData);
-          animateToMapDirections(rideData);
-          newRideSheetRef.current?.open();
-          const st = String(rideData?.status ?? "").toLowerCase();
-          const pendingOffer =
-            st === "requested" && !rideData?.accepted_by_driver;
-          dispatch(
-            setAppData({ driverPendingRideOffer: Boolean(pendingOffer) })
-          );
-        } else {
+        const rideDataRaw = data?.data?.ride || data?.data || {};
+        const rideData =
+          rideDataRaw &&
+          typeof rideDataRaw === "object" &&
+          !Array.isArray(rideDataRaw)
+            ? rideDataRaw
+            : {};
+
+        const rideRecord = rideData as Record<string, unknown>;
+
+        const clearDriverMapActiveRide = () => {
           dispatch(setAppData({ driverPendingRideOffer: false }));
           newRideSheetRef.current?.close();
           setRide({});
-          getPendingRide();
           setMaps({
             origin: { latitude: 0, longitude: 0 },
             destination: { latitude: 0, longitude: 0 },
           });
-          setRouteKey(prev => prev + 1); // Force MapDirections refresh
-          // Center map on user location when clearing route
+          setRouteKey((prev) => prev + 1);
+          routeFittedRef.current = false;
           if (hasValidLocation && mapRef.current) {
             setTimeout(() => {
-              mapRef.current?.animateToRegion({
-                latitude: location.latitude,
-                longitude: location.longitude,
-                ...mapDelta,
-              }, 500);
-              console.log('Driver map centered on user location after clearing route');
+              mapRef.current?.animateToRegion(
+                {
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                  ...mapDelta,
+                },
+                500
+              );
+              console.log(
+                "Driver map centered on user location after clearing active ride"
+              );
             }, 100);
           }
+          getPendingRide();
+        };
+
+        // Backend: driver active-ride should mirror the rider contract — no finished trip should be returned as active.
+
+        if (Object.keys(rideData).length === 0) {
+          clearDriverMapActiveRide();
+          return;
         }
+
+        const rideId = getActiveRideId(rideRecord);
+        if (!rideId) {
+          clearDriverMapActiveRide();
+          return;
+        }
+
+        if (isActiveRidePayloadStale(rideRecord)) {
+          clearDriverMapActiveRide();
+          return;
+        }
+
+        const rideStatus = getRideStatusLower(rideRecord);
+        if (isTerminalRideStatus(rideStatus) || !isRestorableRideStatus(rideStatus)) {
+          console.log("Driver: Ride terminal or not restorable, clearing map", {
+            status: rideStatus,
+          });
+          clearDriverMapActiveRide();
+          return;
+        }
+
+        setOfferDeadlineMs(null);
+        setRide(rideData as Partial<TDriverActiveRide>);
+        animateToMapDirections(rideData as Partial<TDriverActiveRide>);
+        newRideSheetRef.current?.open();
+        const st = String(rideData?.status ?? "").toLowerCase();
+        const pendingOffer =
+          st === "requested" &&
+          !(rideData as Partial<TDriverActiveRide>)?.accepted_by_driver;
+        dispatch(
+          setAppData({ driverPendingRideOffer: Boolean(pendingOffer) })
+        );
       })
       .catch((err) => {
         console.log(err?.response?.data);
@@ -540,6 +562,10 @@ export default function HomeScreen() {
     "chat_message",
   ];
   useEffect(() => {
+    if (!notificationEventMountGuardRef.current) {
+      notificationEventMountGuardRef.current = true;
+      return;
+    }
     if (!notificationEvent?.body) return;
     const subType = notificationEvent?.data?.subType ?? notificationEvent?.data?.sub_type ?? "";
     if (DRIVER_ALERT_SUBTYPES.includes(subType)) {

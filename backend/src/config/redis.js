@@ -20,7 +20,7 @@ const socketOpts = {
 
 /**
  * Create Redis client (does not connect — call ensureRedisConnected from server startup).
- * Prefer REDIS_URL (Railway, Render, Heroku Redis) over REDIS_HOST/PORT.
+ * Prefer REDIS_URL (managed Redis providers) over REDIS_HOST/PORT.
  */
 export const createRedisClient = () => {
   if (client) {
@@ -48,7 +48,7 @@ export const createRedisClient = () => {
 
   if (process.env.NODE_ENV === 'production' && !redisUrl && redisConfig.host === 'localhost') {
     logger.warn(
-      'REDIS_HOST is localhost in production — OTP will fail. Set REDIS_URL from your host Redis (e.g. Railway) or the private Redis hostname.'
+      'REDIS_HOST is localhost in production — OTP will fail. Set REDIS_URL from your managed Redis provider or the private Redis hostname.'
     );
   }
 

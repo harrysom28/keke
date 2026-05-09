@@ -25,17 +25,6 @@ if (__DEV__) {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('📋 Resolved API Base URL:', API_BASE_URL);
   console.log('📋 Full API URL (base):', getApiUrl());
-  
-  // Warn if hitting production
-  if (API_BASE_URL.includes('yourdomain.com') || (API_BASE_URL.includes('api.') && !API_BASE_URL.includes('10.0.2.2'))) {
-    console.error('⚠️  ⚠️  ⚠️  WARNING: Using PRODUCTION URL! ⚠️  ⚠️  ⚠️');
-    console.error('   This will trigger Sucuri CloudProxy challenges.');
-    console.error('   Expected: http://10.0.2.2:8000/api/');
-    console.error('   Current:', API_BASE_URL);
-    console.error('   Solution: RESTART Metro bundler and reload app!');
-  } else if (API_BASE_URL.includes('10.0.2.2:8000')) {
-    console.log('✅ Using LOCAL development URL (correct)');
-  }
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 }
 

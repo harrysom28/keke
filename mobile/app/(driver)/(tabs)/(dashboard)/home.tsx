@@ -42,6 +42,13 @@ import EmergencyModal from "@/app/(app)/(tabs)/(home)/_modals/emergencyModal";
 import { Portal } from "@gorhom/portal";
 import axios from "axios";
 import apiClient from "@/utils/apiClient";
+import {
+  getActiveRideId,
+  getRideStatusLower,
+  isActiveRidePayloadStale,
+  isRestorableRideStatus,
+  isTerminalRideStatus,
+} from "@/utils/activeRidePayload";
 import { getGreeting } from "@/lib/getGreeting";
 import { router } from "expo-router";
 import { postAcceptScheduledBooking } from "@/utils/acceptScheduledBooking";
@@ -107,6 +114,7 @@ const Home = () => {
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const { user } = useSelector(AuthState);
   const dispatch = useDispatch();
+  const notificationEventMountGuardRef = useRef(false);
 
   /** Session flag from backend; can stay true while on a job. */
   const sessionOnline = activity?.is_online ?? false;
@@ -333,6 +341,21 @@ const Home = () => {
           !Array.isArray(ridePayload)
             ? ridePayload
             : {};
+        const record = normalized as Record<string, unknown>;
+        const rideId = getActiveRideId(record);
+        if (Object.keys(normalized).length === 0 || !rideId) {
+          setActiveRide({});
+          return;
+        }
+        if (isActiveRidePayloadStale(record)) {
+          setActiveRide({});
+          return;
+        }
+        const st = getRideStatusLower(record);
+        if (isTerminalRideStatus(st) || !isRestorableRideStatus(st)) {
+          setActiveRide({});
+          return;
+        }
         setActiveRide(normalized as Partial<TDriverActiveRide>);
       })
       .catch((err) => {
@@ -624,6 +647,10 @@ const Home = () => {
     "chat_message",
   ];
   useEffect(() => {
+    if (!notificationEventMountGuardRef.current) {
+      notificationEventMountGuardRef.current = true;
+      return;
+    }
     if (!notificationEvent?.body) return;
     const subType = notificationEvent?.data?.subType ?? notificationEvent?.data?.sub_type ?? "";
     if (subType === "ride_requested") {

@@ -39,7 +39,7 @@ function isEmulatorOnlyUrl(url: string | undefined): boolean {
  * Trim slashes and strip a trailing `/api` so we never build `.../api/api/...`
  * when appending `api/` for SERVER_URL / apiClient baseURL.
  *
- * If the env value omits a scheme (e.g. `*.up.railway.app`), prepend `https://` so
+ * If the env value omits a scheme (e.g. a bare `host.example.com`), prepend `https://` so
  * composed URLs are absolute. Otherwise axios treats `host/api/...` as a path
  * relative to baseURL and the host is doubled: `.../api/host/api/...`.
  */

@@ -40,6 +40,13 @@ import {
 import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
 import { useDispatch, useSelector } from "react-redux";
 import apiClient from "@/utils/apiClient";
+import {
+  getActiveRideId,
+  getRideStatusLower,
+  isActiveRidePayloadStale,
+  isRestorableRideStatus,
+  isTerminalRideStatus,
+} from "@/utils/activeRidePayload";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import ActiveRideSheet from "./_modals/activeRide";
@@ -165,6 +172,8 @@ export default function HomeScreen() {
   const milestoneToastShownRef = useRef(false);
   /** Dedupe heavy UI (sheet open, map fit, trigger) when active-ride polls return the same logical state */
   const lastActiveRideUiKeyRef = useRef<string>("");
+  /** Skip first notificationEvent effect run so rehydrated stale latest_notification does not toast or trigger ride refresh */
+  const notificationEventMountGuardRef = useRef(false);
   /** Set to true right after confirm-ride succeeds so a null active-ride response doesn't immediately
    *  wipe state — the DB write may still be propagating (replica lag) or the first poll fires too fast. */
   const justBookedRef = useRef(false);
@@ -896,27 +905,61 @@ export default function HomeScreen() {
         // wrapper object { ride: null } when the backend returns no active ride,
         // making it look like a ride exists but with no ride_id.
         const rideData = data?.data?.ride || data?.ride || {};
+        const rideRecord = rideData as Record<string, unknown>;
+        const rideIdFromPayload = getActiveRideId(rideRecord);
+        const hasRidePayload = Object.keys(rideData).length > 0;
 
-        if (Object.keys(rideData).length > 0 && (rideData?.ride_id || rideData?._id)) {
-          const rideStatusRaw = rideData?.status;
-          const rideStatus =
-            typeof rideStatusRaw === "string" ? rideStatusRaw.toLowerCase() : String(rideStatusRaw || "").toLowerCase();
-          const terminalStatuses = ["completed", "cancelled", "rejected"];
-          /** Matches backend findActiveRideForRider statuses; include both raw DB values and
-           *  client-mapped aliases so the guard works regardless of which the API returns. */
-          const restorableStatuses = [
-            "requested",
-            "searching",       // raw DB status (mapped to "requested" by backend API)
-            "accepted",
-            "driver_en_route", // raw DB status (mapped to "accepted" by backend API)
-            "arrived",
-            "started",
-            "in-progress",
-            "in_progress",
-          ];
+        // Backend audit: `GET .../booking/active-ride` should return 404 or null/empty ride when
+        // the rider has no active trip. Returning finished rides under non-terminal statuses causes
+        // stale UI — verify server-side active-ride selection if ghosts persist after client guards.
 
-          if (terminalStatuses.includes(rideStatus)) {
-            if (rideStatus === "completed" && (rideData?.ride_id || rideData?._id)) {
+        const clearActiveRideUiIfAllowed = () => {
+          logger.debug("No active ride found or invalid data");
+          if (justBookedRef.current) {
+            logger.debug(
+              "Grace period active: skipping clear, retrying active-ride in 3 s"
+            );
+            setTimeout(getActiveRide, 3_000);
+            return;
+          }
+          if (
+            rideScreenRef.current === "SUMMARY" ||
+            rideScreenRef.current === "REVIEW"
+          ) {
+            logger.debug(
+              "No active ride but post-ride sheet flow is open, skipping clear"
+            );
+            return;
+          }
+          if (tripCompletedRef.current) {
+            logger.debug("Trip completed modal is showing, skipping clear");
+            return;
+          }
+          clearRideState();
+          activeRideSheetRef?.current?.close();
+        };
+
+        if (!hasRidePayload) {
+          clearActiveRideUiIfAllowed();
+        } else if (!rideIdFromPayload) {
+          logger.debug(
+            "Active ride payload missing ride_id/_id, clearing ride state"
+          );
+          clearActiveRideUiIfAllowed();
+        } else if (isActiveRidePayloadStale(rideRecord)) {
+          logger.debug("Active ride payload stale (>2h), clearing ride state", {
+            rideId: rideIdFromPayload,
+          });
+          clearRideState();
+          activeRideSheetRef?.current?.close();
+        } else {
+          const rideStatus = getRideStatusLower(rideRecord);
+
+          if (isTerminalRideStatus(rideStatus)) {
+            if (
+              (rideStatus === "completed" || rideStatus === "done") &&
+              rideIdFromPayload
+            ) {
               openPostRideSummary({
                 ...(rideData as object),
                 ride_id: rideData?.ride_id || rideData?._id,
@@ -926,14 +969,7 @@ export default function HomeScreen() {
               } as Partial<TRide> & Record<string, unknown>);
               return;
             }
-            logger.debug("Ride is terminal, clearing ride state", { status: rideStatus });
-            clearRideState();
-            activeRideSheetRef?.current?.close();
-            return;
-          }
-
-          if (!restorableStatuses.includes(rideStatus)) {
-            logger.debug("Active ride status not restorable on launch, clearing ride state", {
+            logger.debug("Ride is terminal, clearing ride state", {
               status: rideStatus,
             });
             clearRideState();
@@ -941,7 +977,18 @@ export default function HomeScreen() {
             return;
           }
 
-          // Use ride_id or _id
+          if (!isRestorableRideStatus(rideStatus)) {
+            logger.debug(
+              "Active ride status not restorable on launch, clearing ride state",
+              {
+                status: rideStatus,
+              }
+            );
+            clearRideState();
+            activeRideSheetRef?.current?.close();
+            return;
+          }
+
           const rideId = rideData?.ride_id || rideData?._id;
           // Exclude updatedAt — backend updates it on every dispatch attempt,
           // causing false uiChanged=true on every poll and re-opening the sheet.
@@ -999,31 +1046,6 @@ export default function HomeScreen() {
             }
             setTrigger(Math.random());
           }
-        } else {
-          logger.debug('No active ride found or invalid data');
-          if (justBookedRef.current) {
-            // We just confirmed a ride — the backend write may not yet be visible
-            // to this read (replica lag / first-poll race). Retry once after a
-            // short delay rather than wiping the freshly-booked UI state.
-            logger.debug('Grace period active: skipping clear, retrying active-ride in 3 s');
-            setTimeout(getActiveRide, 3_000);
-            return;
-          }
-          if (
-            rideScreenRef.current === "SUMMARY" ||
-            rideScreenRef.current === "REVIEW"
-          ) {
-            logger.debug(
-              "No active ride but post-ride sheet flow is open, skipping clear"
-            );
-            return;
-          }
-          if (tripCompletedRef.current) {
-            logger.debug("Trip completed modal is showing, skipping clear");
-            return;
-          }
-          clearRideState();
-          activeRideSheetRef?.current?.close();
         }
       })
       .catch((err) => {
@@ -1842,6 +1864,10 @@ export default function HomeScreen() {
   };
 
   useEffect(() => {
+    if (!notificationEventMountGuardRef.current) {
+      notificationEventMountGuardRef.current = true;
+      return;
+    }
     logger.debug("Notification event received", { event: notificationEvent });
     if (notificationEvent?.body !== "") {
       safeShowMessage({ message: notificationEvent?.body, type: "info" });
@@ -2518,9 +2544,7 @@ export default function HomeScreen() {
               style={tw.style(
                 `rounded-full flex-row items-center`,
                 {
-                  backgroundColor: "#E8F5F0",
-                  borderWidth: 1.5,
-                  borderColor: tw.color("base-green") ?? "#2E7D52",
+                  backgroundColor: tw.color("base-green") ?? "#3C8F7C",
                   paddingHorizontal: 18,
                   paddingVertical: 16,
                   shadowColor: "#000",
@@ -2535,11 +2559,11 @@ export default function HomeScreen() {
               <MaterialCommunityIcons
                 name="magnify"
                 size={22}
-                color={tw.color("base-green")}
+                color="#FFFFFF"
                 style={tw`mr-3`}
               />
               <Text
-                style={tw.style(`text-[15px] text-[#242E42]`, {
+                style={tw.style(`text-[15px] text-white`, {
                   fontFamily: "RobotoRegular",
                 })}
               >
