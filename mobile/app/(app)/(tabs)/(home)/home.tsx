@@ -487,7 +487,7 @@ export default function HomeScreen() {
       mapRef.current?.fitToCoordinates(
         [origin, destination],
         {
-          edgePadding: { top: 100, right: 60, bottom: 280, left: 60 },
+          edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
           animated: true,
         }
       );
@@ -1188,7 +1188,7 @@ export default function HomeScreen() {
           const distanceKm = haversineKm(newOrigin, newDest);
           if (distanceKm <= MAX_FIT_DISTANCE_KM) {
             (mapRef.current as any).fitToCoordinates?.([newOrigin, newDest], {
-              edgePadding: { top: 100, right: 50, bottom: 280, left: 50 },
+              edgePadding: { top: 80, right: 50, bottom: 60, left: 50 },
               animated: true,
             });
           } else {
@@ -1330,7 +1330,7 @@ export default function HomeScreen() {
       const distanceKm = haversineKm(o, d);
       if (distanceKm <= MAX_FIT_DISTANCE_KM && map.fitToCoordinates) {
         map.fitToCoordinates([o, d], {
-          edgePadding: { top: 100, right: 60, bottom: 280, left: 60 },
+          edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
           animated: true,
         });
       } else if (map.animateToRegion) {
@@ -2085,7 +2085,7 @@ export default function HomeScreen() {
             const distanceKm = haversineKm(o, d);
             if (distanceKm <= MAX_FIT_DISTANCE_KM) {
               mapRef.current.fitToCoordinates?.([o, d], {
-                edgePadding: { top: 100, right: 60, bottom: 280, left: 60 },
+                edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
                 animated: true,
               });
             } else {
