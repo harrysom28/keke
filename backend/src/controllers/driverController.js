@@ -568,6 +568,45 @@ export const updateLocation = asyncHandler(async (req, res) => {
   });
 });
 
+/** GeoJSON-style [lng, lat]; both must be finite numbers. */
+function hasValidLngLatCoordinates(coordinates) {
+  return (
+    Array.isArray(coordinates) &&
+    coordinates.length === 2 &&
+    Number.isFinite(Number(coordinates[0])) &&
+    Number.isFinite(Number(coordinates[1]))
+  );
+}
+
+function isDriverLocationRecordValid(driver) {
+  return (
+    driver &&
+    driver.user &&
+    driver.user._id &&
+    driver.currentLocation &&
+    hasValidLngLatCoordinates(driver.currentLocation.coordinates)
+  );
+}
+
+function mapDriverToLocation(driver) {
+  const coords = driver.currentLocation.coordinates;
+  return {
+    id: driver._id.toString(),
+    type: 'driver',
+    userId: driver.user._id.toString(),
+    name: driver.user.name,
+    phone: driver.user.phone,
+    image: driver.user.profileImage,
+    location: {
+      latitude: Number(coords[1]),
+      longitude: Number(coords[0]),
+      address: driver.currentLocation.address,
+      lastUpdated: driver.currentLocation.lastUpdated,
+    },
+    vehicle: driver.vehicleDetails,
+  };
+}
+
 /**
  * Get driver/passenger locations - GET /api/locations/drivers-passengers
  */
@@ -588,41 +627,74 @@ export const getLocations = asyncHandler(async (req, res) => {
       .populate('user', 'name phone profileImage')
       .select('currentLocation user vehicleDetails');
 
-    locations = drivers.map((driver) => ({
-      id: driver._id.toString(),
-      type: 'driver',
-      userId: driver.user._id.toString(),
-      name: driver.user.name,
-      phone: driver.user.phone,
-      image: driver.user.profileImage,
-      location: {
-        latitude: driver.currentLocation.coordinates[1],
-        longitude: driver.currentLocation.coordinates[0],
-        address: driver.currentLocation.address,
-        lastUpdated: driver.currentLocation.lastUpdated,
-      },
-      vehicle: driver.vehicleDetails,
-    }));
+    const validDrivers = drivers.filter((driver) => {
+      const ok = isDriverLocationRecordValid(driver);
+      if (!ok) {
+        logger.warn('getLocations: skipped driver with incomplete user or location data', {
+          driverId: driver?._id != null ? String(driver._id) : 'unknown',
+        });
+      }
+      return ok;
+    });
+
+    for (const driver of validDrivers) {
+      const driverId = driver?._id != null ? String(driver._id) : 'unknown';
+      try {
+        locations.push(mapDriverToLocation(driver));
+      } catch (err) {
+        logger.warn('getLocations: skipped driver mapping error', {
+          driverId,
+          message: err?.message,
+        });
+      }
+    }
   }
 
   if (type === 'passengers' && rideId) {
     // Get passenger location for a specific ride
     const ride = await Ride.findById(rideId).populate('rider', 'name phone profileImage currentLocation');
     if (ride && ride.rider) {
-      if (ride.rider.currentLocation) {
-        locations = [{
-          id: ride.rider._id.toString(),
-          type: 'passenger',
-          name: ride.rider.name,
-          phone: ride.rider.phone,
-          image: ride.rider.profileImage,
-          location: {
-            latitude: ride.rider.currentLocation.coordinates[1],
-            longitude: ride.rider.currentLocation.coordinates[0],
-            address: ride.rider.currentLocation.address,
-            lastUpdated: ride.rider.currentLocation.lastUpdated,
-          },
-        }];
+      const rider = ride.rider;
+      const riderId = rider?._id != null ? String(rider._id) : 'unknown';
+      const loc = rider.currentLocation;
+      const coords = loc?.coordinates;
+
+      const passengerLocationValid =
+        rider._id &&
+        loc &&
+        hasValidLngLatCoordinates(coords);
+
+      if (!passengerLocationValid) {
+        logger.warn('getLocations: skipped passenger with incomplete location data', {
+          riderId,
+          rideId: String(rideId),
+        });
+        locations = [];
+      } else {
+        try {
+          locations = [
+            {
+              id: rider._id.toString(),
+              type: 'passenger',
+              name: rider.name,
+              phone: rider.phone,
+              image: rider.profileImage,
+              location: {
+                latitude: Number(coords[1]),
+                longitude: Number(coords[0]),
+                address: loc.address,
+                lastUpdated: loc.lastUpdated,
+              },
+            },
+          ];
+        } catch (err) {
+          logger.warn('getLocations: skipped passenger mapping error', {
+            riderId,
+            rideId: String(rideId),
+            message: err?.message,
+          });
+          locations = [];
+        }
       }
     }
   }
