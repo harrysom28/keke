@@ -281,6 +281,17 @@ apiClient.interceptors.response.use(
           // Expected path: user already has an active ride. Do NOT log as error (it triggers redbox).
           if (__DEV__) console.warn('📥 Response 409 booking/confirm-ride (active ride already exists)');
         } else if (
+          typeof url === 'string' &&
+          url.includes('booking/confirm-ride') &&
+          typeof rawData === 'object' &&
+          rawData != null &&
+          (rawData as { code?: string }).code === 'INSUFFICIENT_BALANCE'
+        ) {
+          // Expected business rule — wallet below rider total. Client shows flash message; not an app bug.
+          if (__DEV__) {
+            console.warn('📥 booking/confirm-ride INSUFFICIENT_BALANCE (user needs top-up)');
+          }
+        } else if (
           status === 404 &&
           requestUsesNgrok &&
           typeof url === 'string' &&

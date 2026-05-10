@@ -33,15 +33,20 @@ interface Props {
     lat: number | null;
     lng: number | null;
   } | null;
+  /** Find Ride renders inside a Portal; `useIsFocused()` can stay false while the sheet is open. */
+  locationSheetActive?: boolean;
 }
 
-export const LocationView = ({ action, back, initialDropoff }: Props) => {
+export const LocationView = ({ action, back, initialDropoff, locationSheetActive = false }: Props) => {
   const insets = useCombinedSafeInsets();
   const isFocused = useIsFocused();
+  const screenLive = isFocused || locationSheetActive;
   const dispatch = useDispatch();
   const { ride } = useSelector(AppDetailsState);
   const { user } = useSelector(AuthState);
-  const { location: currentLocation, address: currentAddress } = useCurrentLocation({ isFocused });
+  const { location: currentLocation, address: currentAddress } = useCurrentLocation({
+    isFocused: screenLive,
+  });
   const { apiConfig } = useContext(AppContext);
   const [selected, setSelected] = useState<{
     pickup: string;
@@ -60,7 +65,7 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
 
   useEffect(() => {
     const initialDropoffName = initialDropoff?.name?.trim();
-    if (!isFocused || !initialDropoffName) return;
+    if (!screenLive || !initialDropoffName) return;
 
     const hasValidCoords =
       initialDropoff?.lat != null &&
@@ -129,10 +134,10 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
     return () => {
       cancelled = true;
     };
-  }, [isFocused, initialDropoff?.name, initialDropoff?.lat, initialDropoff?.lng, dispatch]);
+  }, [screenLive, initialDropoff?.name, initialDropoff?.lat, initialDropoff?.lng, dispatch]);
 
   useEffect(() => {
-    if (!isFocused) return;
+    if (!screenLive) return;
     // When user tapped "Change", don't refill from current location (avoids infinite loop)
     if (editingPickup) return;
 
@@ -172,15 +177,33 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
     };
 
     const rideData = ride?.data as IRide | undefined;
-    const reduxOrigin = rideData?.origin as { lat?: number; long?: number } | undefined;
+    const reduxOrigin = rideData?.origin as
+      | { lat?: string | number; long?: string | number; lng?: string | number; latitude?: string | number; longitude?: string | number }
+      | undefined;
+    const oLat = parseFloat(
+      String(reduxOrigin?.lat ?? reduxOrigin?.latitude ?? "")
+    );
+    const oLng = parseFloat(
+      String(
+        reduxOrigin?.long ??
+          reduxOrigin?.lng ??
+          reduxOrigin?.longitude ??
+          ""
+      )
+    );
+    const hasConcretePickupCoords =
+      Number.isFinite(oLat) &&
+      Number.isFinite(oLng) &&
+      oLat !== 0 &&
+      oLng !== 0;
+    const plat = Number(preciseLocation.lat);
+    const plng = Number(preciseLocation.long);
     const isSameLocation =
-      Number(reduxOrigin?.lat) === Number(preciseLocation.lat) &&
-      Number(reduxOrigin?.long) === Number(preciseLocation.long);
-    // Don't overwrite when user has selected a different place (has coords that differ from current)
-    const hasOtherOrigin =
-      reduxOrigin?.lat != null &&
-      reduxOrigin?.long != null &&
-      !isSameLocation;
+      hasConcretePickupCoords &&
+      Math.abs(oLat - plat) < 1e-7 &&
+      Math.abs(oLng - plng) < 1e-7;
+    // Don't overwrite when user already chose a real pickup elsewhere (empty draft lat/long must NOT block GPS default)
+    const hasOtherOrigin = hasConcretePickupCoords && !isSameLocation;
     if (hasOtherOrigin) return;
 
     if (!isSameLocation) {
@@ -209,7 +232,7 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
       })
       .catch(() => {});
   // Intentionally omit ride?.data to avoid loop: this effect dispatches setRideData, which would retrigger the effect.
-  }, [isFocused, editingPickup, currentLocation.latitude, currentLocation.longitude, currentAddress?.formattedAddress, currentAddress?.street, currentAddress?.city]);
+  }, [screenLive, editingPickup, currentLocation.latitude, currentLocation.longitude, currentAddress?.formattedAddress, currentAddress?.street, currentAddress?.city]);
 
   const handleUseCurrentLocation = async () => {
     if (currentLocation.latitude === 0 || currentLocation.longitude === 0) {
@@ -374,7 +397,7 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
       dLat !== 0 &&
       dLng !== 0;
 
-    if (!isFocused || !hasCoords) {
+    if (!screenLive || !hasCoords) {
       setFarePreview(null);
       setFareError(null);
       setFareLoading(false);
@@ -422,7 +445,7 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
     return () => {
       mounted = false;
     };
-  }, [isFocused, (ride?.data as any)?.origin?.lat, (ride?.data as any)?.origin?.long, (ride?.data as any)?.destination?.lat, (ride?.data as any)?.destination?.long]);
+  }, [screenLive, (ride?.data as any)?.origin?.lat, (ride?.data as any)?.origin?.long, (ride?.data as any)?.destination?.lat, (ride?.data as any)?.destination?.long]);
 
   const fareTotal = typeof farePreview?.riderTotal === "number" ? farePreview.riderTotal : Number(farePreview?.riderTotal || 0);
   const walletOk =
@@ -442,7 +465,7 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
       : 0;
 
   useEffect(() => {
-    if (!isFocused) return;
+    if (!screenLive) return;
     const userId = String(user?.profile?.user_id ?? "");
     if (!userId) return;
 
@@ -457,7 +480,7 @@ export const LocationView = ({ action, back, initialDropoff }: Props) => {
       });
 
     return unsub;
-  }, [isFocused, user?.profile?.user_id]);
+  }, [screenLive, user?.profile?.user_id]);
 
   // Deduplicate and limit to 3 most recent (by coordinates and normalized name)
   const recentPlacesDeduped = useMemo(() => {

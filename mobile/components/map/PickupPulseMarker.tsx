@@ -1,13 +1,16 @@
 import React, { useEffect, useRef } from "react";
-import { Animated, View, StyleSheet } from "react-native";
+import { Animated, StyleSheet, Text, View } from "react-native";
 import { Marker } from "react-native-maps";
 import type { LatLng } from "@/utils/polylineDecoder";
 
 interface PickupPulseMarkerProps {
   coordinate: LatLng;
+  etaLabel?: string;
+  /** Passed through for react-native-map-clustering */
+  cluster?: boolean;
 }
 
-export function PickupPulseMarker({ coordinate }: PickupPulseMarkerProps) {
+export function PickupPulseMarker({ coordinate, etaLabel, cluster }: PickupPulseMarkerProps) {
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -38,20 +41,32 @@ export function PickupPulseMarker({ coordinate }: PickupPulseMarkerProps) {
   });
 
   return (
-    <Marker coordinate={coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-      <View style={styles.container}>
-        {/* Pulse ring */}
-        <Animated.View
-          style={[
-            styles.pulse,
-            {
-              transform: [{ scale: pulseScale }],
-              opacity: pulseOpacity,
-            },
-          ]}
-        />
-        {/* Centre dot */}
-        <View style={styles.dot} />
+    <Marker
+      coordinate={coordinate}
+      anchor={{ x: 0.5, y: 0.5 }}
+      tracksViewChanges={Boolean(etaLabel)}
+      cluster={cluster}
+    >
+      <View style={[styles.container, etaLabel ? styles.containerWithEta : null]}>
+        <View style={styles.markerBody}>
+          <Animated.View
+            style={[
+              styles.pulse,
+              {
+                transform: [{ scale: pulseScale }],
+                opacity: pulseOpacity,
+              },
+            ]}
+          />
+          <View style={styles.dot} />
+        </View>
+        {etaLabel ? (
+          <View style={styles.etaPill}>
+            <Text style={styles.etaPillText} numberOfLines={1}>
+              {etaLabel}
+            </Text>
+          </View>
+        ) : null}
       </View>
     </Marker>
   );
@@ -61,10 +76,36 @@ const BRAND_GREEN = "#2E7D52";
 
 const styles = StyleSheet.create({
   container: {
+    alignItems: "center",
+    justifyContent: "flex-start",
+    overflow: "visible",
+  },
+  containerWithEta: {
+    paddingBottom: 4,
+  },
+  markerBody: {
     width: 40,
     height: 40,
     alignItems: "center",
     justifyContent: "center",
+  },
+  etaPill: {
+    marginTop: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: BRAND_GREEN,
+    maxWidth: 140,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.22,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  etaPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#fff",
   },
   pulse: {
     position: "absolute",

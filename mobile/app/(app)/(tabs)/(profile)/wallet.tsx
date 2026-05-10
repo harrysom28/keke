@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useContext } from "react";
+import React, { useState, useEffect, useRef, useContext, useCallback } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   ImageBackground,
   Keyboard,
@@ -60,11 +61,15 @@ const WalletScreen = () => {
   const [paymentWebViewUrl, setPaymentWebViewUrl] = useState<string | null>(null);
   const [paymentWebViewRef, setPaymentWebViewRef] = useState<string | null>(null);
   const [walletAvailableBalance, setWalletAvailableBalance] = useState<number | null>(null);
+  /** Total funds (available + held) — matches API `balance`; hero amount should use this. */
+  const [walletTotalBalance, setWalletTotalBalance] = useState<number | null>(null);
   const [walletHeldBalance, setWalletHeldBalance] = useState<number>(0);
   const topupAmountRef = useRef<TextInput>(null);
   const initialBalanceRef = useRef<string | undefined>(undefined);
   const pendingPaymentUrlRef = useRef<string | null>(null);
   const pendingTopupRefRef = useRef<string | null>(null);
+  /** Last GET /wallet total — detect DVA / webhook credits without relying only on profile.balance */
+  const lastWalletTotalRef = useRef<number | null>(null);
   const topupKeyboardInset = useKeyboardInset(topupModal);
 
   const handleModalDismiss = () => {
@@ -91,28 +96,81 @@ const WalletScreen = () => {
     handleModalDismiss();
   };
 
-  useEffect(() => {
-    void Promise.all([fetchTransactions(), fetchWalletSummary()]);
-  }, []);
-  const fetchWalletSummary = async (force = false) => {
-    setWalletSummaryLoading(true);
-    try {
-      const cached = force ? null : getCachedWallet<any>();
-      const res = cached ?? (await apiClient.get("wallet"));
-      if (!cached) setCachedWallet(res);
-      const walletData = res?.data?.data || {};
-      const available = Number(walletData.availableBalance ?? walletData.balance ?? 0);
-      const held = Number(walletData.heldBalance ?? 0);
-      setWalletAvailableBalance(Number.isFinite(available) ? available : 0);
-      setWalletHeldBalance(Number.isFinite(held) ? held : 0);
-    } catch (error: any) {
-      if (error?.response?.data?.message) {
-        showMessage({ type: "danger", message: String(error.response.data.message) });
+  const fetchWalletSummary = useCallback(
+    async (force = false) => {
+      setWalletSummaryLoading(true);
+      try {
+        const cached = force ? null : getCachedWallet<any>();
+        const res = cached ?? (await apiClient.get("wallet"));
+        if (!cached) setCachedWallet(res);
+        const walletData = res?.data?.data || {};
+        const heldRaw = Number(walletData.heldBalance ?? 0);
+        const held = Number.isFinite(heldRaw) ? Math.max(0, heldRaw) : 0;
+
+        let available = Number(walletData.availableBalance);
+        let total = Number(walletData.balance);
+
+        if (!Number.isFinite(available)) {
+          available = Number.isFinite(total) ? Math.max(0, total - held) : 0;
+        }
+        if (!Number.isFinite(total)) {
+          total = available + held;
+        }
+
+        const safeTotal = Number.isFinite(total) ? total : available + held;
+        const roundedTotal = Math.round(safeTotal);
+
+        const prevTotal = lastWalletTotalRef.current;
+        if (prevTotal != null && roundedTotal > prevTotal) {
+          showMessage({
+            type: "success",
+            message: `Wallet credited! Balance ₦${roundedTotal.toLocaleString()}`,
+            duration: 4000,
+          });
+          void getCurrentUser?.();
+        }
+        lastWalletTotalRef.current = roundedTotal;
+
+        setWalletAvailableBalance(Number.isFinite(available) ? available : 0);
+        setWalletHeldBalance(held);
+        setWalletTotalBalance(safeTotal);
+      } catch (error: any) {
+        if (error?.response?.data?.message) {
+          showMessage({ type: "danger", message: String(error.response.data.message) });
+        }
+      } finally {
+        setWalletSummaryLoading(false);
       }
-    } finally {
-      setWalletSummaryLoading(false);
-    }
-  };
+    },
+    [getCurrentUser]
+  );
+
+  useEffect(() => {
+    void fetchTransactions();
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      invalidateWalletCache();
+      void fetchWalletSummary(true);
+      void getCurrentUser?.();
+    }, [fetchWalletSummary, getCurrentUser])
+  );
+
+  useEffect(() => {
+    if (!topupModal || topupMethod !== "dva") return;
+    let polls = 0;
+    const maxPolls = 28;
+    const intervalMs = 22_000;
+    const id = setInterval(() => {
+      polls += 1;
+      invalidateWalletCache();
+      void fetchWalletSummary(true);
+      void getCurrentUser?.();
+      if (polls >= maxPolls) clearInterval(id);
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [topupModal, topupMethod, fetchWalletSummary, getCurrentUser]);
 
 
   useEffect(() => {
@@ -347,9 +405,10 @@ const WalletScreen = () => {
     );
   };
 
-  const displayedAvailableBalance =
-    walletAvailableBalance !== null
-      ? walletAvailableBalance
+  /** Profile `balance` tracks spendable (legacy sync); prefer API total when loaded. */
+  const displayedWalletBalance =
+    walletTotalBalance !== null
+      ? walletTotalBalance
       : parseFloat(user?.profile?.balance || "0");
   const transferUserData = (user?.profile || {}) as Record<string, any>;
   const transferAccountNumber =
@@ -422,7 +481,7 @@ const WalletScreen = () => {
               fontFamily: "RobotoRegular",
             })}
           >
-            Available Balance
+            Wallet balance
           </Text>
           {walletSummaryLoading ? (
             <View style={tw`py-2 mb-4`}>
@@ -434,17 +493,28 @@ const WalletScreen = () => {
                 fontFamily: "RobotoBold",
               })}
             >
-              ₦{displayedAvailableBalance.toLocaleString()}
+              ₦{displayedWalletBalance.toLocaleString()}
             </Text>
           )}
-          {walletHeldBalance > 0 ? (
-            <Text
-              style={tw.style(`text-white text-xs mb-3`, {
-                fontFamily: "RobotoRegular",
-              })}
-            >
-              ₦{walletHeldBalance.toLocaleString()} is currently held for active or scheduled rides
-            </Text>
+          {!walletSummaryLoading &&
+          walletHeldBalance > 0 &&
+          walletAvailableBalance !== null ? (
+            <>
+              <Text
+                style={tw.style(`text-white text-xs mb-2 opacity-90`, {
+                  fontFamily: "RobotoRegular",
+                })}
+              >
+                ₦{walletAvailableBalance.toLocaleString()} available to spend
+              </Text>
+              <Text
+                style={tw.style(`text-white text-xs mb-3 opacity-90`, {
+                  fontFamily: "RobotoRegular",
+                })}
+              >
+                ₦{walletHeldBalance.toLocaleString()} held for active or scheduled rides
+              </Text>
+            </>
           ) : null}
           <TouchableOpacity
             onPress={() => setTopupModal(true)}

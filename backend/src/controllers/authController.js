@@ -1,4 +1,5 @@
 import User from '../models/User.js';
+import UserWallet from '../models/UserWallet.js';
 import Driver from '../models/Driver.js';
 import AdminSettings from '../models/AdminSettings.js';
 import { generateTokenPair } from '../utils/jwt.js';
@@ -12,6 +13,7 @@ import { AuthenticationError, ValidationError, ConflictError, NotFoundError } fr
 import { asyncHandler } from '../utils/errors.js';
 import notificationService from '../services/notificationService.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
+import { reconcileCancelledScheduledRideEscrows } from '../services/escrowWalletService.js';
 const { sendEmail, sendSMS } = notificationService;
 import logger from '../utils/logger.js';
 
@@ -532,6 +534,31 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
     formatted = {
       ...formatted,
       balance: String(walletTotal),
+    };
+  }
+
+  // Passengers: mirror GET /api/wallet so profile/header balance matches hero (User + escrow UserWallet).
+  if (user.role === 'passenger') {
+    try {
+      await reconcileCancelledScheduledRideEscrows(user._id);
+    } catch (_) {
+      /* best-effort */
+    }
+    const escrowWallet = await UserWallet.findOne({
+      userId: user._id,
+      userType: 'rider',
+    }).lean();
+    const fresh = await User.findById(user._id).select('balance').lean();
+    const userBalance = Number(fresh?.balance) || 0;
+    const escrowAvailable = Number(escrowWallet?.availableBalance) || 0;
+    const escrowHeld = Number(escrowWallet?.heldBalance) || 0;
+    const availableBalance = escrowWallet
+      ? Math.max(escrowAvailable, userBalance)
+      : userBalance;
+    const walletTotal = escrowWallet ? availableBalance + escrowHeld : userBalance;
+    formatted = {
+      ...formatted,
+      balance: String(Math.round(walletTotal)),
     };
   }
 

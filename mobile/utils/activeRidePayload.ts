@@ -13,12 +13,14 @@ export const ACTIVE_RIDE_TERMINAL_STATUSES = [
 export const ACTIVE_RIDE_RESTORABLE_STATUSES = [
   "requested",
   "searching",
+  "scheduled",
   "accepted",
   "driver_en_route",
   "arrived",
   "started",
   "in-progress",
   "in_progress",
+  "issue_flagged",
 ] as const;
 
 export const STALE_ACTIVE_RIDE_MS = 2 * 60 * 60 * 1000;

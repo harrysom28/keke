@@ -81,6 +81,50 @@ import { requestManager } from "@/utils/requestManager";
 // Max distance (km) for fitting map to route; beyond this we center on pickup to avoid continental zoom
 const MAX_FIT_DISTANCE_KM = 150;
 
+/** IDs user cancelled — hide from home preview until list no longer returns them (API can lag behind cancel). */
+const SUPPRESSED_HOME_SCHEDULE_IDS_KEY = "suppressedHomeScheduleBookingIds";
+
+async function readSuppressedScheduleBookingIds(): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(SUPPRESSED_HOME_SCHEDULE_IDS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((x) => String(x)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+async function suppressScheduleBookingForHomePreview(bookingId: string) {
+  const id = String(bookingId ?? "").trim();
+  if (!id) return;
+  const cur = await readSuppressedScheduleBookingIds();
+  cur.add(id);
+  await AsyncStorage.setItem(
+    SUPPRESSED_HOME_SCHEDULE_IDS_KEY,
+    JSON.stringify([...cur])
+  );
+}
+
+function normalizeBookingListStatus(status: unknown): string {
+  return String(status ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_");
+}
+
+function isTerminalScheduleListStatus(statusNorm: string): boolean {
+  return (
+    statusNorm === "cancelled" ||
+    statusNorm === "canceled" ||
+    statusNorm === "completed" ||
+    statusNorm === "rejected" ||
+    statusNorm === "failed" ||
+    statusNorm === "expired"
+  );
+}
+
 // Map zoom level - adjusted for better street-level detail visibility
 // 0.012-0.015 shows good balance of detail and area coverage (like screenshot)
 // Slightly wider home zoom for a calmer default view
@@ -178,6 +222,12 @@ export default function HomeScreen() {
    *  wipe state — the DB write may still be propagating (replica lag) or the first poll fires too fast. */
   const justBookedRef = useRef(false);
   const justBookedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True while UI was hydrated from POST confirm-ride but GET active-ride may still be empty (propagation lag). */
+  const pendingConfirmHydrationRef = useRef(false);
+  const pendingConfirmHydrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const CONFIRM_HYDRATION_TTL_MS = 120_000;
   /** Coalesce GET /booking/active-ride: Pusher events, focus, polling and just-booked retries can all fire
    *  in close succession; a single in-flight request + short min-interval prevents bursting the endpoint. */
   const getActiveRideInFlightRef = useRef(false);
@@ -276,12 +326,26 @@ export default function HomeScreen() {
     if (hadBooking && !isBooking) {
       const waiting = (reduxRide?.data as any)?.waiting || ride?.data?.waiting;
       const hasActiveRide = temp?.ride_id || (waiting as any)?._id || (waiting as any)?.ride_id;
-      if (!hasActiveRide && (maps.origin.latitude !== 0 || maps.destination.latitude !== 0)) {
-        setMaps({ origin: { latitude: 0, longitude: 0 }, destination: { latitude: 0, longitude: 0 } });
+      if (
+        !hasActiveRide &&
+        maps.destination.latitude !== 0 &&
+        maps.destination.longitude !== 0 &&
+        maps.destination.latitude !== 1 &&
+        maps.destination.longitude !== 1
+      ) {
+        setMaps((prev) => ({
+          ...prev,
+          destination: { latitude: 0, longitude: 0 },
+        }));
         setRouteDurationSeconds(null);
         setRouteArriveBy(null);
         setRouteKey((k) => k + 1);
-        dispatch(setRideData({ waiting: {}, origin: {}, destination: {} } as any));
+        dispatch(
+          setRideData({
+            waiting: {},
+            destination: { name: "", lat: "", long: "" },
+          } as any)
+        );
       }
     }
   }, [isBooking]);
@@ -305,6 +369,11 @@ export default function HomeScreen() {
     invalidateWalletCache();
     logger.info('🧹 Clearing ride state completely');
     lastActiveRideUiKeyRef.current = "";
+    pendingConfirmHydrationRef.current = false;
+    if (pendingConfirmHydrationTimerRef.current) {
+      clearTimeout(pendingConfirmHydrationTimerRef.current);
+      pendingConfirmHydrationTimerRef.current = null;
+    }
     // Ensure Redux ride slice is cleared (prevents any persisted/stale rideId from driving UI).
     dispatch(clearRideStateAction());
 
@@ -483,14 +552,12 @@ export default function HomeScreen() {
         longitude: parseFloat(item?.destination?.long as string),
       };
 
-      // Animate map to show both origin and destination (wider padding = better zoom)
-      mapRef.current?.fitToCoordinates(
-        [origin, destination],
-        {
-          edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
-          animated: true,
-        }
-      );
+      mapRef.current?.animateToRegion({
+        latitude: (origin.latitude + destination.latitude) / 2,
+        longitude: (origin.longitude + destination.longitude) / 2,
+        latitudeDelta: Math.max(Math.abs(origin.latitude - destination.latitude) * 2.5, 0.015),
+        longitudeDelta: Math.max(Math.abs(origin.longitude - destination.longitude) * 2.5, 0.015),
+      }, 600);
 
       // Set maps state with clean coordinate objects (no mapDelta)
       setMaps({
@@ -512,6 +579,7 @@ export default function HomeScreen() {
     dispatch(setAppData({ isBooking: true }));
     dispatch(
       setRideData({
+        waiting: {} as any,
         origin: { name: "", lat: "", long: "" },
         destination: { name: "", lat: "", long: "" },
         vehicle_type_id: "",
@@ -550,17 +618,42 @@ export default function HomeScreen() {
       .get("schedule/latest/booking")
       .then(async ({ data }) => {
         const bookings = data?.data || [];
+        const suppressedIds = await readSuppressedScheduleBookingIds();
         if (Array.isArray(bookings) && bookings.length > 0) {
           const bookingData = bookings.find((candidate: any) => {
-            const status = String(candidate?.status || candidate?.ride_status || '').toLowerCase();
-            const isClosed = status === 'cancelled' || status === 'completed';
-            return !isClosed;
+            const bid = String(
+              candidate?.ride_id ??
+                candidate?._id ??
+                candidate?.booking_id ??
+                ""
+            ).trim();
+            if (bid && suppressedIds.has(bid)) return false;
+
+            const statusNorm = normalizeBookingListStatus(
+              candidate?.status ??
+                candidate?.ride_status ??
+                candidate?.internal_status ??
+                candidate?.booking_status
+            );
+            return !isTerminalScheduleListStatus(statusNorm);
           });
 
           if (!bookingData) {
             const hasOnlyClosedBookings = bookings.every((candidate: any) => {
-              const status = String(candidate?.status || candidate?.ride_status || '').toLowerCase();
-              return status === 'cancelled' || status === 'completed';
+              const bid = String(
+                candidate?.ride_id ??
+                  candidate?._id ??
+                  candidate?.booking_id ??
+                  ""
+              ).trim();
+              if (bid && suppressedIds.has(bid)) return true;
+              const statusNorm = normalizeBookingListStatus(
+                candidate?.status ??
+                  candidate?.ride_status ??
+                  candidate?.internal_status ??
+                  candidate?.booking_status
+              );
+              return isTerminalScheduleListStatus(statusNorm);
             });
 
             if (hasOnlyClosedBookings) {
@@ -935,6 +1028,35 @@ export default function HomeScreen() {
             logger.debug("Trip completed modal is showing, skipping clear");
             return;
           }
+          const reduxW = (reduxRide?.data as any)?.waiting;
+          const localW = ride?.data?.waiting as any;
+          const hasTrackedActiveRide =
+            !!temp?.ride_id ||
+            !!localW?.ride_id ||
+            !!localW?._id ||
+            !!reduxW?.ride_id ||
+            !!reduxW?._id;
+          const bookingDraftOnly =
+            isBooking &&
+            ride.screen !== "WAITING" &&
+            !hasTrackedActiveRide;
+          if (bookingDraftOnly) {
+            logger.debug(
+              "Book ride flow open with no active trip — skipping clearRideState (empty active-ride is expected)"
+            );
+            return;
+          }
+          if (
+            pendingConfirmHydrationRef.current &&
+            ride.screen === "WAITING" &&
+            hasTrackedActiveRide
+          ) {
+            logger.debug(
+              "Confirm-ride hydrated UI but active-ride still empty — retrying active-ride"
+            );
+            setTimeout(getActiveRide, 3_000);
+            return;
+          }
           clearRideState();
           activeRideSheetRef?.current?.close();
         };
@@ -1015,6 +1137,11 @@ export default function HomeScreen() {
             clearTimeout(justBookedTimerRef.current);
             justBookedTimerRef.current = null;
           }
+          pendingConfirmHydrationRef.current = false;
+          if (pendingConfirmHydrationTimerRef.current) {
+            clearTimeout(pendingConfirmHydrationTimerRef.current);
+            pendingConfirmHydrationTimerRef.current = null;
+          }
 
           setTemp(rideData as TRide);
           setRide({
@@ -1065,6 +1192,35 @@ export default function HomeScreen() {
         if (status === 404) {
           logger.debug("No active ride found (404) - silently handling");
           if (ride?.screen === "SUMMARY" || ride?.screen === "REVIEW") {
+            return;
+          }
+          const reduxW404 = (reduxRide?.data as any)?.waiting;
+          const localW404 = ride?.data?.waiting as any;
+          const hasTracked404 =
+            !!temp?.ride_id ||
+            !!localW404?.ride_id ||
+            !!localW404?._id ||
+            !!reduxW404?.ride_id ||
+            !!reduxW404?._id;
+          if (
+            isBooking &&
+            ride.screen !== "WAITING" &&
+            !hasTracked404
+          ) {
+            logger.debug(
+              "404 active-ride during book draft — skipping clearRideState"
+            );
+            return;
+          }
+          if (
+            pendingConfirmHydrationRef.current &&
+            ride.screen === "WAITING" &&
+            hasTracked404
+          ) {
+            logger.debug(
+              "404 active-ride while confirm hydration pending — retrying active-ride"
+            );
+            setTimeout(getActiveRide, 3_000);
             return;
           }
           clearRideState();
@@ -1141,8 +1297,48 @@ export default function HomeScreen() {
     }
 
     const data = reduxRide?.data ?? ride?.data;
-    const originSource = waitingData?.origin ?? (data as any)?.origin;
-    const destSource = waitingData?.destination ?? (data as any)?.destination;
+    const draft = data as any;
+
+    const draftOLat = parseFloat(String(draft?.origin?.lat ?? draft?.origin?.latitude ?? "0"));
+    const draftOLng = parseFloat(String(draft?.origin?.long ?? draft?.origin?.longitude ?? "0"));
+    const draftDLat = parseFloat(String(draft?.destination?.lat ?? draft?.destination?.latitude ?? "0"));
+    const draftDLng = parseFloat(String(draft?.destination?.long ?? draft?.destination?.longitude ?? "0"));
+    const draftHasBothPins =
+      Number.isFinite(draftOLat) &&
+      Number.isFinite(draftOLng) &&
+      Number.isFinite(draftDLat) &&
+      Number.isFinite(draftDLng) &&
+      draftOLat !== 0 &&
+      draftOLng !== 0 &&
+      draftDLat !== 0 &&
+      draftDLng !== 0;
+
+    const w = waitingData as any;
+    const wStatus = String(w?.status ?? "").toLowerCase();
+    const terminalWaiting = ["completed", "cancelled", "canceled", "rejected", "failed", "expired"];
+    const waitingHasId = !!(w?.ride_id ?? w?._id);
+    const waitingIsLive =
+      w &&
+      typeof w === "object" &&
+      Object.keys(w).length > 0 &&
+      waitingHasId &&
+      wStatus.length > 0 &&
+      !terminalWaiting.includes(wStatus);
+
+    const hasLiveTrip = !!temp?.ride_id || waitingIsLive;
+
+    let originSource: any;
+    let destSource: any;
+    if (hasLiveTrip) {
+      originSource = waitingData?.origin ?? draft?.origin;
+      destSource = waitingData?.destination ?? draft?.destination;
+    } else if (draftHasBothPins) {
+      originSource = draft?.origin;
+      destSource = draft?.destination;
+    } else {
+      originSource = waitingData?.origin ?? draft?.origin;
+      destSource = waitingData?.destination ?? draft?.destination;
+    }
 
     const originLatRaw = originSource?.lat ?? originSource?.latitude;
     const originLongRaw = originSource?.long ?? originSource?.longitude;
@@ -1187,10 +1383,12 @@ export default function HomeScreen() {
         if (noWorldView) {
           const distanceKm = haversineKm(newOrigin, newDest);
           if (distanceKm <= MAX_FIT_DISTANCE_KM) {
-            (mapRef.current as any).fitToCoordinates?.([newOrigin, newDest], {
-              edgePadding: { top: 80, right: 50, bottom: 60, left: 50 },
-              animated: true,
-            });
+            mapRef.current?.animateToRegion({
+              latitude: (newOrigin.latitude + newDest.latitude) / 2,
+              longitude: (newOrigin.longitude + newDest.longitude) / 2,
+              latitudeDelta: Math.max(Math.abs(newOrigin.latitude - newDest.latitude) * 2.5, 0.015),
+              longitudeDelta: Math.max(Math.abs(newOrigin.longitude - newDest.longitude) * 2.5, 0.015),
+            }, 600);
           } else {
             (mapRef.current as any).animateToRegion?.({
               latitude: newOrigin.latitude,
@@ -1328,11 +1526,13 @@ export default function HomeScreen() {
     const map = mapRef.current as any;
     const id = setTimeout(() => {
       const distanceKm = haversineKm(o, d);
-      if (distanceKm <= MAX_FIT_DISTANCE_KM && map.fitToCoordinates) {
-        map.fitToCoordinates([o, d], {
-          edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
-          animated: true,
-        });
+      if (distanceKm <= MAX_FIT_DISTANCE_KM) {
+        mapRef.current?.animateToRegion({
+          latitude: (o.latitude + d.latitude) / 2,
+          longitude: (o.longitude + d.longitude) / 2,
+          latitudeDelta: Math.max(Math.abs(o.latitude - d.latitude) * 2.5, 0.015),
+          longitudeDelta: Math.max(Math.abs(o.longitude - d.longitude) * 2.5, 0.015),
+        }, 600);
       } else if (map.animateToRegion) {
         map.animateToRegion({ latitude: o.latitude, longitude: o.longitude, ...mapDelta }, 400);
       }
@@ -1388,27 +1588,27 @@ export default function HomeScreen() {
     loading(true);
     apiClient
       .post("schedule/cancel/booking", { booking_id })
-      .then(() => {
+      .then(async () => {
+        await suppressScheduleBookingForHomePreview(booking_id);
         safeShowMessage({
           type: "success",
           message: "Booking cancelled successfully",
         });
         setBooking({});
         setViewbooking({});
-        AsyncStorage.removeItem('dismissedBookingId');
+        await AsyncStorage.removeItem("dismissedBookingId");
         setDismissedBookingId(null);
         clearRideState();
         bookingViewSheetRef?.current?.close();
-      })
-      .then(() => {
         getActiveBooking();
       })
-      .catch((err) => {
+      .catch(async (err) => {
         const status = err?.response?.status || err?.status;
         
         // Silently handle 404 errors - endpoint may not exist or booking already cancelled
         if (status === 404) {
           logger.debug("Cancel booking endpoint not found (404) - booking may already be cancelled", { booking_id });
+          await suppressScheduleBookingForHomePreview(booking_id);
           safeShowMessage({
             type: "info",
             message: "Booking may have already been cancelled or completed.",
@@ -1924,11 +2124,10 @@ export default function HomeScreen() {
       !!activeRideIdForPill &&
       !["completed", "cancelled", "rejected"].includes(activeRideStatus);
 
-    const bookingStatusLower = String(booking?.status ?? "").toLowerCase();
+    const bookingStatusNorm = normalizeBookingListStatus(booking?.status);
     const bookingCardVisible =
       Object.keys(booking).length > 0 &&
-      bookingStatusLower !== "cancelled" &&
-      bookingStatusLower !== "completed" &&
+      !isTerminalScheduleListStatus(bookingStatusNorm) &&
       dismissedBookingId !== booking?.booking_id;
 
     const bookingKey = String(
@@ -1943,8 +2142,7 @@ export default function HomeScreen() {
         hasOngoingLiveRide && !(bookingCardVisible && sameRideAsBookingCard),
       showDismissedBookingChip:
         Object.keys(booking).length > 0 &&
-        bookingStatusLower !== "cancelled" &&
-        bookingStatusLower !== "completed" &&
+        !isTerminalScheduleListStatus(bookingStatusNorm) &&
         dismissedBookingId != null &&
         String(dismissedBookingId) === String(booking?.booking_id),
     };
@@ -1985,6 +2183,22 @@ export default function HomeScreen() {
     }
     activeRideSheetRef?.current?.open();
   }, [activeRidePayloadId, getActiveRide]);
+
+  /** Home preview card from schedule/latest/booking (scheduled / pending) — not an on-demand compose session. */
+  const bookingHomePreviewVisible =
+    Object.keys(booking).length > 0 &&
+    !isTerminalScheduleListStatus(normalizeBookingListStatus(booking?.status)) &&
+    dismissedBookingId !== booking?.booking_id;
+
+  /**
+   * Pickup "X min" / arrive-by — only for Find Ride / active WAITING.
+   * Scheduled-booking home still has leftover maps + route + ETA from useRoute; hide pills whenever the
+   * schedule preview card is showing and the user is not composing a new ride (`!isBooking`).
+   */
+  const showPickupRouteEta =
+    hasPickupAndDest &&
+    (isBooking || ride.screen === "WAITING") &&
+    !(bookingHomePreviewVisible && !isBooking);
 
   return (
     <>
@@ -2072,8 +2286,10 @@ export default function HomeScreen() {
           routeLoading={routeLoading}
           pauseDriverUpdates={isBooking}
           riderActiveRideStatus={riderActiveRideStatusForMap || null}
-          etaLabel={hasPickupAndDest && eta ? eta : null}
-          arriveByLabel={hasPickupAndDest && routeArriveBy ? `Arrive by ${routeArriveBy}` : null}
+          etaLabel={showPickupRouteEta && eta ? eta : null}
+          arriveByLabel={
+            showPickupRouteEta && routeArriveBy ? `Arrive by ${routeArriveBy}` : null
+          }
           onRouteReady={(_coords) => {
             if (!mapRef.current) return;
             const o = maps.origin;
@@ -2084,10 +2300,12 @@ export default function HomeScreen() {
             ) return;
             const distanceKm = haversineKm(o, d);
             if (distanceKm <= MAX_FIT_DISTANCE_KM) {
-              mapRef.current.fitToCoordinates?.([o, d], {
-                edgePadding: { top: 80, right: 60, bottom: 60, left: 60 },
-                animated: true,
-              });
+              mapRef.current?.animateToRegion({
+                latitude: (o.latitude + d.latitude) / 2,
+                longitude: (o.longitude + d.longitude) / 2,
+                latitudeDelta: Math.max(Math.abs(o.latitude - d.latitude) * 2.5, 0.015),
+                longitudeDelta: Math.max(Math.abs(o.longitude - d.longitude) * 2.5, 0.015),
+              }, 600);
             } else {
               (mapRef.current as any).animateToRegion?.(
                 { latitude: o.latitude, longitude: o.longitude, ...mapDelta },
@@ -2173,9 +2391,10 @@ export default function HomeScreen() {
           ) : null}
 
           {/* Show booking info if exists and not dismissed */}
-          {Object.keys(booking).length > 0 && 
-           String(booking?.status ?? '').toLowerCase() !== 'cancelled' &&
-           String(booking?.status ?? '').toLowerCase() !== 'completed' &&
+          {Object.keys(booking).length > 0 &&
+           !isTerminalScheduleListStatus(
+             normalizeBookingListStatus(booking?.status)
+           ) &&
            dismissedBookingId !== booking?.booking_id && (
             <View
               style={tw.style(`ml-4 bg-white p-3 shadow-xl rounded-2xl overflow-hidden relative`, {
@@ -2642,13 +2861,64 @@ export default function HomeScreen() {
           getActiveRide={getActiveRide}
           onSheetClose={() => setInitialDropoff(null)}
           initialDropoff={initialDropoff}
-          onRideBooked={() => {
+          onRideBooked={(confirmedRide) => {
             justBookedRef.current = true;
             if (justBookedTimerRef.current) clearTimeout(justBookedTimerRef.current);
             // Auto-clear after 30 s so stale grace periods don't persist forever.
             justBookedTimerRef.current = setTimeout(() => {
               justBookedRef.current = false;
             }, 30_000);
+
+            const raw =
+              confirmedRide &&
+              typeof confirmedRide === "object" &&
+              !Array.isArray(confirmedRide)
+                ? (confirmedRide as Record<string, unknown>)
+                : null;
+            if (!raw) return;
+
+            const rid = getActiveRideId(raw);
+            if (!rid) return;
+
+            const rideStatus = getRideStatusLower(raw);
+            if (
+              isTerminalRideStatus(rideStatus) ||
+              !isRestorableRideStatus(rideStatus)
+            ) {
+              return;
+            }
+
+            pendingConfirmHydrationRef.current = true;
+            if (pendingConfirmHydrationTimerRef.current) {
+              clearTimeout(pendingConfirmHydrationTimerRef.current);
+            }
+            pendingConfirmHydrationTimerRef.current = setTimeout(() => {
+              pendingConfirmHydrationRef.current = false;
+              pendingConfirmHydrationTimerRef.current = null;
+            }, CONFIRM_HYDRATION_TTL_MS);
+
+            const rideUiKey = `${rid}|${rideStatus}|${String(raw.accepted_by_driver)}|${String(raw.driver_id ?? "")}|${String(raw.is_ride_started)}|${String(raw.drop_off_completed)}|${String(raw.payment_status ?? "")}|${raw.internal_status ?? ""}`;
+            lastActiveRideUiKeyRef.current = rideUiKey;
+
+            setTemp(raw as TRide);
+            setRide({
+              screen: "WAITING",
+              data: {
+                waiting: raw as unknown as IARide["data"]["waiting"],
+              },
+            });
+            dispatch(
+              setAppData({
+                isBooking: true,
+              })
+            );
+            animateToMapDirections(raw as unknown as IARide["data"]["waiting"]);
+
+            setTimeout(() => {
+              logger.debug("Opening active ride sheet (confirm-ride hydration)");
+              activeRideSheetRef?.current?.open();
+            }, 300);
+            setTrigger(Math.random());
           }}
         />
       </Portal>

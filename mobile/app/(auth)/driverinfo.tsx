@@ -34,7 +34,7 @@ import { ScrollView } from "react-native-gesture-handler";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
-import useImagePicker from "../hooks/useImagePicker";
+import useImagePicker from "@/hooks/useImagePicker";
 import { useIsFocused } from "@react-navigation/native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { verticalScale } from "@/constants/Metrics";

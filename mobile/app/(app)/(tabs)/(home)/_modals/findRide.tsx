@@ -43,8 +43,8 @@ interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
   getActiveRide: () => void;
   /** Called immediately after a ride is confirmed so the parent can activate its
-   *  grace-period guard and avoid clearing ride state on the first active-ride poll. */
-  onRideBooked?: () => void;
+   *  grace-period guard and hydrate from the API payload (same shape as active-ride). */
+  onRideBooked?: (confirmedRide?: Record<string, unknown> | null) => void;
   onSheetClose?: () => void;
   initialDropoff?: {
     name: string;
@@ -81,21 +81,24 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     }
   }, [screenHeight]);
 
+  const clearDropoffDraft = useCallback(() => {
+    dispatch(
+      setRideData({
+        destination: { name: "", lat: "", long: "" },
+        driver_id: "",
+      } as any)
+    );
+    dispatch(setRideUtils({ drivers: [] }));
+  }, [dispatch]);
+
   const handleSheetClosed = useCallback(() => {
     contentHeightRef.current = 0;
     setHeight(Math.round(screenHeight * 0.6));
     setStep(1);
     dispatch(setAppData({ isBooking: false }));
-    dispatch(
-      setRideData({
-        origin: {},
-        destination: {},
-        driver_id: "",
-      } as any)
-    );
-    dispatch(setRideUtils({ drivers: [] }));
+    clearDropoffDraft();
     onSheetClose?.();
-  }, [dispatch, onSheetClose, screenHeight]);
+  }, [clearDropoffDraft, dispatch, onSheetClose, screenHeight]);
 
   const handleBack = useCallback(() => {
     console.log('🔙 handleBack called, current step:', step);
@@ -113,12 +116,13 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         setStep(newStep);
       }
     } else {
-      // On first step, close the modal
+      // On first step, close the modal — clear dropoff immediately so map/route update without waiting for sheet animation
       console.log('🔙 Closing modal from step 1');
       setStep(1);
+      clearDropoffDraft();
       bottomSheetRef?.current?.close();
     }
-  }, [step, bottomSheetRef]);
+  }, [step, bottomSheetRef, clearDropoffDraft]);
 
   useEffect(() => {
     contentHeightRef.current = 0;
@@ -300,21 +304,28 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       const response = await apiClient.post('booking/confirm-ride', requestData);
       
       console.log('✅ Ride created successfully:', response.data?.data);
-      
-      // Activate grace period before closing so getActiveRide won't wipe state
-      // if the first poll fires before the DB write is visible on the read replica.
-      onRideBooked?.();
 
-      // Close modal and reset state
+      const confirmedRide = response.data?.data?.ride ?? null;
+
+      // Grace period + immediate hydration from confirm response (GET active-ride can lag).
+      onRideBooked?.(confirmedRide);
+
       bottomSheetRef?.current?.close();
-      dispatch(
-        setAppData({
-          isBooking: false,
-          ride: { status: false, data: {} },
-        })
-      );
 
-      // Fetch the newly created ride
+      // Clear booking draft only — do NOT set isBooking:false here: that triggers Home's
+      // effect that wipes the map before temp/waiting exist. Active ride keeps isBooking true.
+      dispatch(
+        setRideData({
+          origin: { name: "", lat: "", long: "" },
+          destination: { name: "", lat: "", long: "" },
+          driver_id: "",
+          vehicle_type_id: "",
+          payment_type: "",
+          promo_code: "",
+        } as any)
+      );
+      dispatch(setRideUtils({ drivers: [] }));
+
       getActiveRide();
       
       showMessage({ 
@@ -342,9 +353,23 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         setStep(1);
         return;
       }
-      
+
+      const respBody = err?.response?.data;
+      if (respBody?.code === 'INSUFFICIENT_BALANCE') {
+        const msg =
+          typeof respBody.message === 'string' && respBody.message.trim()
+            ? respBody.message
+            : 'Top up your wallet to book this ride.';
+        showMessage({
+          type: 'warning',
+          message: msg,
+          duration: 5500,
+        });
+        return;
+      }
+
       console.error('❌ Create ride error:', err?.response?.data || err?.message);
-      
+
       // Handle validation errors
       const validationErrors = err?.response?.data?.error?.errors || 
                               err?.response?.data?.errors;
@@ -401,6 +426,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
             action={() => setStep(2)}
             back={() => handleBack()}
             initialDropoff={initialDropoff}
+            locationSheetActive
           />
         );
         

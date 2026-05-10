@@ -111,23 +111,46 @@ const useImagePicker = ({
 
   /** Open the camera to take a new photo. */
   const showCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      showMessage({
-        message: "Camera permission is required to take a photo.",
-        type: "warning",
-        duration: 3500,
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        showMessage({
+          message: "Camera permission is required to take a photo.",
+          type: "warning",
+          duration: 3500,
+        });
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 1,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
       });
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      quality: 1,
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-    });
-    if (!result.canceled) {
-      setIsLimitError(false);
-      handleImageSave(result.assets);
+      if (!result.canceled) {
+        setIsLimitError(false);
+        handleImageSave(result.assets);
+      }
+    } catch (err: unknown) {
+      const raw =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : err &&
+                typeof err === "object" &&
+                "message" in err &&
+                typeof (err as { message: unknown }).message === "string"
+              ? (err as { message: string }).message
+              : "";
+      const unavailable = /simulator|not available|unavailable/i.test(raw);
+
+      showMessage({
+        message: unavailable
+          ? "Camera is not available on the simulator. Use Choose from Gallery or test on a device."
+          : "Could not open the camera. Try Choose from Gallery instead.",
+        type: "warning",
+        duration: 4500,
+      });
     }
   };
 

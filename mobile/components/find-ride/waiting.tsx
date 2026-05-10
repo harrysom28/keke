@@ -35,8 +35,8 @@ import { UserInfoCard } from "@/components/ride-in-transit/UserInfoCard";
 import { ProgressBar } from "@/components/ride-in-transit/ProgressBar";
 import { RiderActionButtons } from "@/components/ride-in-transit/ActionButtons";
 
+/** Matches `base-green` in tailwind.config.ts */
 const BRAND_GREEN = "#3C8F7C";
-const TEAL = "#1D9E75";
 const ERROR_RED = "#EF4444";
 
 type StatusPair = { heading: string; subtext: string };
@@ -96,7 +96,7 @@ const PulsingRings = () => {
       <RNAnimated.View style={[pulsingStyles.ring, ringStyle(a2, 0.6)]} />
       <RNAnimated.View style={[pulsingStyles.ring, ringStyle(a3, 0.4)]} />
       <View style={pulsingStyles.center}>
-        <Ionicons name="car-outline" size={22} color={TEAL} />
+        <Ionicons name="car-outline" size={22} color={BRAND_GREEN} />
       </View>
     </View>
   );
@@ -116,7 +116,7 @@ const pulsingStyles = StyleSheet.create({
     height: RING_BASE_SIZE,
     borderRadius: RING_BASE_SIZE / 2,
     borderWidth: 2,
-    borderColor: TEAL,
+    borderColor: BRAND_GREEN,
     backgroundColor: "transparent",
   },
   center: {
@@ -1293,7 +1293,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   searchCancelBtn: {
-    backgroundColor: TEAL,
+    backgroundColor: BRAND_GREEN,
     borderRadius: 12,
     paddingVertical: 14,
     paddingHorizontal: 16,

@@ -30,7 +30,7 @@ interface Props {
   setCurrentView: React.Dispatch<React.SetStateAction<IARide>>;
   getActiveRide: () => void;
   temp: TRide;
-  clearMap?: () => void;
+  clearMap?: (opts?: { navigateHome?: boolean }) => void;
   /** Increment (e.g. from notification deep link) to open the driver chat modal. */
   chatOpenSignal?: number;
 }
@@ -110,7 +110,7 @@ const ActiveRideSheet = ({
       // ignore
     }
     try {
-      clearMap?.();
+      clearMap?.({ navigateHome: true });
     } catch {
       // ignore
     }
@@ -377,7 +377,7 @@ const ActiveRideSheet = ({
     setCurrentView((prev) => ({ ...prev, screen: "" }));
     dispatch(clearRideState());
     if (clearMap) {
-      clearMap();
+      clearMap({ navigateHome: true });
     }
   };
 
@@ -613,7 +613,7 @@ const ActiveRideSheet = ({
         // Always cleanup locally (404 = already gone, network error = still don't trap user).
         cancelDriverRequestTimers();
         dispatch(clearRideState());
-        if (clearMap) clearMap();
+        if (clearMap) clearMap({ navigateHome: true });
         bottomSheetRef?.current?.close();
         setCurrentView((prev) => ({ ...prev, screen: "" }));
         loading(false);
@@ -991,6 +991,7 @@ const ActiveRideSheet = ({
         }
         clear={() => {
           bottomSheetRef?.current?.close();
+          if (clearMap) clearMap({ navigateHome: true });
           setTimeout(() => {
             dispatch(
               setAppData({

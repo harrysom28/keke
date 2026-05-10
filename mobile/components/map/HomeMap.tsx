@@ -46,7 +46,6 @@ const ROUTE_COLOR = "#3C8F7C";
 /** Slim main line; shadow = main + small halo (reads smoother than a single thick stroke). */
 const ROUTE_STROKE_WIDTH = 4;
 const ROUTE_SHADOW_WIDTH = 5.5;
-const FIT_EDGE_PADDING = { top: 80, right: 60, bottom: 60, left: 60 };
 const ZOOM_DELTA = 0.012; // Rider home default zoom (match driver home-map level)
 const MAX_FIT_DISTANCE_KM = 150; // beyond this, center on pickup to avoid continental zoom
 const ABAKALIKI_REGION = {
@@ -102,7 +101,7 @@ const KEKE_MAP_STYLE = [
   {
     featureType: "poi.business",
     elementType: "labels",
-    stylers: [{ visibility: "simplified" }],
+    stylers: [{ visibility: "on" }],
   },
   {
     featureType: "poi.business",
@@ -145,20 +144,11 @@ const KEKE_MAP_STYLE = [
     elementType: "geometry",
     stylers: [{ visibility: "simplified" }, { color: "#c4c8cc" }],
   },
-  {
-    featureType: "road",
-    elementType: "labels",
-    stylers: [{ visibility: "simplified" }],
-  },
+  // Do not set road label visibility to "simplified" — iOS Google Maps often renders oversized/cropped names.
   {
     featureType: "road.local",
     elementType: "labels",
     stylers: [{ visibility: "off" }],
-  },
-  {
-    featureType: "road.arterial",
-    elementType: "labels",
-    stylers: [{ visibility: "simplified" }],
   },
   {
     featureType: "road",
@@ -250,7 +240,8 @@ function HomeMapComponent({
     typeof driverLiveLocation.lat === "number" &&
     typeof driverLiveLocation.lng === "number" &&
     (riderStatusLower === "accepted" || riderStatusLower === "arrived");
-  const routeFittedRef = useRef(false);
+  /** Last `${pickup-dropoff}|${mapState}` we fitted — refit when sheet mode changes padding. */
+  const routeFitKeyRef = useRef("");
   const lastDriverUpdateRef = useRef(0);
 
   const userLocation = useMemo(() => {
@@ -358,7 +349,7 @@ function HomeMapComponent({
     const routeJustLoaded = routeCoords.length > 0 && prevRouteCoordsLengthRef.current === 0;
     if (keyChanged) prevRouteKeyRef.current = routeKey;
     prevRouteCoordsLengthRef.current = routeCoords.length;
-    if (keyChanged || routeJustLoaded) routeFittedRef.current = false;
+    if (keyChanged || routeJustLoaded) routeFitKeyRef.current = "";
   }, [routeKey, routeCoords.length]);
 
   // Map only resizes when both pickup and dropoff are set (no resize on pickup-only)
@@ -366,33 +357,53 @@ function HomeMapComponent({
   // When both pickup and dropoff are set, fit map to route and show line
   useEffect(() => {
     if (!hasPickup || !hasDropoff || !mapRef?.current) {
-      if (!hasPickup || !hasDropoff) routeFittedRef.current = false;
+      if (!hasPickup || !hasDropoff) routeFitKeyRef.current = "";
       return;
     }
     const fittingCoords = [pickup!, dropoff!];
+    const p = pickup!;
+    const d = dropoff!;
     // Use pin coordinates for fitting; route polyline data can be malformed.
     const hasInvalidPin = fittingCoords.some(
       (c) =>
         Math.abs(c.latitude) < 0.01 && Math.abs(c.longitude) < 0.01
     );
     if (hasInvalidPin) {
-      routeFittedRef.current = false;
+      routeFitKeyRef.current = "";
       return;
     }
-    if (routeFittedRef.current) return;
-    routeFittedRef.current = true;
+    const fitKey = `${routeKey}|${mapState}`;
+    if (routeFitKeyRef.current === fitKey) return;
+    routeFitKeyRef.current = fitKey;
     onRouteReady?.(routeCoords.length > 0 ? routeCoords : fittingCoords);
     const map = mapRef.current as any;
-    const distanceKm = haversineKm(pickup!, dropoff!);
-    if (distanceKm <= MAX_FIT_DISTANCE_KM && map.fitToCoordinates) {
-      map.fitToCoordinates(fittingCoords, {
-        edgePadding: FIT_EDGE_PADDING,
-        animated: true,
-      });
+    const distanceKm = haversineKm(p, d);
+    if (distanceKm <= MAX_FIT_DISTANCE_KM && map.animateToRegion) {
+      map.animateToRegion(
+        {
+          latitude: (p.latitude + d.latitude) / 2,
+          longitude: (p.longitude + d.longitude) / 2,
+          latitudeDelta: Math.max(Math.abs(p.latitude - d.latitude) * 2.5, 0.015),
+          longitudeDelta: Math.max(Math.abs(p.longitude - d.longitude) * 2.5, 0.015),
+        },
+        600
+      );
     } else if (map.animateToRegion) {
-      map.animateToRegion({ latitude: pickup!.latitude, longitude: pickup!.longitude, latitudeDelta: ZOOM_DELTA * 2, longitudeDelta: ZOOM_DELTA * 2 }, 400);
+      map.animateToRegion({ latitude: p.latitude, longitude: p.longitude, latitudeDelta: ZOOM_DELTA * 2, longitudeDelta: ZOOM_DELTA * 2 }, 400);
     }
-  }, [routeCoords.length, hasPickup, hasDropoff, pickup?.latitude, pickup?.longitude, dropoff?.latitude, dropoff?.longitude, mapRef, onRouteReady]);
+  }, [
+    routeCoords.length,
+    hasPickup,
+    hasDropoff,
+    pickup?.latitude,
+    pickup?.longitude,
+    dropoff?.latitude,
+    dropoff?.longitude,
+    mapRef,
+    onRouteReady,
+    mapState,
+    routeKey,
+  ]);
 
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -539,11 +550,13 @@ const styles = StyleSheet.create({
   pinDotDropoff: { backgroundColor: "#e74c3c" },
   etaPillArrive: {
     marginTop: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: 18,
     paddingVertical: 7,
     borderRadius: 18,
     backgroundColor: "#5B21B6",
-    maxWidth: 150,
+    minWidth: 148,
+    maxWidth: 200,
+    alignItems: "center",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.25,
@@ -554,6 +567,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: "#fff",
+    textAlign: "center",
   },
 });
 

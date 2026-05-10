@@ -199,7 +199,11 @@ const mapLegacyTypeToDeliveryPayload = (type, title, message, data = {}, related
 };
 
 const getUserFcmToken = (user) =>
-  user?.fcm_token || user?.pushToken || user?.deviceToken || '';
+  user?.expoPushToken ||
+  user?.fcm_token ||
+  user?.pushToken ||
+  user?.deviceToken ||
+  '';
 
 // Email configuration - supports both SMTP_* and MAIL_* (Laravel-style) env vars
 const getMailConfig = () => {
@@ -948,7 +952,7 @@ export const dispatchToUser = async (
 
 export const sendToUser = async (userId, userRole, notifPayload) => {
   try {
-    const user = await User.findById(userId).select('role fcm_token deviceToken');
+    const user = await User.findById(userId).select('role fcm_token deviceToken expoPushToken');
     if (!user) {
       return null;
     }

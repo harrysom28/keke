@@ -44,6 +44,10 @@ type ModeType = "date" | "time" | "datetime" | "countdown";
 
 const MIN_SCHEDULE_LEAD_MINUTES = 60;
 
+const BRAND_GREEN = tw.color("base-green") ?? "#3C8F7C";
+/** Soft fill for chips / tiles — derived from brand green, avoids generic Material mint (#E8F5E9). */
+const BRAND_GREEN_SURFACE = "rgba(60, 143, 124, 0.13)";
+
 const getMinimumScheduledDateTime = (now = new Date()) => {
   const minDate = new Date(now.getTime() + MIN_SCHEDULE_LEAD_MINUTES * 60 * 1000);
   minDate.setSeconds(0, 0);
@@ -682,11 +686,11 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
     const type = vehicleType.toLowerCase();
     const iconSize = 26; // ~20% smaller than before for reduced card size
     if (type.includes('keke') || type.includes('tricycle')) {
-      return <MaterialCommunityIcons name="rickshaw" size={iconSize} color="#3C8F7C" />;
+      return <MaterialCommunityIcons name="rickshaw" size={iconSize} color={BRAND_GREEN} />;
     } else if (type.includes('okada') || type.includes('bike') || type.includes('motorcycle')) {
-      return <MaterialCommunityIcons name="motorbike" size={iconSize} color="#3C8F7C" />;
+      return <MaterialCommunityIcons name="motorbike" size={iconSize} color={BRAND_GREEN} />;
     } else {
-      return <MaterialCommunityIcons name="car" size={iconSize} color="#3C8F7C" />;
+      return <MaterialCommunityIcons name="car" size={iconSize} color={BRAND_GREEN} />;
     }
   };
 
@@ -814,7 +818,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                             paddingHorizontal: 14,
                             paddingVertical: 7,
                             borderRadius: 20,
-                            backgroundColor: isActive ? '#2E7D52' : '#F5F5F5',
+                            backgroundColor: isActive ? BRAND_GREEN : "#F5F5F5",
                             marginRight: 8,
                           },
                         ]}
@@ -836,7 +840,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                   <Text style={tw.style(`text-[15px] text-[#242E42]`, { fontFamily: 'RobotoMedium' })}>
                     {selectedTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
                   </Text>
-                  <MaterialCommunityIcons name="clock-outline" size={20} color="#2E7D52" />
+                  <MaterialCommunityIcons name="clock-outline" size={20} color={BRAND_GREEN} />
                 </TouchableOpacity>
                 <Modal
                   visible={showTimePicker}
@@ -859,7 +863,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                         <TouchableOpacity
                           onPress={() => setShowTimePicker(false)}
                           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                          style={[tw`py-2 px-3`, { backgroundColor: '#2E7D52', borderRadius: 8 }]}
+                          style={[tw`py-2 px-3`, { backgroundColor: BRAND_GREEN, borderRadius: 8 }]}
                         >
                           <Text style={tw.style(`text-base text-white`, { fontFamily: 'RobotoBold' })}>
                             Done
@@ -915,7 +919,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                             paddingHorizontal: 14,
                             paddingVertical: 7,
                             borderRadius: 20,
-                            backgroundColor: isActive ? '#2E7D52' : '#E8F5E9',
+                            backgroundColor: isActive ? BRAND_GREEN : BRAND_GREEN_SURFACE,
                             marginRight: 8,
                           },
                         ]}
@@ -924,7 +928,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                           style={{
                             fontSize: 13,
                             flexShrink: 0,
-                            color: isActive ? '#fff' : '#2E7D52',
+                            color: isActive ? "#fff" : BRAND_GREEN,
                           }}
                         >
                           {preset.label}
@@ -943,7 +947,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                 {location != null && location.latitude !== 0 && location.longitude !== 0 && (
                   <TouchableOpacity
                     onPress={handleUseCurrentLocation}
-                    style={tw`flex-row items-center gap-x-0.5 bg-[#3C8F7C] px-2 py-0.5 rounded-full`}
+                    style={tw`flex-row items-center gap-x-0.5 bg-base-green px-2 py-0.5 rounded-full`}
                   >
                     <MaterialCommunityIcons name="crosshairs-gps" size={10} color="white" />
                     <Text style={tw.style(`text-[9px] text-white`, { fontFamily: "RobotoMedium" })}>
@@ -1055,7 +1059,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
             </Text>
             {vehicleTypesLoading ? (
               <View style={tw`items-center py-2.5 mb-2`}>
-                <ActivityIndicator size="small" color="#3C8F7C" />
+                <ActivityIndicator size="small" color={BRAND_GREEN} />
                 <Text style={tw.style(`text-xs text-[#666] mt-1.5`, { fontFamily: "RobotoMedium" })}>
                   Loading vehicle types...
                 </Text>
@@ -1088,7 +1092,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                       onPress={() => handleVehicleTypeSelect(vehicle)}
                       style={tw.style(
                         `bg-[#F5F5F5] rounded-[10px] p-2.5 items-center justify-center relative`,
-                        isSelected && `bg-[#E8F5E9] border-2 border-[#3C8F7C]`,
+                        isSelected && `bg-base-green/10 border-2 border-base-green`,
                         {
                           width: vehicleGridLayout.tileW,
                           minHeight: 72,
@@ -1103,14 +1107,14 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                         style={tw.style(
                           `text-xs mt-1 text-center px-0.5`,
                           { fontFamily: "RobotoBold" },
-                          isSelected ? `text-[#3C8F7C]` : `text-[#242E42]`
+                          isSelected ? `text-base-green` : `text-[#242E42]`
                         )}
                       >
                         {vehicleName}
                       </Text>
                       {isSelected && (
                         <View style={tw`absolute top-0.5 right-0.5`}>
-                          <MaterialCommunityIcons name="check-circle" size={16} color="#3C8F7C" />
+                          <MaterialCommunityIcons name="check-circle" size={16} color={BRAND_GREEN} />
                         </View>
                       )}
                     </TouchableOpacity>
@@ -1124,7 +1128,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                 </Text>
                 <TouchableOpacity
                   onPress={fetchVehicleTypes}
-                  style={[tw`px-3 py-1.5 rounded-lg`, { backgroundColor: "#3C8F7C" }]}
+                  style={[tw`px-3 py-1.5 rounded-lg`, { backgroundColor: BRAND_GREEN }]}
                 >
                   <Text style={tw.style(`text-xs text-white`, { fontFamily: "RobotoBold" })}>Retry</Text>
                 </TouchableOpacity>
@@ -1138,7 +1142,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                   <Text style={tw.style(`text-[15px] text-[#242E42]`, { fontFamily: "RobotoBold" })}>
                     Price Summary
                   </Text>
-                  <Text style={tw.style(`text-[18px] text-[#3C8F7C]`, { fontFamily: "RobotoBold" })}>
+                  <Text style={tw.style(`text-[18px] text-base-green`, { fontFamily: "RobotoBold" })}>
                     ₦{fareSummary.totalFare.toLocaleString()}
                   </Text>
                 </View>
@@ -1167,7 +1171,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                   <Text style={tw.style(`text-[15px] text-[#242E42]`, { fontFamily: "RobotoBold" })}>
                     Total estimate
                   </Text>
-                  <Text style={tw.style(`text-[17px] text-[#3C8F7C]`, { fontFamily: "RobotoBold" })}>
+                  <Text style={tw.style(`text-[17px] text-base-green`, { fontFamily: "RobotoBold" })}>
                     ₦{fareSummary.totalFare.toLocaleString()}
                   </Text>
                 </View>
@@ -1187,10 +1191,10 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                 onPress={() => setState((prev) => ({ ...prev, payment_type: "Wallet" }))}
                 style={tw.style(
                   `flex-1 bg-[#F5F5F5] rounded-[10px] p-1.5 items-center justify-center`,
-                  state.payment_type === "Wallet" && `bg-[#E8F5E9] border-2 border-[#3C8F7C]`
+                  state.payment_type === "Wallet" && `bg-base-green/10 border-2 border-base-green`
                 )}
               >
-                <MaterialCommunityIcons name="wallet" size={13} color="#3C8F7C" />
+                <MaterialCommunityIcons name="wallet" size={13} color={BRAND_GREEN} />
                 <Text style={tw.style(`text-[10px] text-[#242E42] mt-0.5`, { fontFamily: "RobotoBold" })}>
                   Wallet
                 </Text>
@@ -1209,11 +1213,11 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                 disabled={!cashPaymentEnabled}
                 style={tw.style(
                   `flex-1 bg-[#F5F5F5] rounded-[10px] p-1.5 items-center justify-center`,
-                  state.payment_type === "Cash" && `bg-[#E8F5E9] border-2 border-[#3C8F7C]`,
+                  state.payment_type === "Cash" && `bg-base-green/10 border-2 border-base-green`,
                   !cashPaymentEnabled && `opacity-50`
                 )}
               >
-                <MaterialCommunityIcons name="cash" size={13} color={cashPaymentEnabled ? "#3C8F7C" : "#999"} />
+                <MaterialCommunityIcons name="cash" size={13} color={cashPaymentEnabled ? BRAND_GREEN : "#999"} />
                 <Text style={tw.style(
                   `text-[10px] mt-0.5`, 
                   { fontFamily: "RobotoBold" },
@@ -1248,7 +1252,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
               disabled={loading || !state.dropoff_location}
               style={tw.style(
                 `py-3 rounded-[10px] items-center justify-center`,
-                (loading || !state.dropoff_location) ? `opacity-50 bg-[#9E9E9E]` : `bg-[#2E7D52]`
+                (loading || !state.dropoff_location) ? `opacity-50 bg-[#9E9E9E]` : `bg-base-green`
               )}
             >
               {loading ? (

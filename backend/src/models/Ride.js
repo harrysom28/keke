@@ -428,11 +428,30 @@ rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee 
 
 // Static method to find active ride for rider
 rideSchema.statics.findActiveRideForRider = async function (riderId) {
+  const now = new Date();
   return this.findOne({
     rider: riderId,
     status: {
-      $in: ['requested', 'searching', 'accepted', 'driver_en_route', 'arrived', 'in-progress'],
+      $in: [
+        'requested',
+        'searching',
+        'scheduled',
+        'accepted',
+        'driver_en_route',
+        'arrived',
+        'in-progress',
+        'issue_flagged',
+      ],
     },
+    // Mirror driver-side semantics: future scheduled pickups should not block map/hydration quirks,
+    // but trips whose pickup window has arrived behave like active rides.
+    $or: [
+      { status: { $ne: 'scheduled' } },
+      {
+        status: 'scheduled',
+        $or: [{ scheduledAt: { $lte: now } }, { scheduledAt: null }, { scheduledAt: { $exists: false } }],
+      },
+    ],
   })
     .populate('driver', 'user vehicleDetails currentLocation')
     .populate('driver.user', 'name phone profileImage rating')

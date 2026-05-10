@@ -113,6 +113,31 @@ async function handleChargeSuccess(event, ip) {
       channel: channel === 'dedicated_nuban' ? 'dedicated_nuban' : 'bank_transfer',
       ip,
     });
+    return;
+  }
+
+  // Some banks / Paystack versions omit or vary `channel`; DVA inbound still ties to Paystack customer.
+  if (
+    customerCode &&
+    metadata.type !== 'wallet_topup' &&
+    Number(amountNaira) > 0
+  ) {
+    const existing = await WalletFundingTransaction.findOne({ reference }).lean();
+    if (existing) return;
+    const userByCustomer = await User.findOne({ paystackCustomerCode: customerCode }).select(
+      'balance'
+    );
+    if (userByCustomer) {
+      paystackLog('info', 'Paystack inbound credit via customer_code fallback', {
+        reference,
+        channel,
+        customerCode,
+      });
+      await creditWalletFromPaystack(reference, amountNaira, userByCustomer._id.toString(), {
+        channel: 'bank_transfer',
+        ip,
+      });
+    }
   }
 }
 
