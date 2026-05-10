@@ -51,9 +51,45 @@ export async function creditWalletFromPaystack(reference, amountNaira, userId, o
     }
 
     const balanceBefore = Number(user.balance) || 0;
-    const balanceAfter = balanceBefore + Number(amountNaira);
 
-    // Create immutable ledger entry (unique reference enforces idempotency)
+    // Rider escrow wallet is ledger truth: increment escrow first, then mirror User.balance to match.
+    const riderWallet = await UserWallet.findOne({ userId: uid, userType: 'rider' }).session(session || undefined);
+    let ledgerBalanceAfter = balanceBefore + Number(amountNaira);
+    if (riderWallet) {
+      const availBefore = Number(riderWallet.availableBalance) || 0;
+      const updatedWallet = await UserWallet.findOneAndUpdate(
+        { userId: uid, userType: 'rider' },
+        { $inc: { availableBalance: Number(amountNaira) } },
+        { new: true, ...opts }
+      );
+      if (!updatedWallet) {
+        throw new Error('Escrow wallet top-up update failed');
+      }
+      const availAfter = Number(updatedWallet.availableBalance) || 0;
+      ledgerBalanceAfter = availAfter;
+      await User.findByIdAndUpdate(uid, { $set: { balance: availAfter } }, opts);
+
+      await UserWalletTransaction.create(
+        [
+          {
+            userId: uid,
+            type: 'topup',
+            amount: Number(amountNaira),
+            balanceBefore: availBefore,
+            balanceAfter: availAfter,
+            description: 'Wallet top-up',
+            providerRef: reference,
+            providerStatus: 'success',
+            status: 'completed',
+          },
+        ],
+        opts
+      );
+    } else {
+      user.balance = ledgerBalanceAfter;
+      await user.save(opts);
+    }
+
     await WalletFundingTransaction.create(
       [
         {
@@ -63,42 +99,12 @@ export async function creditWalletFromPaystack(reference, amountNaira, userId, o
           amount: amountNaira,
           currency: 'NGN',
           balanceBefore,
-          balanceAfter,
+          balanceAfter: ledgerBalanceAfter,
           metadata: { channel, paymentId: paymentId?.toString(), ip },
         },
       ],
       opts
     );
-
-    // Update user balance
-    user.balance = balanceAfter;
-    await user.save(opts);
-
-    // Dual-write to escrow UserWallet if it exists (for riders using hold/charge flow)
-    const riderWallet = await UserWallet.findOne({ userId: uid, userType: 'rider' }).session(session || undefined);
-    if (riderWallet) {
-      await UserWallet.findOneAndUpdate(
-        { userId: uid, userType: 'rider' },
-        { $inc: { availableBalance: Number(amountNaira) } },
-        opts
-      );
-      await UserWalletTransaction.create(
-        [
-          {
-            userId: uid,
-            type: 'topup',
-            amount: Number(amountNaira),
-            balanceBefore: riderWallet.availableBalance,
-            balanceAfter: riderWallet.availableBalance + Number(amountNaira),
-            description: 'Wallet top-up',
-            providerRef: reference,
-            providerStatus: 'success',
-            status: 'completed',
-          },
-        ],
-        opts
-      );
-    }
 
     // Mark Payment completed if we have a Payment record (initialized checkout)
     if (paymentId) {
@@ -128,7 +134,7 @@ export async function creditWalletFromPaystack(reference, amountNaira, userId, o
       userId: uid.toString(),
       amountNaira,
       balanceBefore,
-      balanceAfter,
+      balanceAfter: ledgerBalanceAfter,
       channel,
     });
 
@@ -136,7 +142,7 @@ export async function creditWalletFromPaystack(reference, amountNaira, userId, o
       const { sendToUser } = await import('./notificationService.js');
       await sendToUser(uid, user?.role === 'driver' ? 'driver' : 'rider', {
         title: 'Wallet credited ✅',
-        message: `Top-up: ₦${Number(amountNaira).toLocaleString()} added. New balance: ₦${Number(balanceAfter).toLocaleString()}.`,
+        message: `Top-up: ₦${Number(amountNaira).toLocaleString()} added. New available balance: ₦${Number(ledgerBalanceAfter).toLocaleString()}.`,
         type: 'alert',
         priority: 'high',
         screen: 'wallet',
@@ -144,7 +150,7 @@ export async function creditWalletFromPaystack(reference, amountNaira, userId, o
         data: {
           subType: 'wallet_funded',
           amount: String(amountNaira),
-          balance: String(balanceAfter),
+          balance: String(ledgerBalanceAfter),
         },
       });
     } catch (notificationError) {
@@ -155,7 +161,7 @@ export async function creditWalletFromPaystack(reference, amountNaira, userId, o
       });
     }
 
-    return { credited: true, balanceAfter };
+    return { credited: true, balanceAfter: ledgerBalanceAfter };
   } catch (err) {
     if (useSession) await session.abortTransaction().catch(() => {});
 

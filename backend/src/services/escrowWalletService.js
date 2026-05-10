@@ -46,6 +46,30 @@ async function syncLegacyUserBalanceFromWallet(userId, walletDoc = null, session
 }
 
 /**
+ * Passenger GET /wallet + profile balance: escrow available is canonical when a rider wallet exists.
+ * Only lift displayed available when User.balance is strictly greater (Paystack credited User before
+ * escrow replicated, or rare drift). Using Math.max(escrow, user) hides real top-ups when escrow was
+ * overstated vs User.balance.
+ */
+export function computeRiderWalletApiTotals(userBalanceRaw, escrowWallet) {
+  const userBalance = Number(userBalanceRaw) || 0;
+  if (!escrowWallet) {
+    return { availableBalance: userBalance, heldBalance: 0, balance: userBalance };
+  }
+  const escrowAvailable = Number(escrowWallet.availableBalance) || 0;
+  const escrowHeld = Number(escrowWallet.heldBalance) || 0;
+  let availableBalance = escrowAvailable;
+  if (userBalance > availableBalance) {
+    availableBalance = userBalance;
+  }
+  return {
+    availableBalance,
+    heldBalance: escrowHeld,
+    balance: availableBalance + escrowHeld,
+  };
+}
+
+/**
  * Get or create rider wallet; if new, sync availableBalance from User.balance.
  */
 export async function getOrCreateRiderWallet(userId) {

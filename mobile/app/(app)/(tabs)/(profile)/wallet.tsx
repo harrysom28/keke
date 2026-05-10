@@ -101,7 +101,11 @@ const WalletScreen = () => {
       setWalletSummaryLoading(true);
       try {
         const cached = force ? null : getCachedWallet<any>();
-        const res = cached ?? (await apiClient.get("wallet"));
+        const res =
+          cached ??
+          (await apiClient.get("wallet", {
+            params: force ? { _: Date.now() } : undefined,
+          }));
         if (!cached) setCachedWallet(res);
         const walletData = res?.data?.data || {};
         const heldRaw = Number(walletData.heldBalance ?? 0);

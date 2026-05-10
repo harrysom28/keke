@@ -17,7 +17,10 @@ import Driver from '../models/Driver.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import { initializeTransaction, verifyTransaction, createDVAForUser } from '../services/paystackService.js';
 import { creditWalletFromPaystack } from '../services/walletFundingService.js';
-import { reconcileCancelledScheduledRideEscrows } from '../services/escrowWalletService.js';
+import {
+  reconcileCancelledScheduledRideEscrows,
+  computeRiderWalletApiTotals,
+} from '../services/escrowWalletService.js';
 
 const MIN_AMOUNT_NGN = 100;
 
@@ -72,22 +75,14 @@ export const getWalletWithDVA = asyncHandler(async (req, res) => {
   }
 
   const escrowWallet = await UserWallet.findOne({ userId, userType: 'rider' }).lean();
-  const userBalance = Number(user?.balance) || 0;
-  const escrowAvailable = Number(escrowWallet?.availableBalance) || 0;
-  const escrowHeld = Number(escrowWallet?.heldBalance) || 0;
-  // Use max so rider sees correct balance if top-up wrote to User.balance but not yet to UserWallet
-  const availableBalance = escrowWallet
-    ? Math.max(escrowAvailable, userBalance)
-    : userBalance;
-  const balance = escrowWallet
-    ? availableBalance + escrowHeld
-    : userBalance;
+  const totals = computeRiderWalletApiTotals(user?.balance, escrowWallet);
 
+  res.set('Cache-Control', 'private, no-store, max-age=0');
   res.json({
     status: 'success',
     data: {
-      balance,
-      availableBalance,
+      balance: totals.balance,
+      availableBalance: totals.availableBalance,
       heldBalance: escrowWallet?.heldBalance ?? 0,
       dva,
     },

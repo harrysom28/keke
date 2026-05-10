@@ -13,7 +13,10 @@ import { AuthenticationError, ValidationError, ConflictError, NotFoundError } fr
 import { asyncHandler } from '../utils/errors.js';
 import notificationService from '../services/notificationService.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
-import { reconcileCancelledScheduledRideEscrows } from '../services/escrowWalletService.js';
+import {
+  reconcileCancelledScheduledRideEscrows,
+  computeRiderWalletApiTotals,
+} from '../services/escrowWalletService.js';
 const { sendEmail, sendSMS } = notificationService;
 import logger from '../utils/logger.js';
 
@@ -549,16 +552,10 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
       userType: 'rider',
     }).lean();
     const fresh = await User.findById(user._id).select('balance').lean();
-    const userBalance = Number(fresh?.balance) || 0;
-    const escrowAvailable = Number(escrowWallet?.availableBalance) || 0;
-    const escrowHeld = Number(escrowWallet?.heldBalance) || 0;
-    const availableBalance = escrowWallet
-      ? Math.max(escrowAvailable, userBalance)
-      : userBalance;
-    const walletTotal = escrowWallet ? availableBalance + escrowHeld : userBalance;
+    const totals = computeRiderWalletApiTotals(fresh?.balance, escrowWallet);
     formatted = {
       ...formatted,
-      balance: String(Math.round(walletTotal)),
+      balance: String(Math.round(totals.balance)),
     };
   }
 
