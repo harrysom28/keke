@@ -26,7 +26,7 @@ export const processRideRefund = async (ride, cancellationFee = 0) => {
     }
 
     // If payment wasn't completed, no refund needed
-    if (payment.status !== 'completed') {
+    if (payment.status !== 'completed' && payment.status !== 'held') {
       logger.info(`Payment not completed for ride ${ride._id} - no refund needed`);
       return { success: true, message: 'Payment not completed - no refund needed' };
     }
