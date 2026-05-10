@@ -27,7 +27,7 @@ function paystackLog(level, message, meta = {}) {
 }
 
 /**
- * Handle charge.success: wallet_topup (checkout or DVA). Idempotent; verifies amount.
+ * Handle charge.success: wallet_topup (checkout) or DVA (bank_transfer / dedicated_nuban). Idempotent.
  */
 async function handleChargeSuccess(event, ip) {
   const data = event.data;
@@ -93,8 +93,10 @@ async function handleChargeSuccess(event, ip) {
     return;
   }
 
-  // DVA (bank_transfer): match by customer_code or metadata.userId
-  if (channel === 'bank_transfer') {
+  // DVA inbound: Paystack sends authorization.channel "dedicated_nuban" (Titan/Wema DVA);
+  // older flows may use "bank_transfer". See Paystack DVA docs (charge.success sample).
+  const isDvaInbound = channel === 'bank_transfer' || channel === 'dedicated_nuban';
+  if (isDvaInbound) {
     let user = null;
     if (userId) {
       user = await User.findById(userId).select('balance');
@@ -103,12 +105,12 @@ async function handleChargeSuccess(event, ip) {
       user = await User.findOne({ paystackCustomerCode: customerCode }).select('balance');
     }
     if (!user) {
-      paystackLog('warn', 'Paystack DVA: no user for charge', { reference, customerCode, userId });
+      paystackLog('warn', 'Paystack DVA: no user for charge', { reference, customerCode, userId, channel });
       return;
     }
     userId = user._id.toString();
     await creditWalletFromPaystack(reference, amountNaira, userId, {
-      channel: 'bank_transfer',
+      channel: channel === 'dedicated_nuban' ? 'dedicated_nuban' : 'bank_transfer',
       ip,
     });
   }
