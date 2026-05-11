@@ -377,6 +377,60 @@ const DriverInfo = () => {
     }));
   }, [nameFromParams, user?.profile?.name, user?.name, user?.profile?.gender, user?.gender, user?.profile?.state, user?.state]);
 
+  // If the user already has a partial driver profile on the server (e.g.
+  // they arrived here via Account Settings → "Complete setup" with
+  // initialIndex pointing at the vehicle-photos step), seed the form
+  // state from it. Without this, jumping to a later step leaves all the
+  // earlier-step fields empty and the final POST /driver/create trips
+  // every required-field rule in the createDriver validator (which
+  // returns 400 with a structured `errors` payload). We do this once on
+  // mount and only fill blanks — we never overwrite something the user
+  // has already typed in this session.
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .get("driver/profile")
+      .then(({ data }) => {
+        if (cancelled) return;
+        const d = data?.data?.driver;
+        if (!d) return;
+        setState((prev) => ({
+          ...prev,
+          vehicle_type_id:
+            prev.vehicle_type_id || d.vehicle_details?.vehicle_type || "",
+          vehicle_name:
+            prev.vehicle_name || d.vehicle_details?.vehicle_type_name || "",
+          vehicle_model:
+            prev.vehicle_model || d.vehicle_details?.model || "",
+          vehicle_year:
+            prev.vehicle_year ||
+            (d.vehicle_details?.year ? String(d.vehicle_details.year) : ""),
+          vehicle_color:
+            prev.vehicle_color || d.vehicle_details?.color || "",
+          licence_plate_number:
+            prev.licence_plate_number ||
+            d.vehicle_details?.plate_number ||
+            "",
+          // The backend stores the driver's license / union number in
+          // `licenseNumber` regardless of vehicle type. Mobile sources
+          // that field from `union_number` (Keke) or maps it through the
+          // backend normalizer for other types, so it's safe to seed
+          // back into union_number for resume — the normalizer accepts
+          // either name on the way out.
+          union_number: prev.union_number || d.license_number || "",
+        }));
+      })
+      .catch(() => {
+        // Fresh signup (no driver record yet) returns 404 here; that's
+        // expected and we just leave the form blank. Other transient
+        // errors (network, 5xx) are swallowed too — we surface real
+        // problems at submit time, not on mount.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Unified back navigation. Called from both the hardware back handler and
   // the on-screen Back button so the two paths can never diverge.
   const handleGoBack = useCallback(() => {
@@ -487,6 +541,50 @@ const DriverInfo = () => {
 
   const handleSubmit = async () => {
     if (loading) return;
+
+    // Pre-flight: the createDriver validator on the backend is strict and
+    // *unconditional* — every field below must be present even when the
+    // user resumes via Account Settings → "Complete setup" with an
+    // initialIndex that jumps past the personal/vehicle steps. Catching
+    // missing fields here means we route the user back to the relevant
+    // step with a clear message instead of POSTing a half-empty payload
+    // and surfacing the server's generic "Validation failed" toast.
+    const isKekeSelected = (() => {
+      const t = vehicleData?.types.find(
+        (type: any) =>
+          (type?.vehicle_id || type?._id) === state.vehicle_type_id
+      );
+      const name = (t as any)?.name?.toLowerCase?.() || "";
+      const display = (t as any)?.display_name?.toLowerCase?.() || "";
+      return name === "keke" || display === "keke";
+    })();
+
+    type StepGap = { msg: string; target: number };
+    let gap: StepGap | null = null;
+    if (!state.vehicle_type_id) {
+      gap = { msg: "Please select a vehicle type before submitting.", target: 0 };
+    } else if (!state.vehicle_model?.trim()) {
+      gap = { msg: "Please enter your vehicle model before submitting.", target: 1 };
+    } else if (!state.vehicle_year) {
+      gap = { msg: "Please select your vehicle year before submitting.", target: 1 };
+    } else if (!state.vehicle_color?.trim()) {
+      gap = { msg: "Please enter your vehicle color before submitting.", target: 1 };
+    } else if (!state.licence_plate_number?.trim()) {
+      gap = { msg: "Please enter your license plate number before submitting.", target: 1 };
+    } else if (isKekeSelected && !state.union_number?.trim()) {
+      // Non-Keke users don't have a union_number input today, so we let
+      // those slide through to the server — it'll surface a clear
+      // "License number is required" error via the 400 handler below.
+      gap = { msg: "Please enter your union number before submitting.", target: 1 };
+    }
+
+    if (gap) {
+      showMessage({ type: "warning", message: gap.msg });
+      setIndex(gap.target);
+      setcurrentIndex({ step: 1, total: 3, btn: "Next" });
+      return;
+    }
+
     setLoading(true);
     try {
       const data = new FormData();
@@ -526,6 +624,28 @@ const DriverInfo = () => {
             name: `${formKey}.${ext}`,
           } as unknown as Blob);
         }
+      }
+
+      // TEMPORARY diagnostic: log the URI scheme of each image part
+      // right before we POST. We expect `file://` for compressed assets
+      // out of expo-image-manipulator; `ph://` (Photos library) or
+      // `assets-library://` indicates the compression fallback returned
+      // the original gallery URI, which the native multipart layer
+      // cannot read and surfaces as `ERR_NETWORK` with no response.
+      // Remove once the registration upload is verified working.
+      if (__DEV__) {
+        const imageFieldMap2 = [
+          "licence_image_name",
+          "id_card_image_name",
+          "image_name",
+          "vehicle_image_name",
+        ];
+        imageFieldMap2.forEach((key) => {
+          const img = state[key as keyof typeof state] as {
+            uri?: string;
+          } | null;
+          console.log(`${key} URI scheme:`, img?.uri?.split("://")[0]);
+        });
       }
 
       // Use the configured apiClient (utils/apiClient.ts) so we get:
@@ -573,8 +693,18 @@ const DriverInfo = () => {
 
       let message: string =
         "Registration failed. Please try again.";
-      if (e?.response?.status === 422 && e?.response?.data?.errors) {
-        const errors = e.response.data.errors;
+      // The backend's `ValidationError` class returns HTTP 400 (see
+      // backend/src/utils/errors.js), not 422 — so we accept both here.
+      // Previously only 422 was handled, which meant a real 400 from
+      // express-validator fell through to the generic message branch
+      // below and surfaced as "Validation failed" / "Registration
+      // failed" with no field detail. That is what the user was
+      // perceiving as a "network error" on the device.
+      const hasStructuredErrors =
+        (e?.response?.status === 400 || e?.response?.status === 422) &&
+        !!e?.response?.data?.errors;
+      if (hasStructuredErrors) {
+        const errors = e!.response!.data!.errors!;
         const firstError = Object.values(errors)[0];
         const extracted = Array.isArray(firstError)
           ? firstError[0]
@@ -596,6 +726,33 @@ const DriverInfo = () => {
             : undefined) ||
           e?.message;
         if (typeof raw === "string" && raw) message = raw;
+      }
+
+      // A 409 for the driver profile itself means a prior submit attempt
+      // succeeded on the backend even though the client never saw the 2xx
+      // (e.g. mobile network dropped the response, or the container
+      // restarted right after persisting the driver doc). Treat it as
+      // success and let the user continue. License/plate uniqueness
+      // collisions are real validation errors the user must fix, so those
+      // still surface as a danger flash.
+      if (e?.response?.status === 409) {
+        const lower = message.toLowerCase();
+        const isFieldConflict =
+          lower.includes("license number") ||
+          lower.includes("licence number") ||
+          lower.includes("plate number");
+        const isProfileConflict =
+          !isFieldConflict &&
+          (lower.includes("already exists") ||
+            lower.includes("already registered"));
+        if (isProfileConflict) {
+          showMessage({
+            type: "success",
+            message: "Driver registration already completed",
+          });
+          router.navigate("/");
+          return;
+        }
       }
 
       showMessage({
