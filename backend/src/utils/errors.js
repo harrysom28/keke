@@ -1,6 +1,34 @@
+import { appendFileSync } from 'fs';
 import mongoose from 'mongoose';
 import logger from './logger.js';
 import * as Sentry from '@sentry/node';
+
+// Synchronous, dependency-free way to surface a fatal/uncaught event so
+// it lands in `docker logs` even if winston's async transports never flush.
+const writeSyncStderr = (label, payload) => {
+  try {
+    process.stderr.write(`💥 ${label}: ${JSON.stringify(payload)}\n`);
+  } catch (_) {
+    /* if even stderr is gone, we genuinely cannot do anything */
+  }
+};
+
+// Best-effort forensic record. /app/logs is volume-mounted in compose/swarm,
+// so survives container replacement. Failure is non-fatal.
+const writeSyncDeathNote = (payload) => {
+  try {
+    appendFileSync('/app/logs/uncaught.log', `${JSON.stringify(payload)}\n`);
+  } catch (_) {
+    /* volume may not be writable; stderr is the primary signal */
+  }
+};
+
+const serializeError = (err) => ({
+  name: err?.name,
+  code: err?.code,
+  message: err?.message || String(err),
+  stack: err?.stack,
+});
 
 /**
  * Custom Error Classes
@@ -186,82 +214,81 @@ export const asyncHandler = (fn) => {
  * Catch unhandled promise rejections
  */
 export const handleUnhandledRejection = () => {
-  process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Unhandled rejection — server kept alive', { reason, promise });
-    // Sync errors still exit via uncaughtException; async rejections may be transient — do not kill the process.
+  process.on('unhandledRejection', (reason, _promise) => {
+    const payload = {
+      type: 'unhandledRejection',
+      time: new Date().toISOString(),
+      ...(reason && typeof reason === 'object'
+        ? serializeError(reason)
+        : { message: String(reason) }),
+    };
+    writeSyncStderr('unhandledRejection', payload);
+    writeSyncDeathNote(payload);
+    try {
+      logger.error('Unhandled rejection — server kept alive', payload);
+    } catch (_) {
+      /* winston may be in a bad state; sync stderr above is the source of truth */
+    }
     if (process.env.SENTRY_DSN && process.env.NODE_ENV !== 'test') {
       try {
         Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
       } catch (_) {
-        // Sentry optional
+        /* Sentry optional */
       }
     }
   });
 };
 
 /**
- * Catch uncaught exceptions
+ * Catch uncaught exceptions.
+ *
+ * Design decision: we DO NOT call process.exit() here, ever.
+ *
+ * History:
+ *   v1: unconditional process.exit(1) — turned any stray async error (e.g.
+ *       a late 'error' event from a stream that finished after the
+ *       response was sent) into a container restart, causing Traefik to
+ *       return 502 for the offending request *and* every concurrent
+ *       request that landed during the ~1–3 s task replacement window.
+ *   v2: heuristic "fatal classifier" (RangeError, AssertionError, /out of
+ *       memory/). Sounded principled, but in practice a single misclassified
+ *       RangeError from busboy/multer/cloudinary still tore the container
+ *       down. exitCode=1 with oomKilled=false (confirmed on the VPS)
+ *       meant we were exiting ourselves — Node wasn't being killed by the
+ *       kernel.
+ *   v3 (current): never exit. A true V8 fatal (real heap OOM, segfault in
+ *       native module, etc.) will abort the process WITHOUT going through
+ *       this handler — we don't need to "help" Node die. For everything
+ *       else, surviving is strictly better than restarting under a live
+ *       reverse proxy.
+ *
+ * If the process ever genuinely needs to be replaced (e.g. corrupted
+ * mongoose connection, broken file descriptor table), the next failing
+ * request will surface it cleanly and the operator can restart on
+ * purpose.
  */
 export const handleUncaughtException = () => {
-  process.on('uncaughtException', (err) => {
-    // We used to call process.exit(1) here unconditionally. That created a
-    // very nasty failure mode for /driver/create: any stray async error
-    // from the upload pipeline (e.g. an unhandled 'error' event from a
-    // stream that completed *after* the response was already sent) would
-    // kill the container, Docker would restart it, and Traefik would
-    // return 502 for the in-flight request and any other request that
-    // landed during the ~1-3 s restart window. From the mobile side this
-    // looked like "Network Error" with no clean signal of what actually
-    // failed.
-    //
-    // Node's own guidance (since 12.x) is that you generally CANNOT
-    // resume safely after a true uncaughtException because state may be
-    // corrupt, so the original code wasn't wrong on principle. In our
-    // case though, the realistic uncaught exceptions are all
-    // observer-effects of request handling (stream errors, missing
-    // listeners, double-callbacks) and the rest of the process is fine.
-    // We log, report to Sentry if configured, and only force-exit when
-    // the error is explicitly fatal (out-of-memory, unsupported syscall).
-    const fatalNames = new Set([
-      'RangeError', // typically heap OOM ('Maximum call stack exceeded' counts here too)
-      'AssertionError', // node:assert violations imply broken invariants
-    ]);
-    const fatalCodes = new Set([
-      'ERR_INVALID_THIS',
-      'ERR_INTERNAL_ASSERTION',
-      'ERR_OUT_OF_MEMORY',
-    ]);
-
-    const isFatal =
-      (err && typeof err === 'object' &&
-        (fatalNames.has(err.name) || fatalCodes.has(err.code))) ||
-      (typeof err?.message === 'string' && /out of memory/i.test(err.message));
-
-    logger.error('UNCAUGHT EXCEPTION! 💥', {
-      name: err?.name,
-      code: err?.code,
-      message: err?.message || String(err),
-      stack: err?.stack,
-      fatal: isFatal,
-    });
-
+  process.on('uncaughtException', (err, origin) => {
+    const payload = {
+      type: 'uncaughtException',
+      origin: origin || 'uncaughtException',
+      time: new Date().toISOString(),
+      ...serializeError(err),
+    };
+    writeSyncStderr('uncaughtException', payload);
+    writeSyncDeathNote(payload);
+    try {
+      logger.error('UNCAUGHT EXCEPTION 💥 (server kept alive)', payload);
+    } catch (_) {
+      /* winston unavailable — stderr already captured */
+    }
     if (process.env.SENTRY_DSN && process.env.NODE_ENV !== 'test') {
       try {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
       } catch (_) {
-        // Sentry optional
+        /* Sentry optional */
       }
     }
-
-    if (isFatal) {
-      // Truly fatal — let supervisor restart us. Use a non-zero exit so
-      // Docker treats it as failure (and so we can see it in restart
-      // logs / RestartCount).
-      // eslint-disable-next-line n/no-process-exit
-      process.exit(1);
-    }
-    // Otherwise: keep serving. The request that triggered the exception
-    // is already done (response either sent or will time out), and the
-    // rest of the server is healthy.
+    // Deliberately no process.exit. See the doc block above.
   });
 };
