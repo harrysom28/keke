@@ -13,7 +13,7 @@ import Ride from '../models/Ride.js';
 import Payment from '../models/Payment.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import VehicleType from '../models/VehicleType.js';
-import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
+import { AppError, NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { calculateDistance } from '../utils/geolocation.js';
@@ -321,7 +321,17 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
       failCount: failedUploads.length,
     });
     if (successfulUploads.length === 0) {
-      throw new Error('All document uploads failed. Please try again on a stronger network.');
+      // Surface the actual upload failure to the client. Using AppError
+      // (isOperational = true) keeps the message intact through
+      // sendErrorProd — a plain `Error` here was being rewritten to
+      // "Something went wrong!" and giving us no signal to debug from
+      // the mobile side. Include the first failure reason verbatim so
+      // network / Cloudinary / disk errors are visible to the user.
+      const firstReason = failedUploads[0]?.reason || 'Upload rejected';
+      throw new AppError(
+        `Image upload failed: ${firstReason}. Please try again on a stronger network.`,
+        502
+      );
     }
   }
 

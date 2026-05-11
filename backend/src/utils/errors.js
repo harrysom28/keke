@@ -204,8 +204,64 @@ export const handleUnhandledRejection = () => {
  */
 export const handleUncaughtException = () => {
   process.on('uncaughtException', (err) => {
-    logger.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
-    logger.error(err.message || String(err));
-    process.exit(1);
+    // We used to call process.exit(1) here unconditionally. That created a
+    // very nasty failure mode for /driver/create: any stray async error
+    // from the upload pipeline (e.g. an unhandled 'error' event from a
+    // stream that completed *after* the response was already sent) would
+    // kill the container, Docker would restart it, and Traefik would
+    // return 502 for the in-flight request and any other request that
+    // landed during the ~1-3 s restart window. From the mobile side this
+    // looked like "Network Error" with no clean signal of what actually
+    // failed.
+    //
+    // Node's own guidance (since 12.x) is that you generally CANNOT
+    // resume safely after a true uncaughtException because state may be
+    // corrupt, so the original code wasn't wrong on principle. In our
+    // case though, the realistic uncaught exceptions are all
+    // observer-effects of request handling (stream errors, missing
+    // listeners, double-callbacks) and the rest of the process is fine.
+    // We log, report to Sentry if configured, and only force-exit when
+    // the error is explicitly fatal (out-of-memory, unsupported syscall).
+    const fatalNames = new Set([
+      'RangeError', // typically heap OOM ('Maximum call stack exceeded' counts here too)
+      'AssertionError', // node:assert violations imply broken invariants
+    ]);
+    const fatalCodes = new Set([
+      'ERR_INVALID_THIS',
+      'ERR_INTERNAL_ASSERTION',
+      'ERR_OUT_OF_MEMORY',
+    ]);
+
+    const isFatal =
+      (err && typeof err === 'object' &&
+        (fatalNames.has(err.name) || fatalCodes.has(err.code))) ||
+      (typeof err?.message === 'string' && /out of memory/i.test(err.message));
+
+    logger.error('UNCAUGHT EXCEPTION! 💥', {
+      name: err?.name,
+      code: err?.code,
+      message: err?.message || String(err),
+      stack: err?.stack,
+      fatal: isFatal,
+    });
+
+    if (process.env.SENTRY_DSN && process.env.NODE_ENV !== 'test') {
+      try {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
+      } catch (_) {
+        // Sentry optional
+      }
+    }
+
+    if (isFatal) {
+      // Truly fatal — let supervisor restart us. Use a non-zero exit so
+      // Docker treats it as failure (and so we can see it in restart
+      // logs / RestartCount).
+      // eslint-disable-next-line n/no-process-exit
+      process.exit(1);
+    }
+    // Otherwise: keep serving. The request that triggered the exception
+    // is already done (response either sent or will time out), and the
+    // rest of the server is healthy.
   });
 };
