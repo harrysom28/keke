@@ -92,19 +92,42 @@ async function persistDriverCreateFileAndGetUrl(file) {
   const provider = process.env.UPLOAD_PROVIDER || 'local';
 
   if (provider === 'cloudinary' && file.path) {
+    const tempPath = file.path;
+    // Create the readable inside the try so a synchronous throw from
+    // createReadStream (extremely unlikely, but e.g. an invalid path string)
+    // still lands in the catch + finally below instead of escaping back to
+    // the per-file try/catch in the controller as an uncaughtException.
+    let readable = null;
     try {
-      const result = await uploadStreamToCloudinary(
-        createReadStream(file.path),
-        'driver-documents',
-        { resource_type: file.mimetype === 'application/pdf' ? 'raw' : 'auto' }
-      );
+      readable = createReadStream(tempPath);
+      // Attach a no-op listener immediately so that if the stream emits an
+      // error event between createReadStream() and the pipeline() call
+      // inside uploadStreamToCloudinary, Node's "unhandled 'error' event"
+      // contract doesn't escalate it to uncaughtException. pipeline() will
+      // also attach its own listener and consume the same event.
+      readable.on('error', (err) => {
+        logger.warn(
+          `Read stream error for driver-create temp ${tempPath}: ${err?.message || err}`
+        );
+      });
+      const result = await uploadStreamToCloudinary(readable, 'driver-documents', {
+        resource_type: file.mimetype === 'application/pdf' ? 'raw' : 'auto',
+      });
       return result.url;
     } finally {
-      // Best-effort cleanup. The OS will reap os.tmpdir() eventually, and
-      // failing to unlink should not turn a successful upload into a request
-      // failure (or mask a real upload error during a rejection).
-      unlink(file.path).catch((err) =>
-        logger.warn(`Failed to unlink driver-create temp ${file.path}: ${err.message}`)
+      // Make sure we never leak an open fd, even if the upload rejected
+      // before pipeline ran (e.g. cloudinary sync-throw branch). destroy()
+      // is idempotent so it's safe to call after a successful upload too.
+      try {
+        readable?.destroy();
+      } catch (_) {
+        /* ignored */
+      }
+      // Best-effort temp cleanup. The OS will reap os.tmpdir() eventually,
+      // and failing to unlink should not turn a successful upload into a
+      // request failure (or mask a real upload error during rejection).
+      unlink(tempPath).catch((err) =>
+        logger.warn(`Failed to unlink driver-create temp ${tempPath}: ${err.message}`)
       );
     }
   }

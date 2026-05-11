@@ -5,6 +5,7 @@ import multerS3 from 'multer-s3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, existsSync } from 'fs';
+import { pipeline } from 'stream/promises';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
 
@@ -159,6 +160,26 @@ export const uploadToCloudinary = async (buffer, folder = 'general', options = {
  * Peak memory is bounded by the stream's internal highWaterMark (~64 KB by
  * default) rather than the full file size, which is what we need on the
  * driver /create path that uploads 4 files in parallel.
+ *
+ * Error-handling notes — this used to crash the entire process under load:
+ *  - The previous version used a plain `readable.pipe(cldStream)`. With raw
+ *    `.pipe()`, an `'error'` event on the destination stream (e.g. when
+ *    Cloudinary's underlying https.request errors mid-body) is NOT forwarded
+ *    to the source, and if no one is listening on the destination's error
+ *    channel the EventEmitter contract escalates it to `uncaughtException`.
+ *    The server's global `handleUncaughtException` calls `process.exit(1)`,
+ *    Docker restarts the container, and Traefik returns 502 for the in-flight
+ *    request AND any other request that lands during the restart window —
+ *    which is exactly the symptom we were seeing on /driver/create.
+ *  - `stream/promises#pipeline` solves this: it attaches error listeners on
+ *    every stage of the chain and surfaces them as a single promise rejection.
+ *  - The Cloudinary callback can still fire after the pipeline settles (with
+ *    either a payload or a Cloudinary-API error). The `settled` guard ensures
+ *    we never double-resolve/reject.
+ *  - The whole executor body is wrapped in try/catch so a synchronous throw
+ *    from `cloudinary.uploader.upload_stream` (e.g. options-validation error
+ *    when the SDK isn't configured) is converted into a rejection instead of
+ *    escaping the Promise constructor.
  */
 export const uploadStreamToCloudinary = (readable, folder = 'general', options = {}) => {
   if (UPLOAD_PROVIDER !== 'cloudinary') {
@@ -166,36 +187,56 @@ export const uploadStreamToCloudinary = (readable, folder = 'general', options =
   }
 
   return new Promise((resolve, reject) => {
-    const uploadOptions = {
-      folder: `keke/${folder}`,
-      resource_type: 'auto',
-      ...options,
+    let settled = false;
+    const safeResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const safeReject = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err instanceof Error ? err : new Error(err?.message || String(err)));
     };
 
-    const cldStream = cloudinary.uploader.upload_stream(uploadOptions, (error, result) => {
-      if (error) {
-        logger.error(`Cloudinary upload error: ${error.message}`);
-        return reject(error);
-      }
-      resolve({
-        url: result.secure_url,
-        public_id: result.public_id,
-        format: result.format,
-        width: result.width,
-        height: result.height,
-        bytes: result.bytes,
+    try {
+      const uploadOptions = {
+        folder: `keke/${folder}`,
+        resource_type: 'auto',
+        ...options,
+      };
+
+      const cldStream = cloudinary.uploader.upload_stream(uploadOptions, (error, result) => {
+        if (error) {
+          logger.error(
+            `Cloudinary upload error: ${error.message || error.http_code || JSON.stringify(error)}`
+          );
+          return safeReject(error);
+        }
+        if (!result?.secure_url) {
+          return safeReject(new Error('Cloudinary returned no secure_url'));
+        }
+        safeResolve({
+          url: result.secure_url,
+          public_id: result.public_id,
+          format: result.format,
+          width: result.width,
+          height: result.height,
+          bytes: result.bytes,
+        });
       });
-    });
 
-    // Propagate read errors (missing temp file, permission, etc.) as a
-    // rejection so the caller's try/catch in the Promise.all partition
-    // logic sees them the same way it sees Cloudinary errors.
-    readable.on('error', (err) => {
-      cldStream.destroy(err);
-      reject(err);
-    });
-
-    readable.pipe(cldStream);
+      pipeline(readable, cldStream).catch((err) => {
+        logger.error(`Driver upload stream pipeline error: ${err?.message || err}`);
+        safeReject(err);
+      });
+    } catch (err) {
+      // Sync throw during stream setup (e.g. Cloudinary SDK option-validation
+      // if cloud_name is unset). Without this, the throw would escape the
+      // Promise executor and trip `uncaughtException`.
+      logger.error(`uploadStreamToCloudinary setup error: ${err?.message || err}`);
+      safeReject(err);
+    }
   });
 };
 
