@@ -152,6 +152,54 @@ export const uploadToCloudinary = async (buffer, folder = 'general', options = {
 };
 
 /**
+ * Stream a Readable into Cloudinary instead of buffering the whole file in
+ * RAM. Caller is responsible for the lifetime of the source stream (e.g.
+ * unlinking a multer temp file once this promise settles).
+ *
+ * Peak memory is bounded by the stream's internal highWaterMark (~64 KB by
+ * default) rather than the full file size, which is what we need on the
+ * driver /create path that uploads 4 files in parallel.
+ */
+export const uploadStreamToCloudinary = (readable, folder = 'general', options = {}) => {
+  if (UPLOAD_PROVIDER !== 'cloudinary') {
+    return Promise.reject(new Error('Cloudinary is not configured'));
+  }
+
+  return new Promise((resolve, reject) => {
+    const uploadOptions = {
+      folder: `keke/${folder}`,
+      resource_type: 'auto',
+      ...options,
+    };
+
+    const cldStream = cloudinary.uploader.upload_stream(uploadOptions, (error, result) => {
+      if (error) {
+        logger.error(`Cloudinary upload error: ${error.message}`);
+        return reject(error);
+      }
+      resolve({
+        url: result.secure_url,
+        public_id: result.public_id,
+        format: result.format,
+        width: result.width,
+        height: result.height,
+        bytes: result.bytes,
+      });
+    });
+
+    // Propagate read errors (missing temp file, permission, etc.) as a
+    // rejection so the caller's try/catch in the Promise.all partition
+    // logic sees them the same way it sees Cloudinary errors.
+    readable.on('error', (err) => {
+      cldStream.destroy(err);
+      reject(err);
+    });
+
+    readable.pipe(cldStream);
+  });
+};
+
+/**
  * Delete file from S3
  */
 export const deleteFromS3 = async (key) => {

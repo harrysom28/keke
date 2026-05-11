@@ -1,7 +1,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync, mkdirSync } from 'fs';
-import { writeFile } from 'fs/promises';
+import { existsSync, mkdirSync, createReadStream } from 'fs';
+import { writeFile, unlink } from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import Driver from '../models/Driver.js';
 import DriverWallet from '../models/DriverWallet.js';
@@ -18,7 +18,7 @@ import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { calculateDistance } from '../utils/geolocation.js';
 import { learnFromRide } from '../services/placeIntelligence.js';
-import { getFileUrl, uploadToCloudinary } from '../services/fileUploadService.js';
+import { getFileUrl, uploadToCloudinary, uploadStreamToCloudinary } from '../services/fileUploadService.js';
 import { cache } from '../config/redis.js';
 import { logRideLifecycle, mapRideStatusForClientApi } from '../utils/rideStatus.js';
 import rideMatchingService from '../services/rideMatchingService.js';
@@ -80,10 +80,38 @@ function mapVehicleDocumentType(fieldname) {
 
 /**
  * Resolve public URL for a file from driver /create (multer memory or disk).
+ *
+ * For the cloudinary provider the route writes the multipart body to a temp
+ * file on disk (see driverRoutes.js). We stream that temp file straight into
+ * cloudinary.uploader.upload_stream so the full image never lives in Node's
+ * heap, then unlink the temp file regardless of upload outcome. This is the
+ * memory-pressure fix for the driver /create endpoint — holding 4 image
+ * buffers concurrently was OOM-killing the container.
  */
 async function persistDriverCreateFileAndGetUrl(file) {
   const provider = process.env.UPLOAD_PROVIDER || 'local';
 
+  if (provider === 'cloudinary' && file.path) {
+    try {
+      const result = await uploadStreamToCloudinary(
+        createReadStream(file.path),
+        'driver-documents',
+        { resource_type: file.mimetype === 'application/pdf' ? 'raw' : 'auto' }
+      );
+      return result.url;
+    } finally {
+      // Best-effort cleanup. The OS will reap os.tmpdir() eventually, and
+      // failing to unlink should not turn a successful upload into a request
+      // failure (or mask a real upload error during a rejection).
+      unlink(file.path).catch((err) =>
+        logger.warn(`Failed to unlink driver-create temp ${file.path}: ${err.message}`)
+      );
+    }
+  }
+
+  // Defensive fallback: if some other caller ever invokes this helper with
+  // a memory-backed multer file under the cloudinary provider, keep the
+  // original buffer-upload behavior so we never silently drop the file.
   if (provider === 'cloudinary' && file.buffer) {
     const result = await uploadToCloudinary(file.buffer, 'driver-documents', {
       resource_type: file.mimetype === 'application/pdf' ? 'raw' : 'auto',

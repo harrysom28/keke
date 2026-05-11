@@ -1,5 +1,9 @@
 import express from 'express';
 import multer from 'multer';
+import os from 'os';
+import path from 'path';
+import { mkdirSync } from 'fs';
+import { randomUUID } from 'crypto';
 import * as driverController from '../controllers/driverController.js';
 import * as payoutController from '../controllers/payoutController.js';
 import * as driverSecurityController from '../controllers/driverSecurityController.js';
@@ -15,9 +19,40 @@ import { normalizeDriverCreateBody } from '../middleware/driverCreateBody.js';
 
 const router = express.Router();
 
-// Multer for driver create only: parse multipart, accept any file type (mobile may send varied mimetypes)
+// Multer storage for the driver /create endpoint.
+//
+// On cloudinary we use disk-backed storage so multer streams the multipart
+// body to a temp file (~64 KB working set per concurrent upload) instead of
+// holding the entire decoded buffer in RAM. The controller then streams that
+// temp file straight into cloudinary.uploader.upload_stream and unlinks it.
+// Holding 4 in-memory buffers in parallel was pushing the container past its
+// memory limit and triggering an OOM-restart between Cloudinary success and
+// the response write — the client then retried and hit a 409.
+//
+// For non-cloudinary providers we keep memoryStorage so the existing local
+// dev flow (writing the buffer into ./uploads inside the controller) is
+// byte-identical to before this change. Picking storage at module load is
+// fine because UPLOAD_PROVIDER is a deploy-time setting.
+const DRIVER_CREATE_USES_CLOUDINARY =
+  (process.env.UPLOAD_PROVIDER || 'local') === 'cloudinary';
+
+let driverCreateStorage;
+if (DRIVER_CREATE_USES_CLOUDINARY) {
+  const tmpDir = path.join(os.tmpdir(), 'keke-driver-create');
+  mkdirSync(tmpDir, { recursive: true });
+  driverCreateStorage = multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, tmpDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '') || '';
+      cb(null, `${randomUUID()}${ext}`);
+    },
+  });
+} else {
+  driverCreateStorage = multer.memoryStorage();
+}
+
 const driverCreateUpload = multer({
-  storage: multer.memoryStorage(),
+  storage: driverCreateStorage,
   limits: { fileSize: 10 * 1024 * 1024 },
 }).any();
 
