@@ -523,7 +523,10 @@ const DriverInfo = () => {
 
       await axios.post(CREATE_DRIVER, data, {
         ...apiConfigFormData,
-        timeout: 60000,
+        // Safety net for slow networks even after on-device compression.
+        // Backend uploads to Cloudinary in parallel, so worst-case real-world
+        // is ~10-15s; 120s keeps us well clear of 4G hiccups.
+        timeout: 120000,
         onUploadProgress: (progressEvent) => {
           const percent = Math.round(
             (progressEvent.loaded * 100) / (progressEvent.total || 1)

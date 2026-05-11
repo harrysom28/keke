@@ -1,5 +1,6 @@
 // File: useImagePicker.tsx
 
+import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 
 import { Alert } from "react-native";
@@ -12,6 +13,24 @@ interface Props {
   multiple?: boolean;
   limitVideoDuration?: { status: boolean; dur: number };
 }
+
+// Resize to 1280px wide @ 0.7 quality JPEG. A ~5MB camera shot drops to
+// ~250KB, which is the difference between a 30s upload and a 3s upload over
+// 4G. Falls back to the original uri if manipulation fails for any reason
+// (e.g. unsupported HEIC variant) so we never block the user from continuing.
+const compressImage = async (uri: string): Promise<string> => {
+  try {
+    const result = await ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: 1280 } }],
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+    );
+    return result.uri;
+  } catch (error) {
+    console.warn("Image compression failed, using original:", error);
+    return uri;
+  }
+};
 
 const useImagePicker = ({
   filetype = "image",
@@ -101,6 +120,19 @@ const useImagePicker = ({
     });
     if (!result.canceled) {
       setIsLimitError(false);
+
+      // Compress images on-device before they hit state/upload. We only touch
+      // images here — PDFs and videos are passed through untouched.
+      if (filetype === "image") {
+        for (let i = 0; i < result.assets.length; i++) {
+          const asset = result.assets[i];
+          if (asset?.uri) {
+            const compressedUri = await compressImage(asset.uri);
+            result.assets[i] = { ...asset, uri: compressedUri };
+          }
+        }
+      }
+
       if (multiple) {
         handleImageSaveMultiple(result.assets);
       } else {
@@ -128,6 +160,13 @@ const useImagePicker = ({
       });
       if (!result.canceled) {
         setIsLimitError(false);
+
+        // Camera always returns an image; compress before handing off.
+        if (filetype === "image" && result.assets[0]?.uri) {
+          const compressedUri = await compressImage(result.assets[0].uri);
+          result.assets[0] = { ...result.assets[0], uri: compressedUri };
+        }
+
         handleImageSave(result.assets);
       }
     } catch (err: unknown) {

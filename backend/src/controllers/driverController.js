@@ -205,46 +205,88 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
   let insuranceDocumentUrl = null;
   const vehicleDocPush = [];
 
-  for (const file of files) {
-    try {
-      const url = await persistDriverCreateFileAndGetUrl(file);
-      if (!url) {
-        logger.warn(`Driver create upload: no URL for field ${file.fieldname}`);
-        continue;
+  // Upload all driver documents to Cloudinary in parallel. Sequential uploads
+  // were taking 12-30s for 4 photos and tripping the mobile client's 60s
+  // timeout, which manifested as a Traefik 502. Each task carries its own
+  // try/catch so `file` (and therefore `file.fieldname`) is always attached
+  // to the result — even when the upload rejects. That lets us use Promise.all
+  // (tasks never reject) and partition on a simple `ok` flag.
+  const uploadResults = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const url = await persistDriverCreateFileAndGetUrl(file);
+        return { file, url, ok: true };
+      } catch (err) {
+        return {
+          file,
+          url: null,
+          ok: false,
+          error: err?.message || 'Upload rejected',
+        };
       }
-      const cat = categorizeDriverCreateUploadField(file.fieldname);
-      if (!cat) continue;
+    })
+  );
 
-      const fn = (file.fieldname || '').toLowerCase();
-      if (cat === 'id_image') {
-        if (
-          fn.includes('licence') ||
-          fn.includes('license') ||
-          fn.includes('driver')
-        ) {
-          idImageUrlLicence = url;
-        } else {
-          idImageUrlOther = url;
-        }
-      } else if (cat === 'selfie') {
-        selfieUrl = url;
-      } else if (cat === 'vehicle_image') {
-        vehicleImagePush.push({
-          type: 'front',
-          url,
-          createdAt: new Date(),
-        });
-      } else if (cat === 'insurance') {
-        insuranceDocumentUrl = url;
-      } else if (cat === 'vehicle_document') {
-        vehicleDocPush.push({
-          type: mapVehicleDocumentType(file.fieldname),
-          url,
-          uploadedAt: new Date(),
-        });
+  const successfulUploads = [];
+  const failedUploads = [];
+
+  for (const result of uploadResults) {
+    if (result.ok && result.url) {
+      successfulUploads.push({ file: result.file, url: result.url });
+    } else {
+      failedUploads.push({
+        reason: result.ok ? 'No URL returned from upload' : result.error,
+        fieldname: result.file?.fieldname || 'unknown',
+      });
+    }
+  }
+
+  if (failedUploads.length > 0) {
+    logger.error('Driver document uploads partially or fully failed', {
+      failedUploads,
+      userId,
+      successCount: successfulUploads.length,
+      failCount: failedUploads.length,
+    });
+    if (successfulUploads.length === 0) {
+      throw new Error('All document uploads failed. Please try again on a stronger network.');
+    }
+  }
+
+  // Categorize each successful upload into the appropriate KYC / vehicle
+  // bucket. This is the exact field-mapping the old sequential loop used —
+  // only the iteration source changed.
+  for (const { file, url } of successfulUploads) {
+    const cat = categorizeDriverCreateUploadField(file.fieldname);
+    if (!cat) continue;
+
+    const fn = (file.fieldname || '').toLowerCase();
+    if (cat === 'id_image') {
+      if (
+        fn.includes('licence') ||
+        fn.includes('license') ||
+        fn.includes('driver')
+      ) {
+        idImageUrlLicence = url;
+      } else {
+        idImageUrlOther = url;
       }
-    } catch (err) {
-      logger.error(`Driver create file upload failed (${file.fieldname}): ${err.message}`);
+    } else if (cat === 'selfie') {
+      selfieUrl = url;
+    } else if (cat === 'vehicle_image') {
+      vehicleImagePush.push({
+        type: 'front',
+        url,
+        createdAt: new Date(),
+      });
+    } else if (cat === 'insurance') {
+      insuranceDocumentUrl = url;
+    } else if (cat === 'vehicle_document') {
+      vehicleDocPush.push({
+        type: mapVehicleDocumentType(file.fieldname),
+        url,
+        uploadedAt: new Date(),
+      });
     }
   }
 
