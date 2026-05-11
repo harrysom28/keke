@@ -13,6 +13,7 @@ if (process.env.SENTRY_DSN && process.env.NODE_ENV !== 'test') {
 // Production safety: never skip rate limiting
 if (process.env.NODE_ENV === 'production' && process.env.SKIP_RATE_LIMIT === 'true') {
   console.error('FATAL: SKIP_RATE_LIMIT=true is not allowed in production');
+  process.stderr.write('💥 exit-path: SKIP_RATE_LIMIT-in-production\n');
   process.exit(1);
 }
 
@@ -32,7 +33,13 @@ const __dirname = path.dirname(__filename);
 import { ensureRedisConnected, closeRedisConnection, isRedisConfigured } from './config/redis.js';
 import { securityMiddleware } from './middleware/security.js';
 import { initRateLimiters, limiters } from './middleware/rateLimiter.js';
-import { errorHandler, handleUnhandledRejection, handleUncaughtException } from './utils/errors.js';
+import {
+  errorHandler,
+  handleUnhandledRejection,
+  handleUncaughtException,
+  writeSyncStderr,
+  writeSyncDeathNote,
+} from './utils/errors.js';
 import logger from './utils/logger.js';
 import { initializeSocketService } from './services/socketService.js';
 import scheduledRideService from './services/scheduledRideService.js';
@@ -46,6 +53,24 @@ import {
 // Handle uncaught exceptions and rejections
 handleUncaughtException();
 handleUnhandledRejection();
+
+// Final-resort forensics: 'exit' fires synchronously right before the Node
+// process actually leaves. We can't do async work here, but we CAN write a
+// sync line to stderr / /app/logs/uncaught.log with the exit code so the
+// next time the container dies we know exactly which value of process.exit()
+// fired (or whether it was a signal). Without this hook, the swarm task
+// status "non-zero exit (1)" leaves us with no way to tell where the exit
+// came from after the fact.
+process.on('exit', (code) => {
+  const payload = {
+    type: 'process.exit',
+    code,
+    time: new Date().toISOString(),
+    pid: process.pid,
+  };
+  writeSyncStderr('process.exit', payload);
+  writeSyncDeathNote(payload);
+});
 
 // Create Express app
 const app = express();
@@ -553,6 +578,7 @@ const startServer = async () => {
       tryCount += 1;
       if (tryCount > maxTries) {
         logger.error(`Could not bind to any port ${preferredPort}..${preferredPort + maxTries - 1}. All in use.`);
+        writeSyncStderr('exit-path', { reason: 'no-free-port', port, tryCount });
         process.exit(1);
       }
       const onError = (err) => {
@@ -562,6 +588,11 @@ const startServer = async () => {
           return;
         }
         logger.error(`Server error: ${err.message}`);
+        writeSyncStderr('exit-path', {
+          reason: 'server-error',
+          message: err.message,
+          code: err.code,
+        });
         process.exit(1);
       };
       server.once('error', onError);
@@ -589,6 +620,7 @@ const startServer = async () => {
     tryListen(preferredPort);
   } catch (error) {
     logger.error(`Failed to start server: ${error.message}`);
+    writeSyncStderr('exit-path', { reason: 'startServer-catch', message: error?.message });
     process.exit(1);
   }
 };
@@ -596,9 +628,80 @@ const startServer = async () => {
 // Start server
 startServer();
 
-// Graceful shutdown: stop accepting connections, then close DB
+/**
+ * Graceful shutdown.
+ *
+ * History — read before changing:
+ *   The previous version did `server.close(cb)` then `Promise.all([...]).catch(exit(1))`.
+ *   In production behind Docker Swarm + Traefik this produced a reliable
+ *   bad-pattern when /driver/create was in-flight:
+ *     1. Health check times out (3s) while the upload pipeline saturates I/O.
+ *     2. Swarm marks the task unhealthy and sends SIGTERM.
+ *     3. server.close() waits forever for the in-flight upload connection
+ *        to drain — its callback only fires after every keep-alive socket
+ *        closes.
+ *     4. Either StopGracePeriod expires (→ SIGKILL → exit 137) OR the
+ *        disconnect-step rejects (→ exit 1). Both look the same to the
+ *        client: 502 Bad Gateway from Traefik, plus 502s for any other
+ *        request unlucky enough to arrive during the restart window.
+ *
+ *   The fixes here:
+ *     - Sync-stderr the signal IMMEDIATELY so we can see in `docker logs`
+ *       (and /app/logs/uncaught.log) exactly when SIGTERM arrived, even if
+ *       winston's async pipeline doesn't drain.
+ *     - Hard watchdog: if cleanup isn't done in 7 s, force exit(0). Docker
+ *       Swarm's default StopGracePeriod is 10 s; bailing at 7 s gives us a
+ *       margin before SIGKILL turns into a confusing exit 137.
+ *     - Run server.close() in parallel with disconnects rather than nesting
+ *       them. We don't need to wait for in-flight requests to drain before
+ *       releasing DB/Redis handles — those operations are independent and
+ *       the OS will reap sockets on process death anyway.
+ *     - **Exit 0 on cleanup errors.** A failed disconnect on the way down
+ *       is forensic info, not a fatality. Returning 1 makes Swarm log the
+ *       task as "Failed", which mis-attributes scheduled restarts as
+ *       crashes and pollutes alerting. Real crashes still surface via
+ *       uncaughtException + the process.on('exit') hook above.
+ *     - Re-entrancy guard: if SIGTERM and SIGINT race (or a stuck-handler
+ *       gets re-signalled), only the first invocation does work.
+ */
+let shutdownStarted = false;
 async function gracefulShutdown(signal) {
+  if (shutdownStarted) {
+    writeSyncStderr('shutdown', { signal, note: 'duplicate-shutdown-ignored' });
+    return;
+  }
+  shutdownStarted = true;
+
+  const startedAt = Date.now();
+  writeSyncStderr('shutdown', { signal, phase: 'received', startedAt });
+  writeSyncDeathNote({
+    type: 'shutdown',
+    signal,
+    phase: 'received',
+    time: new Date(startedAt).toISOString(),
+  });
   logger.info(`${signal} received. Shutting down gracefully...`);
+
+  // Hard ceiling — under no circumstances do we let the process linger past
+  // 7 s in this handler. Force exit(0) so Swarm logs the task as a clean
+  // shutdown rather than a crash. The kernel will reap any remaining
+  // sockets and file descriptors.
+  const forceExitTimer = setTimeout(() => {
+    writeSyncStderr('shutdown', {
+      signal,
+      phase: 'watchdog-force-exit',
+      elapsedMs: Date.now() - startedAt,
+    });
+    writeSyncDeathNote({
+      type: 'shutdown',
+      signal,
+      phase: 'watchdog-force-exit',
+      time: new Date().toISOString(),
+    });
+    process.exit(0);
+  }, 7000);
+  forceExitTimer.unref?.();
+
   try {
     const { getSocketService } = await import('./services/socketService.js');
     const svc = getSocketService();
@@ -609,20 +712,58 @@ async function gracefulShutdown(signal) {
   } catch (_) {
     /* ignore */
   }
-  scheduledRideService.stop();
-  staleTripService.stop();
-  stopOrphanedRideRecovery();
-  server.close(() => {
-    Promise.all([disconnectDB(), closeRedisConnection()])
-      .then(() => {
-        logger.info('Process terminated');
-        process.exit(0);
-      })
-      .catch((err) => {
-        logger.error(`Shutdown error: ${err.message}`);
-        process.exit(1);
-      });
-  });
+
+  try { scheduledRideService.stop(); } catch (_) { /* best-effort */ }
+  try { staleTripService.stop(); } catch (_) { /* best-effort */ }
+  try { stopOrphanedRideRecovery(); } catch (_) { /* best-effort */ }
+
+  // Kick server.close() but don't block cleanup on it — keep-alive sockets
+  // can stay open well past our 7 s deadline. Server.close stops accepting
+  // new connections immediately, which is the part we actually need.
+  try {
+    server.close();
+  } catch (err) {
+    writeSyncStderr('shutdown', { signal, phase: 'server.close-threw', message: err?.message });
+  }
+
+  // Disconnect DB and Redis in parallel. Both helpers already swallow their
+  // own errors and return resolved promises, so this should never throw —
+  // the try/catch is belt-and-suspenders for future regressions.
+  try {
+    await Promise.all([disconnectDB(), closeRedisConnection()]);
+    writeSyncStderr('shutdown', {
+      signal,
+      phase: 'clean-exit',
+      elapsedMs: Date.now() - startedAt,
+    });
+    writeSyncDeathNote({
+      type: 'shutdown',
+      signal,
+      phase: 'clean-exit',
+      time: new Date().toISOString(),
+    });
+    logger.info('Process terminated');
+  } catch (err) {
+    writeSyncStderr('shutdown', {
+      signal,
+      phase: 'cleanup-error',
+      message: err?.message,
+      elapsedMs: Date.now() - startedAt,
+    });
+    writeSyncDeathNote({
+      type: 'shutdown',
+      signal,
+      phase: 'cleanup-error',
+      message: err?.message,
+      time: new Date().toISOString(),
+    });
+  }
+
+  clearTimeout(forceExitTimer);
+  // Always exit 0 on a controlled shutdown. Cleanup failures are surfaced
+  // via the death note + stderr above, but they do not represent the kind
+  // of crash that Swarm should treat as a Failed task.
+  process.exit(0);
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

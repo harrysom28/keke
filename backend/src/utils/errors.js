@@ -5,7 +5,10 @@ import * as Sentry from '@sentry/node';
 
 // Synchronous, dependency-free way to surface a fatal/uncaught event so
 // it lands in `docker logs` even if winston's async transports never flush.
-const writeSyncStderr = (label, payload) => {
+// Exported so server.js can use the same channel for shutdown-path
+// instrumentation (SIGTERM, server-error, etc.) — anywhere that may exit
+// the process before async log transports can drain.
+export const writeSyncStderr = (label, payload) => {
   try {
     process.stderr.write(`💥 ${label}: ${JSON.stringify(payload)}\n`);
   } catch (_) {
@@ -15,7 +18,7 @@ const writeSyncStderr = (label, payload) => {
 
 // Best-effort forensic record. /app/logs is volume-mounted in compose/swarm,
 // so survives container replacement. Failure is non-fatal.
-const writeSyncDeathNote = (payload) => {
+export const writeSyncDeathNote = (payload) => {
   try {
     appendFileSync('/app/logs/uncaught.log', `${JSON.stringify(payload)}\n`);
   } catch (_) {
