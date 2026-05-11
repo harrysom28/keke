@@ -128,6 +128,17 @@ export const uploadToCloudinary = async (buffer, folder = 'general', options = {
     const uploadOptions = {
       folder: `keke/${folder}`,
       resource_type: 'auto',
+      // CRITICAL: see uploadStreamToCloudinary below for the long version.
+      // tl;dr the Cloudinary SDK creates an INTERNAL Q deferred even when
+      // you're only using the callback API. If the upload fails (network,
+      // bad cloud_name, invalid signature, etc.) it rejects that deferred
+      // — and since upload_stream returns the Writable, nothing can ever
+      // .catch it. Node then escalates to unhandledRejection. We saw this
+      // in production: `Invalid cloud_name keke-cloudinary` from a
+      // misconfigured env crashed the entire container. Disabling the
+      // internal promise route makes the SDK use the callback path
+      // exclusively, which we already handle.
+      disable_promises: true,
       ...options,
     };
 
@@ -203,6 +214,31 @@ export const uploadStreamToCloudinary = (readable, folder = 'general', options =
       const uploadOptions = {
         folder: `keke/${folder}`,
         resource_type: 'auto',
+        // CRITICAL — read before touching:
+        //
+        // cloudinary v2's `call_api` (lib-es5/uploader.js ~L553) ALWAYS
+        // creates a Q deferred internally:
+        //   var deferred = Q.defer();
+        //   ...
+        //   if (USE_PROMISES) deferred.reject(res);
+        //
+        // `upload_stream` then returns the Writable stream (not the
+        // promise), so there is NO way for caller code to .catch the
+        // deferred. When the upload fails — bad cloud_name, network blip,
+        // invalid signature, anything — Cloudinary rejects an internal
+        // promise NOBODY can observe, Node emits unhandledRejection, and
+        // (because the runtime treats an unhandled rejection without a
+        // .catch as a fatal-ish event in some configurations) the process
+        // exits 1. We confirmed this on the VPS: `Invalid cloud_name
+        // keke-cloudinary` -> unhandledRejection -> process.exit(1) inside
+        // 1 ms, tearing the container down on every /driver/create submit.
+        //
+        // `disable_promises: true` flips `USE_PROMISES` to false in the
+        // SDK, so the deferred is created but never rejected. We still
+        // get the error via the callback below, which routes through our
+        // safeReject and the controller's per-file try/catch — the clean
+        // path we already designed for.
+        disable_promises: true,
         ...options,
       };
 
