@@ -170,11 +170,17 @@ export default function GlobalContext({
     };
   }, [token, publicConfig.pusher.key, publicConfig.pusher.cluster]); // Re-run if config changes
 
+  // NOTE: Do not set `Content-Type: multipart/form-data` here. axios/RN
+  // attach the correct multipart boundary automatically when the request
+  // body is a FormData instance; pre-setting the header strips the
+  // boundary and the native networking layer rejects the upload with a
+  // generic "Network Error" (no response object). Prefer `apiClient`
+  // (utils/apiClient.ts), which also deletes any stale Content-Type on
+  // FormData requests and attaches the bearer token from Redux.
   const apiConfigFormData = {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
-      "Content-Type": "multipart/form-data",
     },
   };
 

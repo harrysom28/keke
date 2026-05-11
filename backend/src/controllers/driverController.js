@@ -125,13 +125,22 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
     insurance,
   } = req.body;
 
-  // Check if user already has a driver profile
+  // Check if user already has a driver profile. If the existing record is
+  // already verified/approved, refuse outright — we never overwrite an
+  // active driver record from this endpoint. Otherwise we'll re-use the
+  // existing document via an in-place update further below.
+  //
+  // The previous implementation did `Driver.deleteOne` here followed by
+  // `Driver.create` below. That was unsafe: if the subsequent create threw
+  // (validation, transient DB error, etc.) the user was left with no
+  // driver record at all, losing any prior progress on fields we don't
+  // re-submit on every call (vehicleImages, bankAccount, insurance, etc.).
   const existingDriver = await Driver.findOne({ user: userId });
-  if (existingDriver) {
-    if (existingDriver.verificationStatus === 'approved' || existingDriver.documentsVerified) {
-      throw new ConflictError('Driver profile already exists');
-    }
-    await Driver.deleteOne({ _id: existingDriver._id });
+  if (
+    existingDriver &&
+    (existingDriver.verificationStatus === 'approved' || existingDriver.documentsVerified)
+  ) {
+    throw new ConflictError('Driver profile already exists');
   }
 
   // Check if user role is driver
@@ -186,7 +195,19 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
 
   let driver;
   try {
-    driver = await Driver.create(driverData);
+    if (existingDriver) {
+      // Idempotent in-place update for a non-verified draft profile.
+      // `Object.assign` overwrites only the keys we re-submit, so any
+      // fields already on the document but not in `driverData`
+      // (vehicleImages, rejectionReason, etc.) survive untouched.
+      // `save()` runs the same schema validators and middleware as
+      // `create()`, so the duplicate-key (11000) path below still
+      // covers a plate/license collision against a different user.
+      Object.assign(existingDriver, driverData);
+      driver = await existingDriver.save();
+    } else {
+      driver = await Driver.create(driverData);
+    }
   } catch (createErr) {
     if (createErr.code === 11000) {
       const field = createErr.message?.includes('licenseNumber') ? 'License number' : createErr.message?.includes('plateNumber') ? 'Plate number' : 'Driver';

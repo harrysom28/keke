@@ -31,6 +31,7 @@ import Checkbox from "expo-checkbox";
 import { Dropdown } from "react-native-element-dropdown";
 import FormInput from "@/components/formInput";
 import { ScrollView } from "react-native-gesture-handler";
+import apiClient from "@/utils/apiClient";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
@@ -240,7 +241,6 @@ const Levels = [
 ];
 
 const DriverInfo = () => {
-  const { apiConfigFormData } = useContext(AppContext);
   const isFocused = useIsFocused();
   const dispatch = useDispatch();
   const { apiConfig } = useContext(AppContext);
@@ -377,37 +377,43 @@ const DriverInfo = () => {
     }));
   }, [nameFromParams, user?.profile?.name, user?.name, user?.profile?.gender, user?.gender, user?.profile?.state, user?.state]);
 
+  // Unified back navigation. Called from both the hardware back handler and
+  // the on-screen Back button so the two paths can never diverge.
+  const handleGoBack = useCallback(() => {
+    if (index === 0) {
+      router.back();
+      return;
+    }
+    if (index >= 7) {
+      router.back();
+      return;
+    }
+
+    setIndex((prev) => prev - 1);
+
+    if (index >= 2 && currentIndex.step > 1) {
+      setcurrentIndex((prev) => ({
+        ...prev,
+        step: prev.step - 1,
+        btn: "Continue",
+      }));
+      clearImage();
+    } else {
+      setcurrentIndex({
+        step: 1,
+        total: 3,
+        btn: "Next",
+      });
+    }
+  }, [index, currentIndex.step, router, clearImage]);
+
   useEffect(() => {
-    const backAction = () => {
-      if (index > 0 && index < 7) {
-        setIndex((prev) => prev - 1);
-        if (index >= 2 && currentIndex.step > 1) {
-          setcurrentIndex((prev) => ({
-            ...prev,
-            step: prev.step - 1,
-            btn: "Continue",
-          }));
-          clearImage();
-        } else {
-          setcurrentIndex({
-            step: 1,
-            total: 3,
-            btn: "Next",
-          });
-        }
-      } else {
-        router.back();
-      }
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", () => {
+      handleGoBack();
       return true;
-    };
-
-    const backHandler = BackHandler.addEventListener(
-      "hardwareBackPress",
-      backAction
-    );
-
+    });
     return () => backHandler.remove();
-  }, [currentIndex.step, index]);
+  }, [handleGoBack]);
 
   const getVehicleData = (URL: string, setReturnedData: (data: any) => void, params?: any) => {
     axios
@@ -480,6 +486,7 @@ const DriverInfo = () => {
   };
 
   const handleSubmit = async () => {
+    if (loading) return;
     setLoading(true);
     try {
       const data = new FormData();
@@ -521,8 +528,15 @@ const DriverInfo = () => {
         }
       }
 
-      await axios.post(CREATE_DRIVER, data, {
-        ...apiConfigFormData,
+      // Use the configured apiClient (utils/apiClient.ts) so we get:
+      //   1. Bearer token attached from Redux on every request.
+      //   2. Content-Type stripped on FormData bodies, letting axios/RN
+      //      set `multipart/form-data; boundary=...` correctly (the
+      //      missing boundary was the prior "Network Error" cause).
+      //   3. Request/response logging via the interceptor, so this POST
+      //      now shows up in Metro alongside the other API calls.
+      // Do NOT pass a `headers` object here; apiClient handles them.
+      await apiClient.post(CREATE_DRIVER, data, {
         // Safety net for slow networks even after on-device compression.
         // Backend uploads to Cloudinary in parallel, so worst-case real-world
         // is ~10-15s; 120s keeps us well clear of 4G hiccups.
@@ -713,35 +727,28 @@ const DriverInfo = () => {
       Tab={index > 1 ? undefined : Tab}
       footer={
         <View style={tw`flex-row items-center justify-between px-6 mt-5`}>
-          {currentIndex.step < 2 && (
-            <TouchableOpacity
-              // disabled={index === 0}
-              onPress={() => {
-                if (index === 0) {
-                  router.back();
-                } else {
-                  setIndex((prev) => prev - 1);
-                }
-              }}
-              style={tw.style(
-                `flex-row justify-center px-12  items-center border border-base-green rounded-[8px]`,
-                { height: verticalScale(40) }
-              )}
+          <TouchableOpacity
+            onPress={handleGoBack}
+            disabled={loading}
+            style={tw.style(
+              `flex-row flex-1 mr-3 justify-center px-6 items-center border border-base-green rounded-[8px]`,
+              { height: verticalScale(45) },
+              loading && `opacity-50`
+            )}
+          >
+            <Text
+              style={tw.style(`text-base-green text-base`, {
+                fontFamily: "RobotoBold",
+              })}
             >
-              <Text
-                style={tw.style(`text-base-green text-base`, {
-                  fontFamily: "RobotoBold",
-                })}
-              >
-                Back
-              </Text>
-            </TouchableOpacity>
-          )}
+              Back
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity
             onPress={handleProgress}
+            disabled={loading}
             style={tw.style(
-              `flex-row justify-center items-center px-12 bg-base-green rounded-[8px]`,
-              currentIndex.step > 1 && `w-full`,
+              `flex-row flex-1 justify-center items-center px-6 bg-base-green rounded-[8px]`,
               { height: verticalScale(45) }
             )}
           >

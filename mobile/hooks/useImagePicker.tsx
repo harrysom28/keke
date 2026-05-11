@@ -14,21 +14,60 @@ interface Props {
   limitVideoDuration?: { status: boolean; dur: number };
 }
 
+// Asset shape we hand back to the rest of the picker. We override `type` and
+// `mimeType` with the actual MIME string (the picker's native `type` is the
+// media-kind union "image" | "video" | ..., which is useless for multipart).
+type CompressedAsset = Omit<
+  ImagePicker.ImagePickerAsset,
+  "type" | "mimeType" | "fileName"
+> & {
+  fileName: string;
+  type: string;
+  mimeType: string;
+};
+
+const rewriteToJpgName = (orig?: string | null): string => {
+  if (orig && typeof orig === "string" && orig.trim().length > 0) {
+    const dot = orig.lastIndexOf(".");
+    const base = dot > 0 ? orig.slice(0, dot) : orig;
+    return `${base}.jpg`;
+  }
+  return `compressed_${Date.now()}.jpg`;
+};
+
 // Resize to 1280px wide @ 0.7 quality JPEG. A ~5MB camera shot drops to
 // ~250KB, which is the difference between a 30s upload and a 3s upload over
-// 4G. Falls back to the original uri if manipulation fails for any reason
-// (e.g. unsupported HEIC variant) so we never block the user from continuing.
-const compressImage = async (uri: string): Promise<string> => {
+// 4G. Returns a full asset-like object so downstream FormData.append calls
+// always have a valid `name` and `type` — RN's multipart impl silently fails
+// (rejecting before the request leaves the device) when either is undefined.
+// Falls back to the original asset if manipulation throws (e.g. unsupported
+// HEIC variant) so we never block the user from continuing.
+const compressImage = async (
+  asset: ImagePicker.ImagePickerAsset
+): Promise<CompressedAsset> => {
   try {
     const result = await ImageManipulator.manipulateAsync(
-      uri,
+      asset.uri,
       [{ resize: { width: 1280 } }],
       { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
     );
-    return result.uri;
+    return {
+      ...asset,
+      uri: result.uri,
+      width: result.width,
+      height: result.height,
+      fileName: rewriteToJpgName(asset.fileName),
+      type: "image/jpeg",
+      mimeType: "image/jpeg",
+    };
   } catch (error) {
     console.warn("Image compression failed, using original:", error);
-    return uri;
+    return {
+      ...asset,
+      fileName: asset.fileName ?? `compressed_${Date.now()}.jpg`,
+      type: asset.mimeType || "image/jpeg",
+      mimeType: asset.mimeType || "image/jpeg",
+    };
   }
 };
 
@@ -122,13 +161,15 @@ const useImagePicker = ({
       setIsLimitError(false);
 
       // Compress images on-device before they hit state/upload. We only touch
-      // images here — PDFs and videos are passed through untouched.
+      // images here — PDFs and videos are passed through untouched. We hand
+      // the whole asset in so the returned object preserves fileName/type
+      // (with the JPEG extension/mime rewritten).
       if (filetype === "image") {
         for (let i = 0; i < result.assets.length; i++) {
           const asset = result.assets[i];
           if (asset?.uri) {
-            const compressedUri = await compressImage(asset.uri);
-            result.assets[i] = { ...asset, uri: compressedUri };
+            const compressed = await compressImage(asset);
+            result.assets[i] = compressed as unknown as ImagePicker.ImagePickerAsset;
           }
         }
       }
@@ -161,10 +202,12 @@ const useImagePicker = ({
       if (!result.canceled) {
         setIsLimitError(false);
 
-        // Camera always returns an image; compress before handing off.
+        // Camera always returns an image; compress before handing off. Pass
+        // the whole asset so the returned object carries a proper fileName
+        // and `image/jpeg` mime (RN multipart rejects undefined name/type).
         if (filetype === "image" && result.assets[0]?.uri) {
-          const compressedUri = await compressImage(result.assets[0].uri);
-          result.assets[0] = { ...result.assets[0], uri: compressedUri };
+          const compressed = await compressImage(result.assets[0]);
+          result.assets[0] = compressed as unknown as ImagePicker.ImagePickerAsset;
         }
 
         handleImageSave(result.assets);
