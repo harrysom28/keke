@@ -42,7 +42,7 @@
       "package": "com.keke.app",
       "config": {
         "googleMaps": {
-          "apiKey": "AIzaSyC8ybczSzZFvizinERR6f98sitRKCI-KTI"
+          "apiKey": "AIzaSyC_YzZFaiK-ryYgPOS-b3DdFqz7o73WdgU"
         }
       },
       "googleServicesFile": "./google-services.json"
@@ -102,7 +102,7 @@
         "origin": false
       },
       "apiUrl": "https://api.getkekeapp.com",
-      "googleMapsApiKey": "AIzaSyC8ybczSzZFvizinERR6f98sitRKCI-KTI",
+      "googleMapsApiKey": "AIzaSyC_YzZFaiK-ryYgPOS-b3DdFqz7o73WdgU",
       "googleClientId": "YOUR_GOOGLE_CLIENT_ID_HERE",
       "pusherKey": "1c30639ede328b1be2fc",
       "pusherCluster": "eu",
