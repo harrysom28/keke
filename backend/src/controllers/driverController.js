@@ -270,8 +270,15 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
   await driver.populate('vehicleDetails.vehicleType');
 
   const files = Array.isArray(req.files) ? req.files : [];
-  let idImageUrlLicence = null;
-  let idImageUrlOther = null;
+  // Two SEPARATE buckets for the two ID-flavored images mobile sends:
+  //   - licence_image_name → driver's license document  → licenseImageUrl
+  //   - id_card_image_name → national/government ID     → idCardImageUrl
+  // The previous version coalesced them into a single idImageUrl, which
+  // silently dropped one of the two whenever the driver uploaded both.
+  // Admins need to review both, so we now persist them into distinct
+  // fields on DriverKyc (licenseImageUrl + idImageUrl respectively).
+  let licenseImageUrl = null;
+  let idCardImageUrl = null;
   let selfieUrl = null;
   const vehicleImagePush = [];
   let insuranceDocumentUrl = null;
@@ -344,14 +351,19 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
 
     const fn = (file.fieldname || '').toLowerCase();
     if (cat === 'id_image') {
+      // Field-name heuristic decides which of the two physical fields
+      // this image belongs to. The fieldnames the mobile registration
+      // form sends are stable (licence_image_name vs id_card_image_name),
+      // so this is reliable, but we also fall back to substring checks
+      // to tolerate older clients or alternative naming.
       if (
         fn.includes('licence') ||
         fn.includes('license') ||
         fn.includes('driver')
       ) {
-        idImageUrlLicence = url;
+        licenseImageUrl = url;
       } else {
-        idImageUrlOther = url;
+        idCardImageUrl = url;
       }
     } else if (cat === 'selfie') {
       selfieUrl = url;
@@ -372,8 +384,6 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
     }
   }
 
-  const idImageUrl = idImageUrlLicence || idImageUrlOther;
-
   if (vehicleImagePush.length > 0) {
     await Driver.findByIdAndUpdate(driver._id, {
       $push: { vehicleImages: { $each: vehicleImagePush } },
@@ -382,19 +392,31 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
 
   const kycUserId = driver.user?._id || driver.user;
 
-  if (idImageUrl != null || selfieUrl != null) {
+  // Persist BOTH ID-flavored images on the same DriverKyc record. We only
+  // overwrite a field if this request actually provided a new value for
+  // it — that way a partial re-submission (e.g. driver retries after a
+  // network blip and only includes 2 of the 4 images) doesn't blow away
+  // images that were already uploaded on a previous attempt.
+  const kycSet = { updatedAt: new Date() };
+  if (licenseImageUrl != null) kycSet.licenseImageUrl = licenseImageUrl;
+  if (idCardImageUrl != null) kycSet.idImageUrl = idCardImageUrl;
+  if (selfieUrl != null) kycSet.selfieUrl = selfieUrl;
+
+  if (licenseImageUrl != null || idCardImageUrl != null || selfieUrl != null) {
     await DriverKyc.findOneAndUpdate(
       { userId: kycUserId },
       {
-        $set: {
-          idImageUrl: idImageUrl || 'pending',
-          selfieUrl: selfieUrl || 'pending',
-          updatedAt: new Date(),
-        },
+        $set: kycSet,
         $setOnInsert: {
           userId: kycUserId,
           idType: 'drivers_license',
           idNumber: String(licenseNumber || '').trim() || 'pending',
+          // 'pending' sentinels keep the schema's `required: true` happy
+          // when an upsert creates a fresh document but the driver only
+          // uploaded a subset of the four images. The fields supplied
+          // above (kycSet) override these for the ones we did receive.
+          idImageUrl: 'pending',
+          selfieUrl: 'pending',
           verificationStatus: 'pending',
         },
       },
@@ -1188,9 +1210,21 @@ export const getDriverSetupStatus = asyncHandler(async (req, res) => {
     });
   }
 
-  const requiredImageTypes = ['front', 'back', 'side', 'interior', 'license'];
-  const vehicleImages = driver.vehicleImages || [];
-  const hasImageType = (type) => vehicleImages.some((img) => (img.type || '').toLowerCase() === type);
+  // The mobile onboarding form captures exactly four images per driver:
+  //   1. Driver's license photo  → DriverKyc.licenseImageUrl
+  //   2. Government ID card       → DriverKyc.idImageUrl
+  //   3. Driver selfie/portrait   → DriverKyc.selfieUrl
+  //   4. Vehicle photo            → Driver.vehicleImages[] (any entry)
+  // Setup completeness is now measured against these four images instead
+  // of the previous five-angle vehicle requirement (front/back/side/
+  // interior/license), which the registration flow never collected and
+  // which therefore left every newly-registered driver stuck below 100%.
+  const driverKyc = await DriverKyc.findOne({ userId });
+  const isRealUrl = (v) => typeof v === 'string' && v.trim() !== '' && v !== 'pending';
+
+  const vehicleImages = Array.isArray(driver.vehicleImages) ? driver.vehicleImages : [];
+  const hasAnyVehicleImage = vehicleImages.some((img) => isRealUrl(img?.url));
+
   const licenseOk = !!(driver.licenseNumber && driver.licenseExpiry);
   const vehicleDetailsOk = !!(
     driver.vehicleDetails?.make &&
@@ -1198,7 +1232,18 @@ export const getDriverSetupStatus = asyncHandler(async (req, res) => {
     driver.vehicleDetails?.plateNumber &&
     driver.vehicleDetails?.vehicleType
   );
-  const vehicleImagesOk = requiredImageTypes.every((t) => hasImageType(t));
+  const hasLicenseImage = isRealUrl(driverKyc?.licenseImageUrl);
+  const hasIdCardImage = isRealUrl(driverKyc?.idImageUrl);
+  const hasSelfie = isRealUrl(driverKyc?.selfieUrl);
+  const onboardingPhotosOk =
+    hasLicenseImage && hasIdCardImage && hasSelfie && hasAnyVehicleImage;
+
+  const missingPhotos = [];
+  if (!hasLicenseImage) missingPhotos.push('driver license photo');
+  if (!hasIdCardImage) missingPhotos.push('ID card photo');
+  if (!hasSelfie) missingPhotos.push('driver photo');
+  if (!hasAnyVehicleImage) missingPhotos.push('vehicle photo');
+
   const bankOk = !!(
     driver.bankAccount?.accountNumber &&
     driver.bankAccount?.bankName
@@ -1220,11 +1265,13 @@ export const getDriverSetupStatus = asyncHandler(async (req, res) => {
       action_required: vehicleDetailsOk ? null : 'Complete vehicle details (make, model, plate number, vehicle type) in your driver profile.',
     },
     {
-      id: 'vehicle_images',
-      label: 'Vehicle photos',
-      description: 'Front, back, side, interior, and license plate photos',
-      completed: vehicleImagesOk,
-      action_required: vehicleImagesOk ? null : 'Upload all required vehicle photos (front, back, side, interior, license) in your driver profile.',
+      id: 'onboarding_photos',
+      label: 'Verification photos',
+      description: 'Driver license, ID card, driver photo, and vehicle photo',
+      completed: onboardingPhotosOk,
+      action_required: onboardingPhotosOk
+        ? null
+        : `Upload your ${missingPhotos.join(', ')} so an admin can verify your account.`,
     },
     {
       id: 'bank_account',

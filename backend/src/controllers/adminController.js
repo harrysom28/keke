@@ -2911,11 +2911,21 @@ const formatDriverCandidateResponse = ({ user, driver, driverKyc, driverVehicle 
 };
 
 const buildDriverReviewPayload = ({ user, driver, driverKyc, driverVehicle }) => {
+  // The mobile onboarding form collects two distinct ID-flavored images:
+  // the driver's license photo (DriverKyc.licenseImageUrl) and the
+  // government ID card photo (DriverKyc.idImageUrl). Admins must be able
+  // to review both, so the checklist surfaces them as separate items
+  // rather than collapsing them into a single "ID image uploaded" row.
+  // The `isRealUrl` helper rejects empty strings and the 'pending'
+  // sentinel the upload pipeline writes when a record is upserted before
+  // its file has finished streaming to Cloudinary.
+  const isRealUrl = (v) => typeof v === 'string' && v.trim() !== '' && v !== 'pending';
   const identityChecklist = [
     { key: 'id_type', label: 'ID type selected', complete: Boolean(driverKyc?.idType) },
     { key: 'id_number', label: 'ID number entered', complete: Boolean(driverKyc?.idNumber) },
-    { key: 'id_image', label: 'ID image uploaded', complete: Boolean(driverKyc?.idImageUrl) },
-    { key: 'selfie', label: 'Selfie uploaded', complete: Boolean(driverKyc?.selfieUrl) },
+    { key: 'license_image', label: 'Driver license image uploaded', complete: isRealUrl(driverKyc?.licenseImageUrl) },
+    { key: 'id_card_image', label: 'ID card image uploaded', complete: isRealUrl(driverKyc?.idImageUrl) },
+    { key: 'selfie', label: 'Driver photo uploaded', complete: isRealUrl(driverKyc?.selfieUrl) },
   ];
   const vehicleChecklist = [
     { key: 'vehicle_type', label: 'Vehicle type selected', complete: Boolean(driverVehicle?.vehicleType) },
@@ -2972,8 +2982,13 @@ const buildDriverReviewPayload = ({ user, driver, driverKyc, driverVehicle }) =>
       rejection_reason: driverKyc?.rejectionReason || null,
       id_type: driverKyc?.idType || null,
       id_number: driverKyc?.idNumber || null,
-      id_image_url: driverKyc?.idImageUrl || null,
-      selfie_url: driverKyc?.selfieUrl || null,
+      // Both ID-flavored images are surfaced as distinct URLs so the
+      // admin UI can show them side-by-side during review. We coerce
+      // the 'pending' upload sentinel to null so the frontend doesn't
+      // try to render it as an image src.
+      id_image_url: isRealUrl(driverKyc?.idImageUrl) ? driverKyc.idImageUrl : null,
+      license_image_url: isRealUrl(driverKyc?.licenseImageUrl) ? driverKyc.licenseImageUrl : null,
+      selfie_url: isRealUrl(driverKyc?.selfieUrl) ? driverKyc.selfieUrl : null,
       created_at: driverKyc?.createdAt || null,
       updated_at: driverKyc?.updatedAt || null,
       checklist: identityChecklist,
