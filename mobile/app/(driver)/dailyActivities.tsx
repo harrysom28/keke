@@ -219,13 +219,14 @@ const DailyActivities = () => {
 
   useEffect(() => {
     if (isFocused) {
-      // Listener for when the keyboard is hidden
+      // Listener for when the keyboard is hidden. Snap value MUST match
+      // the BottomSheet's `snapPoints` below — gorhom auto-expands the sheet
+      // when the keyboard appears, and we restore the same height on dismiss.
+      // If snapPoints changes, update this percentage too.
       const keyboardHideListener = Keyboard.addListener(
         "keyboardDidHide",
         () => {
-          // Do something here when the keyboard is closed
-
-          bottomSheetRef?.current?.snapToPosition("52%");
+          bottomSheetRef?.current?.snapToPosition("60%");
         }
       );
 
@@ -490,7 +491,14 @@ const DailyActivities = () => {
       <Portal>
         <BottomSheet
           index={-1}
-          snapPoints={["53%"]}
+          snapPoints={["60%"]}
+          // `@gorhom/bottom-sheet` does NOT measure custom `handleComponent`s
+          // — it reserves `handleHeight` (default 24) at the top and lays the
+          // content out below that. Our custom handle below is ~78px tall
+          // (mt-5 20 + py-3*2 24 + button h-[34]), so without telling the
+          // sheet about it the dropdown label/top slides under the gray bar.
+          // Keep this in sync if the handle padding/size ever changes.
+          handleHeight={80}
           ref={bottomSheetRef}
           backdropComponent={renderBackdrop}
           handleComponent={() => (
@@ -520,7 +528,7 @@ const DailyActivities = () => {
           style={tw`px-4 rounded-t-[40px]`}
           //   enablePanDownToClose
         >
-          <BottomSheetView style={tw`flex-col gap-y-2 mt-8`}>
+          <BottomSheetView style={tw`flex-col gap-y-2 mt-4 px-1`}>
             <View style={tw`relative`}>
               <Text
                 style={tw.style(`text-[13px] text-black mb-[2px]`, {
