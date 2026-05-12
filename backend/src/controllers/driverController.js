@@ -403,22 +403,27 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
   if (selfieUrl != null) kycSet.selfieUrl = selfieUrl;
 
   if (licenseImageUrl != null || idCardImageUrl != null || selfieUrl != null) {
+    // 'pending' sentinels keep the schema's `required: true` happy when an
+    // upsert creates a fresh document but the driver only uploaded a subset
+    // of the four images. Critically, a field MUST NOT appear in BOTH $set
+    // and $setOnInsert — MongoDB rejects that with code 40
+    // (ConflictingUpdateOperators) instead of letting $set win on insert,
+    // which 500'd every brand-new driver signup. So we only add the
+    // sentinel for fields we did NOT just receive a real value for.
+    const kycSetOnInsert = {
+      userId: kycUserId,
+      idType: 'drivers_license',
+      idNumber: String(licenseNumber || '').trim() || 'pending',
+      verificationStatus: 'pending',
+    };
+    if (idCardImageUrl == null) kycSetOnInsert.idImageUrl = 'pending';
+    if (selfieUrl == null) kycSetOnInsert.selfieUrl = 'pending';
+
     await DriverKyc.findOneAndUpdate(
       { userId: kycUserId },
       {
         $set: kycSet,
-        $setOnInsert: {
-          userId: kycUserId,
-          idType: 'drivers_license',
-          idNumber: String(licenseNumber || '').trim() || 'pending',
-          // 'pending' sentinels keep the schema's `required: true` happy
-          // when an upsert creates a fresh document but the driver only
-          // uploaded a subset of the four images. The fields supplied
-          // above (kycSet) override these for the ones we did receive.
-          idImageUrl: 'pending',
-          selfieUrl: 'pending',
-          verificationStatus: 'pending',
-        },
+        $setOnInsert: kycSetOnInsert,
       },
       { upsert: true, new: true }
     );
