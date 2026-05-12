@@ -8,7 +8,6 @@ import DriverKyc from '../models/DriverKyc.js';
 import DriverVehicle from '../models/DriverVehicle.js';
 import VehicleType from '../models/VehicleType.js';
 import AdminSettings from '../models/AdminSettings.js';
-import { getOrCreateWallet } from '../services/walletService.js';
 import { setupTransactionPin } from '../services/driverSecurityService.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
@@ -255,15 +254,16 @@ export const driverStage4 = asyncHandler(async (req, res) => {
     });
   }
 
-  await getOrCreateWallet(driver._id);
+  // Wallet and DVA for drivers are provisioned only when admin approves
+  // (see adminController.verifyDriver / updateUser). Creating the wallet here
+  // produced ghost DriverWallet documents for applicants who were later
+  // rejected, so wallet provisioning is now gated on approval.
 
   await setupTransactionPin(userId, transaction_pin);
 
   if (!user.walletAccountNumber) {
     user.walletAccountNumber = 'KEKE' + user._id.toString().slice(-8).toUpperCase();
   }
-
-  // DVA for drivers is created only when admin approves (see adminController.verifyDriver)
 
   user.onboardingStage = 'driver_complete';
   user.kycStatus = driverKyc.verificationStatus === 'verified' && driverVehicle.verificationStatus === 'verified' ? 'verified' : 'pending';

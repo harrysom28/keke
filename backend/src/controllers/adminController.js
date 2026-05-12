@@ -16,6 +16,7 @@ import DriverKyc from '../models/DriverKyc.js';
 import DriverVehicle from '../models/DriverVehicle.js';
 import RideAuditLog from '../models/RideAuditLog.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
+import { getOrCreateWallet } from '../services/walletService.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import { generateTokenPair, generateAccessToken } from '../utils/jwt.js';
 import { addToBlacklist } from '../services/tokenBlacklist.js';
@@ -905,6 +906,12 @@ export const updateUser = asyncHandler(async (req, res) => {
       } catch (dvaErr) {
         logger.warn(`DVA provisioning after user approve failed for ${id}: ${dvaErr.message}`);
       }
+      try {
+        await getOrCreateWallet(driver._id, 'NGN');
+        logger.info(`DriverWallet provisioned for approved driver ${driver._id}`);
+      } catch (walletErr) {
+        logger.warn(`Wallet provisioning after driver approve failed for ${driver._id}: ${walletErr.message}`);
+      }
     }
   }
 
@@ -1245,6 +1252,12 @@ export const verifyDriver = asyncHandler(async (req, res) => {
     provisionDvaAsync(driver.user._id);
   } catch (dvaErr) {
     logger.warn(`DVA provisioning after driver approve failed for ${driver.user._id}: ${dvaErr.message}`);
+  }
+  try {
+    await getOrCreateWallet(driver._id, 'NGN');
+    logger.info(`DriverWallet provisioned for approved driver ${driver._id}`);
+  } catch (walletErr) {
+    logger.warn(`Wallet provisioning after driver approve failed for ${driver._id}: ${walletErr.message}`);
   }
 
   await logAdminAction({
