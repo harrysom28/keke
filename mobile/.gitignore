@@ -25,3 +25,8 @@ web-build/
 
 expo-env.d.ts
 # @end expo-cli
+.env.local
+
+# Sentry auth tokens for source-map / debug-symbol uploads (generated per-developer)
+sentry.properties
+**/sentry.properties

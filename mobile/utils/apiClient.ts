@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import Constants from 'expo-constants';
 import { getUniqueId } from 'react-native-device-info';
+import * as Sentry from '@sentry/react-native';
 import { getApiUrlWithOverride } from './apiUrlOverride';
 import AppStore from '@/store';
 import { updateRefreshToken, updateToken } from '@/store/AuthSlice';
@@ -334,7 +335,20 @@ apiClient.interceptors.response.use(
         console.error('   Solution: Check app.json "extra.apiUrl" and reload app');
       }
     }
-    
+
+    // Report server errors and network failures to Sentry (skips 4xx client errors,
+    // which are usually expected/business-rule failures). Sentry is a no-op in dev
+    // because Sentry.init() sets enabled: !__DEV__.
+    if (!error.response || error.response?.status >= 500) {
+      Sentry.captureException(error, {
+        extra: {
+          url: error.config?.url,
+          method: error.config?.method,
+          status: error.response?.status,
+        },
+      });
+    }
+
     // Handle 429 rate limiting gracefully
     if (status === 429) {
       if (__DEV__) {

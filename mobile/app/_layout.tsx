@@ -36,7 +36,7 @@ import { PersistGate } from "redux-persist/es/integration/react";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { PortalProvider } from "@gorhom/portal";
 import { Provider } from "react-redux";
-import { Stack } from "expo-router";
+import { Stack, useNavigationContainerRef } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
 import { requestManager } from "@/utils/requestManager";
@@ -44,6 +44,21 @@ import { pusherManager } from "@/utils/pusherManager";
 import { useDispatch, useSelector } from "react-redux";
 import { AuthState } from "@/store/AuthSlice";
 import { bootstrapI18n } from "@/lib/i18n";
+import { isRunningInExpoGo } from "expo";
+import * as Sentry from '@sentry/react-native';
+
+// Tracks navigation transactions for performance monitoring in Expo Router.
+const navigationIntegration = Sentry.reactNavigationIntegration({
+  enableTimeToInitialDisplay: !isRunningInExpoGo(),
+});
+
+Sentry.init({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+  enabled: !__DEV__,
+  tracesSampleRate: 0.1,
+  integrations: [navigationIntegration],
+  enableNativeFramesTracking: !isRunningInExpoGo(),
+});
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -210,7 +225,9 @@ const NotificationBootstrap = () => {
   );
 };
 
-export default function RootLayout() {
+export default Sentry.wrap(function RootLayout() {
+  const navigationRef = useNavigationContainerRef();
+
   const [loaded] = useFonts({
     RobotoThin: require("../assets/fonts/Roboto-Thin.ttf"),
     RobotoLight: require("../assets/fonts/Roboto-Light.ttf"),
@@ -219,6 +236,12 @@ export default function RootLayout() {
     RobotoBold: require("../assets/fonts/Roboto-Bold.ttf"),
     RobotoBlack: require("../assets/fonts/Roboto-Black.ttf"),
   });
+
+  useEffect(() => {
+    if (navigationRef?.current) {
+      navigationIntegration.registerNavigationContainer(navigationRef);
+    }
+  }, [navigationRef]);
 
   useEffect(() => {
     bootstrapI18n().catch(() => {});
@@ -334,4 +357,4 @@ export default function RootLayout() {
       />
     </>
   );
-}
+});
