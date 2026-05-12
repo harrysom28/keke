@@ -680,12 +680,14 @@ export const validationRules = {
 
   resolveBankAccount: [
     body('accountNumber')
+      .customSanitizer((v) => (v == null ? '' : String(v)))
       .trim()
       .notEmpty()
       .withMessage('Account number is required')
       .custom((value) => /^\d{10}$/.test(String(value).replace(/\D/g, '')))
       .withMessage('Account number must be 10 digits'),
     body('bankCode')
+      .customSanitizer((v) => (v == null ? '' : String(v)))
       .trim()
       .notEmpty()
       .withMessage('Bank code is required')
@@ -696,12 +698,14 @@ export const validationRules = {
   /** Same rules as resolveBankAccount for GET ?accountNumber=&bankCode= (proxies that block POST body) */
   resolveBankAccountQuery: [
     query('accountNumber')
+      .customSanitizer((v) => (v == null ? '' : String(v)))
       .trim()
       .notEmpty()
       .withMessage('Account number is required')
       .custom((value) => /^\d{10}$/.test(String(value).replace(/\D/g, '')))
       .withMessage('Account number must be 10 digits'),
     query('bankCode')
+      .customSanitizer((v) => (v == null ? '' : String(v)))
       .trim()
       .notEmpty()
       .withMessage('Bank code is required')

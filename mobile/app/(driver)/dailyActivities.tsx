@@ -232,7 +232,7 @@ const DailyActivities = () => {
           let body: { data?: { account_name?: string } } | null = null;
           const payload = {
             accountNumber: digitsAtRequest,
-            bankCode: bankCodeAtRequest,
+            bankCode: String(bankCodeAtRequest ?? "").trim(),
           };
           const baseCfg = authHeaders();
           const postCfg = {
@@ -247,10 +247,12 @@ const DailyActivities = () => {
             try {
               let r;
               try {
+                console.log("[RESOLVE ATTEMPT]", "POST", resolveUrls[i], payload);
                 r = await axios.post(resolveUrls[i], payload, postCfg);
               } catch (postErr) {
                 const st = isAxiosError(postErr) ? postErr.response?.status : 0;
                 if (st === 404) {
+                  console.log("[RESOLVE ATTEMPT]", "GET", resolveUrls[i], payload);
                   r = await axios.get(resolveUrls[i], { ...baseCfg, params: payload });
                 } else {
                   throw postErr;
@@ -258,10 +260,10 @@ const DailyActivities = () => {
               }
               body = r.data;
               break;
-            } catch (err) {
-              const status = isAxiosError(err) ? err.response?.status : 0;
+            } catch (error) {
+              const status = isAxiosError(error) ? error.response?.status : 0;
               if (status === 404 && i < resolveUrls.length - 1) continue;
-              throw err;
+              throw error;
             }
           }
           if (cancelled) return;
@@ -276,7 +278,22 @@ const DailyActivities = () => {
           if (typeof name === "string" && name.trim()) {
             setState((prev) => ({ ...prev, account_name: name.trim() }));
           }
-        } catch (err) {
+        } catch (error) {
+          if (isAxiosError(error)) {
+            const d = error.response?.data;
+            const apiMsg =
+              typeof d?.message === "string" && d.message.trim()
+                ? d.message.trim()
+                : undefined;
+            console.log(
+              "[RESOLVE ERROR]",
+              error.response?.status,
+              error.response?.config?.url,
+              apiMsg ?? getErrorMessage(error, "")
+            );
+          } else {
+            console.log("[RESOLVE ERROR]", error);
+          }
           if (cancelled) return;
           const cur = latestFormRef.current;
           if (
@@ -288,7 +305,7 @@ const DailyActivities = () => {
           setState((prev) => ({ ...prev, account_name: "" }));
           showMessage({
             type: "warning",
-            message: getErrorMessage(err, "Could not verify this account number for the selected bank."),
+            message: getErrorMessage(error, "Could not verify this account number for the selected bank."),
           });
         } finally {
           if (!cancelled) {

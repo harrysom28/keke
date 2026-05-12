@@ -267,6 +267,19 @@ export async function verifyTransaction(reference) {
 }
 
 /**
+ * Paystack bank list JSON often returns `code` as a number, dropping leading zeros (e.g. 44 for Access Bank).
+ * NIBSS resolve expects the 3-digit (or longer fintech) string code.
+ * @param {unknown} raw
+ * @returns {string}
+ */
+export function normalizeNgBankCode(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  if (/^\d{2}$/.test(s)) return s.padStart(3, '0');
+  return s;
+}
+
+/**
  * List Nigerian banks (NUBAN) from Paystack — used for payout bank pickers.
  * Paginates until all pages are fetched (capped for safety).
  * @returns {Promise<Array<{ code: string, name: string, slug: string|null }>|null>} null on hard failure / no API key
@@ -305,7 +318,7 @@ export async function listBanksNigeria() {
 
       for (const b of data.data) {
         if (!b || b.active === false || b.is_deleted) continue;
-        const code = b.code != null ? String(b.code) : '';
+        const code = normalizeNgBankCode(b.code);
         const name = typeof b.name === 'string' ? b.name.trim() : '';
         if (!code || !name || seen.has(code)) continue;
         seen.add(code);
@@ -341,7 +354,7 @@ export async function resolveAccountName({ account_number, bank_code }) {
   }
 
   const digits = String(account_number || '').replace(/\D/g, '');
-  const code = String(bank_code || '').trim();
+  const code = normalizeNgBankCode(bank_code);
   if (digits.length !== 10) {
     return { error: 'Account number must be 10 digits' };
   }
