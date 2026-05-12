@@ -19,6 +19,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import Svg, { Line, Path } from "react-native-svg";
@@ -312,6 +313,11 @@ const DriverInfo = () => {
     year: [],
   });
   const [loading, setLoading] = useState(false);
+  // Ref-based reentrancy lock for handleSubmit. Using a ref (not `loading`)
+  // because setState is async: two rapid taps can both pass an
+  // `if (loading) return` check before React flushes the first setLoading(true).
+  // The ref updates synchronously, so the second tap sees the latch and bails.
+  const inFlight = useRef(false);
 
   const CountryIndex = Country.getAllCountries().find(
     (i) => i.name === user?.profile?.country
@@ -540,7 +546,7 @@ const DriverInfo = () => {
   };
 
   const handleSubmit = async () => {
-    if (loading) return;
+    if (inFlight.current) return;
 
     // Pre-flight: the createDriver validator on the backend is strict and
     // *unconditional* — every field below must be present even when the
@@ -585,6 +591,7 @@ const DriverInfo = () => {
       return;
     }
 
+    inFlight.current = true;
     setLoading(true);
     try {
       const data = new FormData();
@@ -595,15 +602,42 @@ const DriverInfo = () => {
         "image_name",
         "vehicle_image_name",
       ];
+      // Vehicle fields are sent nested under vehicleDetails[*] below — the
+      // createDriver validator in backend/src/controllers/driverController.js
+      // reads them off `req.body.vehicleDetails`, not as top-level keys. We
+      // exclude them from the flat loop so we don't double-send and so the
+      // server-side body shape exactly matches the validator chain.
+      const vehicleDetailsFields = [
+        "vehicle_name",
+        "vehicle_model",
+        "vehicle_year",
+        "vehicle_color",
+        "vehicle_type_id",
+        "licence_plate_number",
+      ];
       Object.keys(state).forEach((key) => {
         if (
           !imageFields.includes(key) &&
+          !vehicleDetailsFields.includes(key) &&
           state[key as keyof typeof state] !== null &&
           state[key as keyof typeof state] !== undefined
         ) {
           data.append(key, state[key as keyof typeof state] as string);
         }
       });
+
+      // Nested vehicleDetails payload. FormData accepts bracket-notation
+      // keys; the backend's multipart parser rebuilds them into a nested
+      // object so the validator sees `vehicleDetails.make` etc.
+      data.append("vehicleDetails[make]", state.vehicle_name);
+      data.append("vehicleDetails[model]", state.vehicle_model);
+      data.append("vehicleDetails[year]", state.vehicle_year);
+      data.append("vehicleDetails[color]", state.vehicle_color);
+      data.append(
+        "vehicleDetails[plateNumber]",
+        state.licence_plate_number
+      );
+      data.append("vehicleDetails[vehicleType]", state.vehicle_type_id);
 
       const imageFieldMap = {
         licence_image_name: "licence_image_name",
@@ -760,6 +794,7 @@ const DriverInfo = () => {
         message,
       });
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   };
