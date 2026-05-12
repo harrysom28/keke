@@ -8,6 +8,11 @@ import logger from '../utils/logger.js';
 const PAYSTACK_BASE = 'https://api.paystack.co';
 const PAYSTACK_TIMEOUT_MS = 25000;
 
+/** Axios default `err.message` when the HTTP layer fails; not meaningful for app users. */
+function isAxiosTransportMessage(s) {
+  return typeof s === 'string' && /^Request failed with status code \d{3}$/i.test(s.trim());
+}
+
 /**
  * Get Paystack secret key
  * @returns {string|null}
@@ -390,12 +395,47 @@ export async function resolveAccountName({ account_number, bank_code }) {
         : 'Could not verify account details.';
     return { error: msg };
   } catch (err) {
+    const status = err?.response?.status;
     const body = err?.response?.data;
-    const msg =
-      (typeof body?.message === 'string' && body.message.trim()) ||
-      err?.message ||
-      'Could not verify account details.';
-    logger.warn(`Paystack resolveAccountName: ${msg}`);
-    return { error: msg };
+    let bodyMsg = typeof body?.message === 'string' ? body.message.trim() : '';
+    if (bodyMsg && isAxiosTransportMessage(bodyMsg)) {
+      bodyMsg = '';
+    }
+
+    if (bodyMsg) {
+      logger.warn(`Paystack resolveAccountName: ${bodyMsg}`);
+      return { error: bodyMsg };
+    }
+
+    if (status === 404) {
+      const msg =
+        'This account could not be verified for the selected bank. Check the account number and that the bank matches your statement.';
+      logger.warn(`Paystack resolveAccountName: HTTP ${status}`);
+      return { error: msg };
+    }
+
+    if (status === 401 || status === 403) {
+      logger.warn(`Paystack resolveAccountName: HTTP ${status}`);
+      return { error: 'Account verification is temporarily unavailable. Try again later.' };
+    }
+
+    if (typeof status === 'number' && status >= 500) {
+      logger.warn(`Paystack resolveAccountName: HTTP ${status}`);
+      return { error: 'Account verification is temporarily unavailable. Try again later.' };
+    }
+
+    const ax = typeof err?.message === 'string' ? err.message.trim() : '';
+    if (ax && !isAxiosTransportMessage(ax)) {
+      logger.warn(`Paystack resolveAccountName: ${ax}`);
+      return { error: ax };
+    }
+
+    if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
+      logger.warn('Paystack resolveAccountName: timeout');
+      return { error: 'Account verification timed out. Try again.' };
+    }
+
+    logger.warn(`Paystack resolveAccountName: HTTP ${status || 'unknown'}`);
+    return { error: 'Could not verify account details.' };
   }
 }
