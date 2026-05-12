@@ -252,4 +252,15 @@ export function initRateLimiters() {
     keyGenerator: (req) => req.user?._id?.toString() || req.ip || 'anon',
     skip: (req) => process.env.NODE_ENV === 'test',
   });
+
+  limiters.bankResolveLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: process.env.NODE_ENV === 'production' ? 25 : 100,
+    store: makeRedisStore('rl:bankresolve:'),
+    message: { status: 'error', message: 'Too many account lookups. Please wait a moment.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.user?._id?.toString() || req.ip || 'anon',
+    skip: (req) => process.env.NODE_ENV === 'test',
+  });
 }

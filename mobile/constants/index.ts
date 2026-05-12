@@ -75,7 +75,20 @@ export const PASSENGER_PROFILE = `${SERVER_URL}user/profile/passenger`;
 export const DRIVER_PROFILE = `${SERVER_URL}user/profile/driver`;
 export const PROFILE = `${SERVER_URL}user/profile/details`;
 export const ADD_BANK_ACCOUNT = `${SERVER_URL}bank/account/create`;
+/** Driver's saved payout account(s) — not the NIP bank directory */
 export const BANK_LIST = `${SERVER_URL}bank/account/lists`;
+/**
+ * Paystack-backed Nigerian bank directory (codes for resolve + payouts).
+ * Mounted under `/api/driver/...` so it rides the same router as other driver calls
+ * (avoids 404s when an older gateway only proxies `/api/driver/*`).
+ * Also available: GET `/api/bank/nigeria/list`
+ */
+export const BANK_DIRECTORY_NG = `${SERVER_URL}driver/banks/nigeria/list`;
+/** Also POST `/api/bank/resolve` */
+export const BANK_RESOLVE_ACCOUNT = `${SERVER_URL}driver/banks/resolve`;
+/** If `/api/driver/banks/*` is not deployed yet, try these payment-router paths */
+export const BANK_DIRECTORY_NG_FALLBACK = `${SERVER_URL}bank/nigeria/list`;
+export const BANK_RESOLVE_ACCOUNT_FALLBACK = `${SERVER_URL}bank/resolve`;
 export const WITHDRAWAL = `${SERVER_URL}user/balance/withdraw`;
 
 // EMERGENCY CONTACT

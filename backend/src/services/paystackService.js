@@ -265,3 +265,124 @@ export async function verifyTransaction(reference) {
     return null;
   }
 }
+
+/**
+ * List Nigerian banks (NUBAN) from Paystack — used for payout bank pickers.
+ * Paginates until all pages are fetched (capped for safety).
+ * @returns {Promise<Array<{ code: string, name: string, slug: string|null }>|null>} null on hard failure / no API key
+ */
+export async function listBanksNigeria() {
+  const secretKey = getSecretKey();
+  if (!secretKey) {
+    logger.warn('Paystack: PAYSTACK_SECRET_KEY not set, skipping bank list');
+    return null;
+  }
+
+  const collected = [];
+  const seen = new Set();
+  let page = 1;
+  const perPage = 100;
+  const maxPages = 30;
+
+  try {
+    while (page <= maxPages) {
+      const { data } = await axios.get(`${PAYSTACK_BASE}/bank`, {
+        params: {
+          country: 'nigeria',
+          perPage,
+          page,
+        },
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+        },
+        timeout: PAYSTACK_TIMEOUT_MS,
+      });
+
+      if (!data?.status || !Array.isArray(data.data)) {
+        logger.warn('Paystack listBanksNigeria: unexpected response', data);
+        break;
+      }
+
+      for (const b of data.data) {
+        if (!b || b.active === false || b.is_deleted) continue;
+        const code = b.code != null ? String(b.code) : '';
+        const name = typeof b.name === 'string' ? b.name.trim() : '';
+        if (!code || !name || seen.has(code)) continue;
+        seen.add(code);
+        collected.push({
+          code,
+          name,
+          slug: typeof b.slug === 'string' ? b.slug : null,
+        });
+      }
+
+      const totalPages = Number(data.meta?.totalPages) || page;
+      if (page >= totalPages) break;
+      page += 1;
+    }
+
+    collected.sort((a, b) => a.name.localeCompare(b.name, 'en'));
+    return collected;
+  } catch (err) {
+    logger.error(`Paystack listBanksNigeria: ${err?.response?.data?.message || err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Resolve account name via Paystack NIBSS lookup.
+ * @param {{ account_number: string, bank_code: string }} params
+ * @returns {Promise<{ account_name?: string, account_number?: string, error?: string }>}
+ */
+export async function resolveAccountName({ account_number, bank_code }) {
+  const secretKey = getSecretKey();
+  if (!secretKey) {
+    return { error: 'paystack_unconfigured' };
+  }
+
+  const digits = String(account_number || '').replace(/\D/g, '');
+  const code = String(bank_code || '').trim();
+  if (digits.length !== 10) {
+    return { error: 'Account number must be 10 digits' };
+  }
+  if (!code) {
+    return { error: 'Bank code is required' };
+  }
+
+  try {
+    const { data } = await axios.post(
+      `${PAYSTACK_BASE}/bank/resolve`,
+      { account_number: digits, bank_code: code },
+      {
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: PAYSTACK_TIMEOUT_MS,
+      }
+    );
+
+    if (data?.status && data?.data?.account_name) {
+      return {
+        account_name: String(data.data.account_name).trim(),
+        account_number: data.data.account_number
+          ? String(data.data.account_number).replace(/\D/g, '')
+          : digits,
+      };
+    }
+
+    const msg =
+      typeof data?.message === 'string' && data.message.trim()
+        ? data.message.trim()
+        : 'Could not verify account details.';
+    return { error: msg };
+  } catch (err) {
+    const body = err?.response?.data;
+    const msg =
+      (typeof body?.message === 'string' && body.message.trim()) ||
+      err?.message ||
+      'Could not verify account details.';
+    logger.warn(`Paystack resolveAccountName: ${msg}`);
+    return { error: msg };
+  }
+}

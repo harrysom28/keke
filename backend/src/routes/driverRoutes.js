@@ -6,6 +6,7 @@ import { mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
 import * as driverController from '../controllers/driverController.js';
 import * as payoutController from '../controllers/payoutController.js';
+import * as paymentController from '../controllers/paymentController.js';
 import * as driverSecurityController from '../controllers/driverSecurityController.js';
 import { protect, restrictTo } from '../middleware/auth.js';
 import { requireDriverApproved, requireBankDetails } from '../middleware/onboarding.js';
@@ -15,6 +16,7 @@ import {
   riskEngine,
 } from '../middleware/walletSecurity.js';
 import { validationRules, validate } from '../middleware/validation.js';
+import { limiters } from '../middleware/rateLimiter.js';
 import { normalizeDriverCreateBody } from '../middleware/driverCreateBody.js';
 
 const router = express.Router();
@@ -69,6 +71,17 @@ function parseDriverCreateBody(req, res, next) {
 
 // All routes require authentication
 router.use(protect);
+
+// Paystack bank directory + NIBSS resolve (also mounted under /api/bank/* on payment routes).
+// Duplicated here so clients hitting /api/driver/* always reach the same handlers as other driver flows.
+router.get('/banks/nigeria/list', limiters.walletOpsLimiter, paymentController.listNigeriaBanks);
+router.post(
+  '/banks/resolve',
+  limiters.bankResolveLimiter,
+  validationRules.resolveBankAccount,
+  validate,
+  paymentController.resolveBankAccount
+);
 
 // Create driver profile - allowed for users transitioning to driver (not yet driver)
 router.post('/create', parseDriverCreateBody, validationRules.createDriver, validate, driverController.createDriverProfile);

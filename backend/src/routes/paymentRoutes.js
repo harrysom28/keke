@@ -33,6 +33,16 @@ router.post('/user/balance/withdraw', limiters.walletOpsLimiter, requireDriverAp
 // Change retrieval (matching mobile app endpoint)
 router.get('/user/ride/retrieve-change', paymentController.retrieveChange);
 
+// Bank directory + NIBSS resolve (Paystack; authenticated)
+router.get('/bank/nigeria/list', limiters.walletOpsLimiter, paymentController.listNigeriaBanks);
+router.post(
+  '/bank/resolve',
+  limiters.bankResolveLimiter,
+  validationRules.resolveBankAccount,
+  validate,
+  paymentController.resolveBankAccount
+);
+
 // Bank account management (matching mobile app endpoints)
 router.post('/bank/account/create', validationRules.createBankAccount, validate, paymentController.createBankAccount);
 router.get('/bank/account/lists', paymentController.getBankAccounts);

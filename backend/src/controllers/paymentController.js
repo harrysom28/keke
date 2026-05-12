@@ -8,7 +8,12 @@ import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.j
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import Stripe from 'stripe';
-import { initializeTransaction, verifyTransaction } from '../services/paystackService.js';
+import {
+  initializeTransaction,
+  verifyTransaction,
+  listBanksNigeria,
+  resolveAccountName,
+} from '../services/paystackService.js';
 
 // Initialize Stripe (if API key is provided)
 const stripe = process.env.STRIPE_SECRET_KEY
@@ -637,14 +642,101 @@ export const retrieveChange = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Nigerian banks for payout UI — GET /bank/nigeria/list (Paystack-backed).
+ */
+export const listNigeriaBanks = asyncHandler(async (req, res) => {
+  const banks = await listBanksNigeria();
+  if (!banks || banks.length === 0) {
+    res.json({
+      status: 'success',
+      data: {
+        banks: [],
+        unavailable: true,
+      },
+      message: !banks
+        ? 'Bank directory is temporarily unavailable. Try again shortly.'
+        : 'No banks are available from the payment provider.',
+    });
+    return;
+  }
+
+  res.json({
+    status: 'success',
+    data: { banks, unavailable: false },
+  });
+});
+
+/**
+ * Resolve account holder name — POST /bank/resolve (Paystack NIBSS).
+ */
+export const resolveBankAccount = asyncHandler(async (req, res) => {
+  const { accountNumber, bankCode } = req.body;
+  const result = await resolveAccountName({
+    account_number: accountNumber,
+    bank_code: bankCode,
+  });
+
+  if (result.account_name) {
+    res.json({
+      status: 'success',
+      data: {
+        account_name: result.account_name,
+        account_number: result.account_number,
+      },
+    });
+    return;
+  }
+
+  if (result.error === 'paystack_unconfigured') {
+    res.status(503).json({
+      status: 'error',
+      message: 'Account verification is not configured. Enter the name exactly as on your bank account.',
+    });
+    return;
+  }
+
+  throw new ValidationError(
+    typeof result.error === 'string' ? result.error : 'Could not verify account details.'
+  );
+});
+
+/**
  * Create bank account - POST /api/bank/account/create
  */
 export const createBankAccount = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const { accountName, accountNumber, bankName, bankCode } = req.body;
 
-  if (!accountName || !accountNumber || !bankName) {
-    throw new ValidationError('Account name, account number, and bank name are required');
+  if (!accountNumber || !bankName) {
+    throw new ValidationError('Account number and bank name are required');
+  }
+
+  const digits = String(accountNumber).replace(/\D/g, '');
+  if (digits.length !== 10) {
+    throw new ValidationError('Account number must be 10 digits');
+  }
+
+  const code = bankCode != null && String(bankCode).trim() !== '' ? String(bankCode).trim() : '';
+  let finalAccountName = accountName != null ? String(accountName).trim() : '';
+
+  const resolved = code ? await resolveAccountName({ account_number: digits, bank_code: code }) : null;
+
+  if (code) {
+    if (resolved?.account_name) {
+      finalAccountName = resolved.account_name;
+    } else if (resolved?.error && resolved.error !== 'paystack_unconfigured') {
+      throw new ValidationError(
+        typeof resolved.error === 'string' ? resolved.error : 'Could not verify this bank account.'
+      );
+    } else if (resolved?.error === 'paystack_unconfigured') {
+      if (!finalAccountName) {
+        throw new ValidationError('Account name is required');
+      }
+    } else {
+      throw new ValidationError('Could not verify this bank account. Please check the number and bank.');
+    }
+  } else if (!finalAccountName) {
+    throw new ValidationError('Account name is required');
   }
 
   const driver = await Driver.findOne({ user: userId });
@@ -653,10 +745,10 @@ export const createBankAccount = asyncHandler(async (req, res) => {
   }
 
   driver.bankAccount = {
-    accountName,
-    accountNumber,
-    bankName,
-    bankCode: bankCode || null,
+    accountName: finalAccountName,
+    accountNumber: digits,
+    bankName: String(bankName).trim(),
+    bankCode: code || null,
     verified: false, // Requires admin verification
   };
 

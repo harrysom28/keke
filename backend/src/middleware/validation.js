@@ -672,21 +672,25 @@ export const validationRules = {
 
   // Create bank account
   createBankAccount: [
-    body('accountName')
-      .trim()
-      .notEmpty()
-      .withMessage('Account name is required'),
+    body('accountName').optional().trim(),
+    body('accountNumber').trim().notEmpty().withMessage('Account number is required'),
+    body('bankName').trim().notEmpty().withMessage('Bank name is required'),
+    body('bankCode').optional().trim(),
+  ],
+
+  resolveBankAccount: [
     body('accountNumber')
       .trim()
       .notEmpty()
-      .withMessage('Account number is required'),
-    body('bankName')
+      .withMessage('Account number is required')
+      .custom((value) => /^\d{10}$/.test(String(value).replace(/\D/g, '')))
+      .withMessage('Account number must be 10 digits'),
+    body('bankCode')
       .trim()
       .notEmpty()
-      .withMessage('Bank name is required'),
-    body('bankCode')
-      .optional()
-      .trim(),
+      .withMessage('Bank code is required')
+      .matches(/^\d{2,12}$/)
+      .withMessage('Invalid bank code'),
   ],
 
   // Switch role
