@@ -82,6 +82,13 @@ router.post(
   validate,
   paymentController.resolveBankAccount
 );
+router.get(
+  '/banks/resolve',
+  limiters.bankResolveLimiter,
+  validationRules.resolveBankAccountQuery,
+  validate,
+  paymentController.resolveBankAccount
+);
 
 // Create driver profile - allowed for users transitioning to driver (not yet driver)
 router.post('/create', parseDriverCreateBody, validationRules.createDriver, validate, driverController.createDriverProfile);

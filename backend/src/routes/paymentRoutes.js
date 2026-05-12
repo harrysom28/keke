@@ -42,6 +42,13 @@ router.post(
   validate,
   paymentController.resolveBankAccount
 );
+router.get(
+  '/bank/resolve',
+  limiters.bankResolveLimiter,
+  validationRules.resolveBankAccountQuery,
+  validate,
+  paymentController.resolveBankAccount
+);
 
 // Bank account management (matching mobile app endpoints)
 router.post('/bank/account/create', validationRules.createBankAccount, validate, paymentController.createBankAccount);

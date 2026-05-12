@@ -670,7 +670,8 @@ export const listNigeriaBanks = asyncHandler(async (req, res) => {
  * Resolve account holder name — POST /bank/resolve (Paystack NIBSS).
  */
 export const resolveBankAccount = asyncHandler(async (req, res) => {
-  const { accountNumber, bankCode } = req.body;
+  const accountNumber = req.body?.accountNumber ?? req.query?.accountNumber;
+  const bankCode = req.body?.bankCode ?? req.query?.bankCode;
   const result = await resolveAccountName({
     account_number: accountNumber,
     bank_code: bankCode,

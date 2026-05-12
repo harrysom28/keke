@@ -135,6 +135,9 @@ const DailyActivities = () => {
   const latestFormRef = useRef(state);
   latestFormRef.current = state;
 
+  /** Which bank-list URL succeeded (0 = driver, 1 = payment). Resolve uses the same family first. */
+  const bankListSourceRef = useRef(0);
+
   const authHeaders = useCallback(
     () => ({
       headers: {
@@ -158,6 +161,7 @@ const DailyActivities = () => {
         try {
           const r = await axios.get(urls[i], authHeaders());
           body = r.data;
+          bankListSourceRef.current = i;
           break;
         } catch (err) {
           const status = isAxiosError(err) ? err.response?.status : 0;
@@ -204,19 +208,34 @@ const DailyActivities = () => {
     const handle = setTimeout(() => {
       const bankCodeAtRequest = state.bank_code;
       const digitsAtRequest = digits;
-      const resolveUrls = [BANK_RESOLVE_ACCOUNT, BANK_RESOLVE_ACCOUNT_FALLBACK];
+      const resolveUrls =
+        bankListSourceRef.current === 1
+          ? [BANK_RESOLVE_ACCOUNT_FALLBACK, BANK_RESOLVE_ACCOUNT]
+          : [BANK_RESOLVE_ACCOUNT, BANK_RESOLVE_ACCOUNT_FALLBACK];
       setResolveLoading(true);
 
       (async () => {
         try {
           let body: { data?: { account_name?: string } } | null = null;
+          const payload = {
+            accountNumber: digitsAtRequest,
+            bankCode: bankCodeAtRequest,
+          };
+          const cfg = authHeaders();
+
           for (let i = 0; i < resolveUrls.length; i++) {
             try {
-              const r = await axios.post(
-                resolveUrls[i],
-                { accountNumber: digitsAtRequest, bankCode: bankCodeAtRequest },
-                authHeaders()
-              );
+              let r;
+              try {
+                r = await axios.post(resolveUrls[i], payload, cfg);
+              } catch (postErr) {
+                const st = isAxiosError(postErr) ? postErr.response?.status : 0;
+                if (st === 404) {
+                  r = await axios.get(resolveUrls[i], { ...cfg, params: payload });
+                } else {
+                  throw postErr;
+                }
+              }
               body = r.data;
               break;
             } catch (err) {

@@ -693,7 +693,21 @@ export const validationRules = {
       .withMessage('Invalid bank code'),
   ],
 
-  // Switch role
+  /** Same rules as resolveBankAccount for GET ?accountNumber=&bankCode= (proxies that block POST body) */
+  resolveBankAccountQuery: [
+    query('accountNumber')
+      .trim()
+      .notEmpty()
+      .withMessage('Account number is required')
+      .custom((value) => /^\d{10}$/.test(String(value).replace(/\D/g, '')))
+      .withMessage('Account number must be 10 digits'),
+    query('bankCode')
+      .trim()
+      .notEmpty()
+      .withMessage('Bank code is required')
+      .matches(/^\d{2,12}$/)
+      .withMessage('Invalid bank code'),
+  ],
   switchRole: [
     body('role')
       .notEmpty()
