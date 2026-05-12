@@ -7,6 +7,7 @@ import AdminSettings from '../models/AdminSettings.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
+import { normalizePhone, phonesMatch } from '../utils/phone.js';
 
 /**
  * Create emergency contact - POST /api/emergency/contact/create
@@ -19,19 +20,28 @@ export const createEmergencyContact = asyncHandler(async (req, res) => {
     throw new ValidationError('Name and phone are required');
   }
 
+  // Normalize so the SMS dispatch in `sendEmergencyAlert` always has a
+  // dial-able E.164 number, and the dup-check below catches the same
+  // contact saved in different formats.
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) {
+    throw new ValidationError('Please provide a valid phone number');
+  }
+
   const user = await User.findById(userId);
   if (!user) {
     throw new NotFoundError('User');
   }
 
-  // Store in user's emergency contacts array (add if not exists)
   if (!user.emergencyContacts) {
     user.emergencyContacts = [];
   }
 
-  // Check if contact already exists
-  const existingContact = user.emergencyContacts.find(
-    (contact) => contact.phone === phone
+  // Format-independent dup check — `phonesMatch` re-normalizes both
+  // sides so a contact stored as `09035689338` collides with a new
+  // entry of `+2349035689338`.
+  const existingContact = user.emergencyContacts.find((contact) =>
+    phonesMatch(contact.phone, normalizedPhone)
   );
 
   if (existingContact) {
@@ -40,7 +50,7 @@ export const createEmergencyContact = asyncHandler(async (req, res) => {
 
   user.emergencyContacts.push({
     name,
-    phone,
+    phone: normalizedPhone,
     relationship: relationship || 'emergency',
     createdAt: new Date(),
   });
@@ -55,7 +65,7 @@ export const createEmergencyContact = asyncHandler(async (req, res) => {
     data: {
       emergency_contact: {
         name,
-        phone,
+        phone: normalizedPhone,
         relationship: relationship || 'emergency',
       },
     },
@@ -116,9 +126,14 @@ export const updateEmergencyContact = asyncHandler(async (req, res) => {
     throw new NotFoundError('Emergency contact');
   }
 
-  // Update contact
   if (name) user.emergencyContacts[contactIndex].name = name;
-  if (phone) user.emergencyContacts[contactIndex].phone = phone;
+  if (phone) {
+    const normalizedPhone = normalizePhone(phone);
+    if (!normalizedPhone) {
+      throw new ValidationError('Please provide a valid phone number');
+    }
+    user.emergencyContacts[contactIndex].phone = normalizedPhone;
+  }
   if (relationship) user.emergencyContacts[contactIndex].relationship = relationship;
 
   await user.save();

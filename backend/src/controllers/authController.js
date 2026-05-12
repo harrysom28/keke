@@ -13,6 +13,7 @@ import { AuthenticationError, ValidationError, ConflictError, NotFoundError } fr
 import { asyncHandler } from '../utils/errors.js';
 import notificationService from '../services/notificationService.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
+import { normalizePhone, phoneVariants } from '../utils/phone.js';
 import {
   reconcileCancelledScheduledRideEscrows,
   computeRiderWalletApiTotals,
@@ -55,19 +56,45 @@ async function issueTokenPairWithSession(user, req) {
 }
 
 /**
+ * Parse the polymorphic `email_phone_number` request field into a
+ * normalized email and/or phone, plus the set of historical phone shapes
+ * that should be used for any User lookup. Routing every auth handler
+ * through this helper guarantees that `09035689338`, `2349035689338`,
+ * and `+2349035689338` all resolve to the same user — both for new
+ * writes (which converge on the canonical `+234XXXXXXXXXX` form) and
+ * for legacy reads (which fan out across every equivalent shape via
+ * `phoneQuery`).
+ */
+function parseLoginIdentifier(emailPhone) {
+  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
+  const value = String(emailPhone ?? '').trim();
+  const isEmail = emailRegex.test(value);
+  return {
+    isEmail,
+    email: isEmail ? value.toLowerCase() : undefined,
+    phone: isEmail ? undefined : (normalizePhone(value) || undefined),
+    phoneQuery: isEmail ? [] : phoneVariants(value),
+  };
+}
+
+/**
  * Register/Signup user
  */
 export const register = asyncHandler(async (req, res) => {
   const { email_phone_number, referral_code, password, device_id, device_token, role } = req.body;
 
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
-  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
-  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const { phone, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
 
-  // Check if user already exists (OTP-first flow should be idempotent)
+  // Check if user already exists (OTP-first flow should be idempotent).
+  // `phoneQuery` covers every legacy shape (digits-only, with/without
+  // leading 0 or country code) so we never create a duplicate when a
+  // user signs up with a slightly different formatting of the same
+  // number they used last time.
   const existingUser = await User.findOne({
-    $or: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])],
+    $or: [
+      ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
+      ...(email ? [{ email }] : []),
+    ],
   });
 
   // Helper to generate/store/send OTP for a user
@@ -200,10 +227,7 @@ export const register = asyncHandler(async (req, res) => {
 export const verifyOTPCode = asyncHandler(async (req, res) => {
   const { email_phone_number, otp } = req.body;
 
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
-  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
-  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const { phone, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
 
   const identifier = email || phone;
   const result = await verifyOTP(identifier, otp, 'verification');
@@ -212,10 +236,14 @@ export const verifyOTPCode = asyncHandler(async (req, res) => {
     throw new ValidationError(result.message);
   }
 
-  // Find and update user
+  // Find and update user — fan out across legacy phone shapes so a
+  // pre-migration record stored as `09035689338` is still matched when
+  // the client sends `+2349035689338` (and vice versa).
   const user = await User.findOne({
-    ...(email ? { email } : {}),
-    ...(phone ? { phone } : {}),
+    $or: [
+      ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
+      ...(email ? [{ email }] : []),
+    ],
   });
 
   if (!user) {
@@ -250,10 +278,7 @@ export const verifyOTPCode = asyncHandler(async (req, res) => {
 export const loginWithOtp = asyncHandler(async (req, res) => {
   const { email_phone_number, otp, device_id, device_token } = req.body;
 
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
-  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
-  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const { phone, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
   const identifier = email || phone;
 
   const result = await verifyOTP(identifier, otp, 'verification');
@@ -262,8 +287,10 @@ export const loginWithOtp = asyncHandler(async (req, res) => {
   }
 
   const user = await User.findOne({
-    ...(email ? { email } : {}),
-    ...(phone ? { phone } : {}),
+    $or: [
+      ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
+      ...(email ? [{ email }] : []),
+    ],
   });
 
   if (!user) {
@@ -320,15 +347,14 @@ export const completeSignup = asyncHandler(async (req, res) => {
     profile_photo,
   } = req.body;
 
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
-  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
-  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const { phone, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
 
-  // Find user
+  // Find user (legacy-shape tolerant)
   const user = await User.findOne({
-    ...(email ? { email } : {}),
-    ...(phone ? { phone } : {}),
+    $or: [
+      ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
+      ...(email ? [{ email }] : []),
+    ],
   });
 
   if (!user) {
@@ -409,24 +435,16 @@ export const validateReferralCode = asyncHandler(async (req, res) => {
 export const login = asyncHandler(async (req, res) => {
   const { email_phone_number, password, device_id, device_token } = req.body;
 
-  // Determine if email_phone_number is an email or phone
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
+  const { isEmail, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
 
-  // Find user by email or phone
+  // Find user by email or phone — phone lookup fans out across legacy
+  // formats so users created before the normalizer (stored as digits
+  // only) still log in when typing `+234…` and vice versa.
   let user;
   if (isEmail) {
-    user = await User.findOne({ email: email_phone_number.toLowerCase() }).select('+password');
+    user = await User.findOne({ email }).select('+password');
   } else {
-    // Remove any formatting from phone number for comparison
-    const cleanPhone = email_phone_number.replace(/\D/g, '');
-    // Try exact match first, then try matching the cleaned number
-    user = await User.findOne({
-      $or: [
-        { phone: email_phone_number },
-        { phone: cleanPhone }
-      ]
-    }).select('+password');
+    user = await User.findOne({ phone: { $in: phoneQuery } }).select('+password');
   }
 
   if (!user || !(await user.comparePassword(password))) {
@@ -637,15 +655,12 @@ export const savePushToken = asyncHandler(async (req, res) => {
 export const resendOTP = asyncHandler(async (req, res) => {
   const { email_phone_number, referral_code, role } = req.body;
 
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
-  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
-  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const { phone, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
 
-  // Check if user exists
+  // Check if user exists (legacy-shape tolerant)
   let user = await User.findOne({
     $or: [
-      ...(phone ? [{ phone }] : []),
+      ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
       ...(email ? [{ email }] : []),
     ],
   });
@@ -681,7 +696,7 @@ export const resendOTP = asyncHandler(async (req, res) => {
         logger.warn(`Duplicate key error during user creation, attempting to find existing user`);
         user = await User.findOne({
           $or: [
-            ...(phone ? [{ phone }] : []),
+            ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
             ...(email ? [{ email }] : []),
           ],
         });
@@ -716,13 +731,13 @@ export const resendOTP = asyncHandler(async (req, res) => {
 export const requestLoginOtp = asyncHandler(async (req, res) => {
   const { email_phone_number } = req.body;
 
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
-  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
-  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const { phone, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
 
   const user = await User.findOne({
-    $or: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])],
+    $or: [
+      ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
+      ...(email ? [{ email }] : []),
+    ],
   });
 
   if (!user) {
@@ -854,13 +869,13 @@ const PASSWORD_RESET_TOKEN_EXPIRE_SECONDS = 5 * 60; // 5 minutes
 export const forgotPasswordInit = asyncHandler(async (req, res) => {
   const { email_phone_number } = req.body;
 
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
-  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
-  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const { phone, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
 
   const user = await User.findOne({
-    $or: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])],
+    $or: [
+      ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
+      ...(email ? [{ email }] : []),
+    ],
   });
 
   if (!user) {
@@ -931,10 +946,7 @@ export const forgotPasswordInit = asyncHandler(async (req, res) => {
 export const forgotPasswordConfirmOtp = asyncHandler(async (req, res) => {
   const { email_phone_number, otp } = req.body;
 
-  const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
-  const isEmail = emailRegex.test(email_phone_number);
-  const phone = isEmail ? undefined : String(email_phone_number).replace(/\D/g, '');
-  const email = isEmail ? String(email_phone_number).toLowerCase() : undefined;
+  const { phone, email } = parseLoginIdentifier(email_phone_number);
   const identifier = email || phone;
 
   const result = await verifyOTP(identifier, otp, 'password_reset');
@@ -970,10 +982,12 @@ export const forgotPasswordReset = asyncHandler(async (req, res) => {
 
   const emailRegex = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
   const isEmail = emailRegex.test(identifier);
+  // The cached identifier was normalized when confirm-otp ran, but the
+  // stored user record may pre-date normalization, so still fan out.
   const user = await User.findOne({
     $or: [
       ...(isEmail ? [{ email: identifier }] : []),
-      ...(!isEmail ? [{ phone: identifier }] : []),
+      ...(!isEmail ? [{ phone: { $in: phoneVariants(identifier) } }] : []),
     ],
   });
 

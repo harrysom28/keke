@@ -6,6 +6,7 @@ import UserDevice from '../models/UserDevice.js';
 import { NotFoundError, ValidationError, ConflictError, AuthenticationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
+import { normalizePhone, phoneVariants } from '../utils/phone.js';
 
 /**
  * Update profile - PATCH /api/user/profile/update-details
@@ -30,15 +31,24 @@ export const updateProfile = asyncHandler(async (req, res) => {
     user.email = email.toLowerCase();
   }
   if (phone !== undefined && phone !== null && phone !== '') {
-    // Remove any non-digit characters except + for validation
-    const cleanedPhone = phone.trim();
-    
-    // Check if phone is already taken by another user
-    const existingUser = await User.findOne({ phone: cleanedPhone, _id: { $ne: userId } });
+    // Normalize to canonical `+234XXXXXXXXXX` (Nigerian numbers) before
+    // doing the dup-check, so a user who originally signed up with
+    // `09035689338` can't accidentally claim `+2349035689338` here and
+    // create a second collision-free record.
+    const normalized = normalizePhone(phone);
+    if (!normalized) {
+      throw new ValidationError('Please provide a valid phone number');
+    }
+    // Fan out across legacy phone shapes so the dup-check catches users
+    // stored under pre-migration formats too.
+    const existingUser = await User.findOne({
+      phone: { $in: phoneVariants(phone) },
+      _id: { $ne: userId },
+    });
     if (existingUser) {
       throw new ConflictError('Phone number is already in use');
     }
-    user.phone = cleanedPhone;
+    user.phone = normalized;
   }
   if (gender) user.gender = gender;
   if (address !== undefined) user.address = address;
