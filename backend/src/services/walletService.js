@@ -12,16 +12,51 @@ function generateTransactionId(prefix = 'TXN') {
 const utcDayKey = () => new Date().toISOString().slice(0, 10);
 
 /**
+ * Atomic upsert for the driver wallet. The previous find-then-create
+ * pattern raced under concurrent first-time reads (two devices polling
+ * /auth/user/me at the same time both saw findOne === null, both tried
+ * to create, and the loser hit the unique index on `driverId` → the
+ * global error handler surfaced this as `409 "driverId already
+ * exists"` on a plain GET endpoint).
+ *
+ * `findOneAndUpdate({ upsert: true })` is atomic at the DB level. The
+ * try/catch wraps the rare MongoDB-documented case where two concurrent
+ * upserts each decide to insert; the loser gets 11000, and we treat
+ * that as "the other call won the create — just fetch and return".
+ */
+async function upsertWallet(driverId, extraSetOnInsert = {}) {
+  const today = utcDayKey();
+  try {
+    return await DriverWallet.findOneAndUpdate(
+      { driverId },
+      {
+        $setOnInsert: {
+          driverId,
+          statsDate: today,
+          todayEarnings: 0,
+          ...extraSetOnInsert,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  } catch (err) {
+    if (err?.code === 11000) {
+      logger.debug(
+        `DriverWallet upsert hit concurrent 11000 for driver ${driverId}; refetching`
+      );
+      return DriverWallet.findOne({ driverId });
+    }
+    throw err;
+  }
+}
+
+/**
  * Roll over todayEarnings when UTC day changes. Call before reads/credits.
  */
 export async function ensureWalletDayStats(driverId) {
   const today = utcDayKey();
-  let w = await DriverWallet.findOne({ driverId });
-  if (!w) {
-    w = await DriverWallet.create({ driverId, statsDate: today, todayEarnings: 0 });
-    return w;
-  }
-  if (w.statsDate === today) return w;
+  const w = await upsertWallet(driverId);
+  if (w?.statsDate === today) return w;
   return DriverWallet.findOneAndUpdate(
     { driverId },
     { $set: { statsDate: today, todayEarnings: 0 } },
@@ -30,12 +65,7 @@ export async function ensureWalletDayStats(driverId) {
 }
 
 async function getOrCreateWallet(driverId, currency = 'NGN') {
-  const today = utcDayKey();
-  let wallet = await DriverWallet.findOne({ driverId });
-  if (wallet) return wallet;
-  wallet = await DriverWallet.create({ driverId, currency, statsDate: today, todayEarnings: 0 });
-  logger.info(`DriverWallet created for driver ${driverId}`);
-  return wallet;
+  return upsertWallet(driverId, { currency });
 }
 
 /**
