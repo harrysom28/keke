@@ -150,6 +150,8 @@ const DailyActivities = () => {
 
   const fetchNigerianBanks = useCallback(async () => {
     if (!token) return;
+    bankListSourceRef.current = 0;
+    setNgBanks([]);
     setBanksLoading(true);
     const urls = [BANK_DIRECTORY_NG, BANK_DIRECTORY_NG_FALLBACK];
     try {
@@ -204,6 +206,17 @@ const DailyActivities = () => {
       return;
     }
 
+    // Wait for bank list fetch — otherwise bankListSourceRef is stale and we hit
+    // the wrong resolve host first (e.g. driver 404 while list came from /bank/*).
+    if (banksLoading) {
+      setResolveLoading(false);
+      return;
+    }
+    if (ngBanks.length === 0) {
+      setResolveLoading(false);
+      return;
+    }
+
     let cancelled = false;
     const handle = setTimeout(() => {
       const bankCodeAtRequest = state.bank_code;
@@ -221,17 +234,24 @@ const DailyActivities = () => {
             accountNumber: digitsAtRequest,
             bankCode: bankCodeAtRequest,
           };
-          const cfg = authHeaders();
+          const baseCfg = authHeaders();
+          const postCfg = {
+            ...baseCfg,
+            headers: {
+              ...baseCfg.headers,
+              "Content-Type": "application/json",
+            },
+          };
 
           for (let i = 0; i < resolveUrls.length; i++) {
             try {
               let r;
               try {
-                r = await axios.post(resolveUrls[i], payload, cfg);
+                r = await axios.post(resolveUrls[i], payload, postCfg);
               } catch (postErr) {
                 const st = isAxiosError(postErr) ? postErr.response?.status : 0;
                 if (st === 404) {
-                  r = await axios.get(resolveUrls[i], { ...cfg, params: payload });
+                  r = await axios.get(resolveUrls[i], { ...baseCfg, params: payload });
                 } else {
                   throw postErr;
                 }
@@ -283,7 +303,14 @@ const DailyActivities = () => {
       clearTimeout(handle);
       setResolveLoading(false);
     };
-  }, [state.bank_code, state.account_number, token, authHeaders]);
+  }, [
+    state.bank_code,
+    state.account_number,
+    token,
+    authHeaders,
+    banksLoading,
+    ngBanks.length,
+  ]);
 
   const AddBank = () => {
     const digits = state.account_number.replace(/\D/g, "");
