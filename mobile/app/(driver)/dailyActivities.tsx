@@ -123,6 +123,7 @@ const DailyActivities = () => {
   const [banksLoading, setBanksLoading] = useState(false);
   const [banksUnavailable, setBanksUnavailable] = useState(false);
   const [resolveLoading, setResolveLoading] = useState(false);
+  const lastResolveRef = useRef<{ key: string; at: number } | null>(null);
 
   const [changed, setChanged] = useState(false);
   const [state, setState] = useState({
@@ -216,6 +217,15 @@ const DailyActivities = () => {
       setResolveLoading(false);
       return;
     }
+
+    // De-dupe identical resolve requests that can occur on re-renders / token refresh.
+    // Avoid spamming Paystack + noisy logs when the payload hasn't changed.
+    const dedupeKey = `${state.bank_code}|${digits}`;
+    const now = Date.now();
+    if (lastResolveRef.current?.key === dedupeKey && now - lastResolveRef.current.at < 1500) {
+      return;
+    }
+    lastResolveRef.current = { key: dedupeKey, at: now };
 
     let cancelled = false;
     const handle = setTimeout(() => {
