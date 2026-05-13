@@ -1,9 +1,14 @@
 // File: useImagePicker.tsx
 
+import {
+  cacheDirectory,
+  copyAsync,
+  documentDirectory,
+} from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 
-import { Alert } from "react-native";
+import { Alert, Platform } from "react-native";
 import mime from "mime";
 import { showMessage } from "react-native-flash-message";
 import { useState } from "react";
@@ -35,33 +40,106 @@ const rewriteToJpgName = (orig?: string | null): string => {
   return `compressed_${Date.now()}.jpg`;
 };
 
+/** RN Android multipart cannot read `content://` (and some `ph://`) URIs; normalize to `file://` in cache. */
+const ensureFileUriForMultipart = async (uri: string): Promise<string> => {
+  if (uri.startsWith("file://")) return uri;
+  if (uri.startsWith("/") && !uri.startsWith("//")) {
+    return uri.startsWith("file:") ? uri : `file://${uri}`;
+  }
+  const needsCopy =
+    uri.startsWith("content://") ||
+    uri.startsWith("ph://") ||
+    uri.startsWith("assets-library://");
+  if (needsCopy) {
+    const base = cacheDirectory ?? documentDirectory;
+    if (!base) {
+      throw new Error("expo-file-system: no cache or document directory");
+    }
+    const prefix = base.endsWith("/") ? base : `${base}/`;
+    const dest = `${prefix}pick_${Date.now()}.jpg`;
+    await copyAsync({ from: uri, to: dest });
+    return dest.startsWith("file://") ? dest : `file://${dest}`;
+  }
+  return uri;
+};
+
+const normalizeManipulatorUri = (uri: string): string => {
+  if (uri.startsWith("file://")) return uri;
+  if (Platform.OS === "android" && uri.startsWith("/") && !uri.startsWith("//")) {
+    return `file://${uri}`;
+  }
+  return uri;
+};
+
 // Resize to 1280px wide @ 0.7 quality JPEG. A ~5MB camera shot drops to
 // ~250KB, which is the difference between a 30s upload and a 3s upload over
 // 4G. Returns a full asset-like object so downstream FormData.append calls
 // always have a valid `name` and `type` — RN's multipart impl silently fails
 // (rejecting before the request leaves the device) when either is undefined.
-// Falls back to the original asset if manipulation throws (e.g. unsupported
-// HEIC variant) so we never block the user from continuing.
+// On Android, gallery picks are often `content://`; if the first manipulate
+// fails, we copy to cache then re-run so the outgoing `uri` is always
+// `file://` for multipart (never leak `content://` from the catch path).
 const compressImage = async (
   asset: ImagePicker.ImagePickerAsset
 ): Promise<CompressedAsset> => {
+  const jpegMeta = {
+    fileName: rewriteToJpgName(asset.fileName),
+    type: "image/jpeg" as const,
+    mimeType: "image/jpeg" as const,
+  };
+
+  const fromResult = (
+    result: ImageManipulator.ImageResult
+  ): CompressedAsset => ({
+    ...asset,
+    uri: normalizeManipulatorUri(result.uri),
+    width: result.width,
+    height: result.height,
+    ...jpegMeta,
+  });
+
   try {
     const result = await ImageManipulator.manipulateAsync(
       asset.uri,
       [{ resize: { width: 1280 } }],
       { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
     );
-    return {
-      ...asset,
-      uri: result.uri,
-      width: result.width,
-      height: result.height,
-      fileName: rewriteToJpgName(asset.fileName),
-      type: "image/jpeg",
-      mimeType: "image/jpeg",
-    };
-  } catch (error) {
-    console.warn("Image compression failed, using original:", error);
+    return fromResult(result);
+  } catch (firstError) {
+    console.warn("Image compression (direct) failed, retrying via file URI:", firstError);
+  }
+
+  try {
+    const localUri = await ensureFileUriForMultipart(asset.uri);
+    const result = await ImageManipulator.manipulateAsync(
+      localUri,
+      [{ resize: { width: 1280 } }],
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+    );
+    return fromResult(result);
+  } catch (secondError) {
+    console.warn("Resize after copy failed, trying encode-only:", secondError);
+  }
+
+  try {
+    const localUri = await ensureFileUriForMultipart(asset.uri);
+    const result = await ImageManipulator.manipulateAsync(localUri, [], {
+      compress: 0.7,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    return fromResult(result);
+  } catch (thirdError) {
+    console.warn("Encode-only manipulate failed, using cached copy:", thirdError);
+  }
+
+  const fileUri = normalizeManipulatorUri(
+    await ensureFileUriForMultipart(asset.uri)
+  );
+  if (!fileUri.startsWith("file://")) {
+    console.warn(
+      "Could not resolve image to file:// for upload; uri prefix:",
+      fileUri.split("://")[0]
+    );
     return {
       ...asset,
       fileName: asset.fileName ?? `compressed_${Date.now()}.jpg`,
@@ -69,6 +147,12 @@ const compressImage = async (
       mimeType: asset.mimeType || "image/jpeg",
     };
   }
+
+  return {
+    ...asset,
+    uri: fileUri,
+    ...jpegMeta,
+  };
 };
 
 const useImagePicker = ({

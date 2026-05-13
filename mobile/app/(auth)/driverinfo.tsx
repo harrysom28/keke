@@ -652,9 +652,10 @@ const DriverInfo = () => {
         } | null;
         if (img?.uri) {
           const ext = img.uri.split(".").pop() || "jpg";
+          const typed = img as { uri: string; type?: string };
           data.append(formKey, {
             uri: img.uri,
-            type: mimeFromUri(img.uri),
+            type: typed.type || mimeFromUri(img.uri),
             name: `${formKey}.${ext}`,
           } as unknown as Blob);
         }
@@ -692,9 +693,9 @@ const DriverInfo = () => {
       // Do NOT pass a `headers` object here; apiClient handles them.
       await apiClient.post(CREATE_DRIVER, data, {
         // Safety net for slow networks even after on-device compression.
-        // Backend uploads to Cloudinary in parallel, so worst-case real-world
-        // is ~10-15s; 120s keeps us well clear of 4G hiccups.
-        timeout: 120000,
+        // Backend uploads to Cloudinary in parallel; 180s covers large JPEGs
+        // on Android mobile data where TLS + multipart can spike latency.
+        timeout: 180000,
         onUploadProgress: (progressEvent) => {
           const percent = Math.round(
             (progressEvent.loaded * 100) / (progressEvent.total || 1)
