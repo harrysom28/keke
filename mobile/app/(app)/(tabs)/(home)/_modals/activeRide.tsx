@@ -869,8 +869,6 @@ const ActiveRideSheet = ({
     applySheetHeight,
   ]);
 
-  // Fallback poll for ride status (Pusher in home.tsx is primary; poll rarely to reduce load)
-  const POLL_INTERVAL_MS = 25000; // backup when Pusher misses an event
   useEffect(() => {
     const rideData = currentView?.data?.waiting || temp;
     const rideId = rideData?.ride_id || (rideData as any)?._id;
@@ -887,10 +885,12 @@ const ActiveRideSheet = ({
       rideStatus !== "cancelled" &&
       rideStatus !== "rejected";
 
+    const pollMs = riderMatchedOrBeyond ? 25000 : 5000;
+
     if (shouldPoll) {
       pollingIntervalRef.current = setInterval(() => {
         getActiveRide();
-      }, POLL_INTERVAL_MS);
+      }, pollMs);
 
       return () => {
         if (pollingIntervalRef.current) {
@@ -903,7 +903,15 @@ const ActiveRideSheet = ({
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
-  }, [currentView?.screen, currentView?.data?.waiting?.status, currentView?.data?.waiting?.ride_id, temp?.status, temp?.ride_id, getActiveRide]);
+  }, [
+    currentView?.screen,
+    currentView?.data?.waiting?.status,
+    currentView?.data?.waiting?.ride_id,
+    temp?.status,
+    temp?.ride_id,
+    getActiveRide,
+    riderMatchedOrBeyond,
+  ]);
 
   // Cleanup polling on unmount
   useEffect(() => {

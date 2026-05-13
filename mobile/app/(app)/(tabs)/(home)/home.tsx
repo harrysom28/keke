@@ -47,6 +47,10 @@ import {
   isRestorableRideStatus,
   isTerminalRideStatus,
 } from "@/utils/activeRidePayload";
+import {
+  mergePusherRideStatusPatch,
+  reconcileStaleActiveRideGet,
+} from "@/utils/activeRideRealtimeMerge";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import ActiveRideSheet from "./_modals/activeRide";
@@ -267,6 +271,11 @@ export default function HomeScreen() {
     screen: "",
     data: { waiting: {} },
   });
+  const rideWaitingRef = useRef<Record<string, unknown>>({});
+  useEffect(() => {
+    rideWaitingRef.current =
+      (ride?.data?.waiting as unknown as Record<string, unknown>) || {};
+  }, [ride?.data?.waiting]);
   const tripCompletedRef = useRef(false);
   const rideScreenRef = useRef<string>("");
   useEffect(() => {
@@ -983,6 +992,55 @@ export default function HomeScreen() {
     openFindRideSheet,
   ]);
 
+  /** Apply `ride.status` payloads immediately — GET /booking/active-ride often lags Pusher. */
+  const applyPusherRideStatusPatchFn = useCallback(
+    (patch: Record<string, unknown> | null) => {
+      if (!patch) return;
+      const incomingId = String(patch.ride_id ?? patch.rideId ?? "").trim();
+      const localId = String(
+        tempRef.current?.ride_id ??
+          rideWaitingRef.current?.ride_id ??
+          rideWaitingRef.current?._id ??
+          ""
+      ).trim();
+      if (!incomingId || incomingId !== localId) return;
+
+      setTemp((prev) => {
+        const next = mergePusherRideStatusPatch(
+          prev as unknown as Record<string, unknown>,
+          patch
+        ) as TRide;
+        tempRef.current = next;
+        return next;
+      });
+      setRide((prev) => {
+        const waiting = mergePusherRideStatusPatch(
+          ((prev.data?.waiting ?? {}) as unknown as Record<string, unknown>) ||
+            {},
+          patch
+        );
+        rideWaitingRef.current = waiting;
+        const screen =
+          prev.screen === "" || prev.screen === "WAITING"
+            ? "WAITING"
+            : prev.screen;
+        return {
+          ...prev,
+          screen,
+          data: {
+            ...prev.data,
+            waiting: waiting as unknown as IARide["data"]["waiting"],
+          },
+        };
+      });
+      logger.debug("Applied ride.status Pusher patch", {
+        rideId: incomingId,
+        internal_status: patch.internal_status,
+      });
+    },
+    []
+  );
+
   const getActiveRide = () => {
     if (getActiveRideInFlightRef.current) {
       logger.debug("getActiveRide coalesced — request already in flight");
@@ -1127,10 +1185,13 @@ export default function HomeScreen() {
           }
 
           const rideId = rideData?.ride_id || rideData?._id;
-          // Exclude updatedAt — backend updates it on every dispatch attempt,
-          // causing false uiChanged=true on every poll and re-opening the sheet.
-          // Only track fields that actually affect the UI state.
-          const rideUiKey = `${rideId}|${rideStatus}|${String(rideData.accepted_by_driver)}|${rideData.driver_id ?? ""}|${String(rideData.is_ride_started)}|${String(rideData.drop_off_completed)}|${String(rideData.payment_status ?? "")}|${rideData.internal_status ?? ""}`;
+          // Key must reflect reconciled UI truth (Pusher may advance acceptance before GET catches up).
+          const reconciledPreview = reconcileStaleActiveRideGet(
+            tempRef.current as unknown as Record<string, unknown>,
+            rideRecord
+          );
+          const previewStatus = getRideStatusLower(reconciledPreview);
+          const rideUiKey = `${rideId}|${previewStatus}|${String(reconciledPreview.accepted_by_driver)}|${String(reconciledPreview.driver_id ?? "")}|${String(reconciledPreview.is_ride_started)}|${String(reconciledPreview.drop_off_completed)}|${String(reconciledPreview.payment_status ?? "")}|${String(reconciledPreview.internal_status ?? "")}`;
           const uiChanged = lastActiveRideUiKeyRef.current !== rideUiKey;
           lastActiveRideUiKeyRef.current = rideUiKey;
 
@@ -1158,11 +1219,24 @@ export default function HomeScreen() {
             pendingConfirmHydrationTimerRef.current = null;
           }
 
-          setTemp(rideData as TRide);
-          setRide({
-            screen: "WAITING",
-            data: { waiting: rideData },
+          let reconciledSnapshot: TRide | null = null;
+          setTemp((prev) => {
+            reconciledSnapshot = reconcileStaleActiveRideGet(
+              prev as unknown as Record<string, unknown>,
+              rideRecord
+            ) as TRide;
+            tempRef.current = reconciledSnapshot;
+            return reconciledSnapshot;
           });
+          if (reconciledSnapshot) {
+            setRide({
+              screen: "WAITING",
+              data: {
+                waiting:
+                  reconciledSnapshot as unknown as IARide["data"]["waiting"],
+              },
+            });
+          }
           dispatch(
             setAppData({
               isBooking: true,
@@ -1170,7 +1244,7 @@ export default function HomeScreen() {
           );
 
           if (uiChanged) {
-            animateToMapDirections(rideData);
+            animateToMapDirections(reconciledSnapshot ?? (rideData as TRide));
             // Only open/re-open the sheet if user isn't actively on the
             // driver search or other sub-screens — prevents modal re-popping
             // when user taps "Try another driver" and polling fires.
@@ -1739,7 +1813,11 @@ export default function HomeScreen() {
 
   // Subscribe to ride status updates for active rides
   const activeRideId = temp?.ride_id || (ride?.data?.waiting as any)?.ride_id;
-  const rideStatus = String((temp?.status as string) || "").toLowerCase();
+  const rideStatus = String(
+    (temp?.status as string) ||
+      ((ride?.data?.waiting as any)?.status as string) ||
+      ""
+  ).toLowerCase();
   const rideChannel = activeRideId ? `private.ride.${activeRideId}` : 'private.ride.dummy';
   usePusherChannel({
     channel: rideChannel,
@@ -1754,11 +1832,15 @@ export default function HomeScreen() {
       }
     },
     onEvent: (event) => {
-      if (activeRideId) {
-        logger.info(`Ride status update event received: ${event}`);
-        // Refresh ride data when status changes
-        getActiveRide();
+      if (!activeRideId) return;
+      const name = (event as { eventName?: string })?.eventName;
+      if (name === "ride.status") {
+        applyPusherRideStatusPatchFn(
+          parsePusherDataPayload((event as { data?: unknown }).data)
+        );
       }
+      logger.info(`Ride channel event: ${String(name || "unknown")}`);
+      getActiveRide();
     },
   });
 
@@ -1775,8 +1857,16 @@ export default function HomeScreen() {
     visible: !!token && riderPusherUserId != null,
     onEvent: (event: { eventName?: string; data?: unknown }) => {
       const name = event?.eventName;
+      if (!name) return;
+
+      if (name === "ride.status") {
+        applyPusherRideStatusPatchFn(parsePusherDataPayload(event?.data));
+        getActiveRide();
+        return;
+      }
+
       const payload = parsePusherDataPayload(event?.data);
-      if (!name || !payload) return;
+      if (!payload) return;
 
       const activeRiderRideId = String(
         temp?.ride_id ??

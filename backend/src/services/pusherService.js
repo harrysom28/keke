@@ -98,11 +98,13 @@ class PusherService {
 
       // Emit to ride channel (mobile app expects private.ride.{rideId})
       this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride.status', statusData);
-      
-      // Also emit to user-specific channels (mobile app expects private.{channel})
+
+      // Rider mobile listens on private-user-{userId} (hyphen form); keep dot variants for older clients.
       if (ride.rider) {
-        this.pusher.trigger(`private.user.${ride.rider._id.toString()}`, 'ride.status', statusData);
-        this.pusher.trigger(`private.user-${ride.rider._id.toString()}`, 'ride.status', statusData); // Support both formats
+        const riderId = ride.rider._id?.toString?.() || ride.rider.toString();
+        this.pusher.trigger(`private-user-${riderId}`, 'ride.status', statusData);
+        this.pusher.trigger(`private.user.${riderId}`, 'ride.status', statusData);
+        this.pusher.trigger(`private.user-${riderId}`, 'ride.status', statusData);
       }
       if (driver) {
         this.pusher.trigger(`private.driver-${driver._id.toString()}`, 'ride.status', statusData);
