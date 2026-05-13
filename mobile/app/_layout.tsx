@@ -1,4 +1,5 @@
 import "react-native-reanimated";
+import "@/lib/firebaseMessagingBackground";
 import "@/lib/i18n";
 
 import * as SplashScreen from "expo-splash-screen";
@@ -9,6 +10,7 @@ import NotificationBanner from "@/components/NotificationBanner";
 import notificationManager, {
   NotificationPayload,
 } from "@/services/notificationManager";
+import * as Notifications from "expo-notifications";
 import { useNotificationSocket } from "@/hooks/useNotificationSocket";
 import { AppContext } from "./context";
 import { addIncomingNotification, setLatestNotification, setUnreadCount } from "@/store/AppSlice";
@@ -164,6 +166,30 @@ const NotificationBootstrap = () => {
 
   useEffect(() => {
     notificationManager.initFirebaseListeners();
+  }, []);
+
+  useEffect(() => {
+    const receivedSub = Notifications.addNotificationReceivedListener(
+      (notification) => {
+        notificationManager.handle(
+          notificationManager.mapExpoNotificationRequestToPayload(
+            notification.request
+          )
+        );
+      }
+    );
+    const responseSub =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        notificationManager.handleNavigation(
+          notificationManager.mapExpoNotificationRequestToPayload(
+            response.notification.request
+          )
+        );
+      });
+    return () => {
+      receivedSub.remove();
+      responseSub.remove();
+    };
   }, []);
 
   useEffect(() => {

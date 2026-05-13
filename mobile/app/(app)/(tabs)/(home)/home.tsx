@@ -232,6 +232,8 @@ export default function HomeScreen() {
    *  in close succession; a single in-flight request + short min-interval prevents bursting the endpoint. */
   const getActiveRideInFlightRef = useRef(false);
   const getActiveRideLastStartRef = useRef(0);
+  /** When Pusher/socket fires during an in-flight GET or inside the min-interval window, run again once. */
+  const pendingGetActiveRideRef = useRef(false);
   const GET_ACTIVE_RIDE_MIN_MS = 400;
   const locationRef = useRef({ latitude: 0, longitude: 0 });
   const { location, address, loading: locationLoading, locationError, getLocation: refreshLocation } = useCurrentLocation({ isFocused });
@@ -462,6 +464,17 @@ export default function HomeScreen() {
       activeRideSheetRef?.current?.close();
       tripCompletedRef.current = true;
       setTripCompleted(true);
+
+      if (mapRef.current) {
+        const lat = locationRef.current.latitude;
+        const lng = locationRef.current.longitude;
+        const currentHasValidLocation =
+          lat !== 0 && lng !== 0 && !isNaN(lat) && !isNaN(lng);
+        const defaultRegion = currentHasValidLocation
+          ? { latitude: lat, longitude: lng, ...mapDelta }
+          : { latitude: 9.082, longitude: 8.6753, ...mapDelta };
+        mapRef.current.animateToRegion(defaultRegion, 800);
+      }
     },
     [dispatch]
   );
@@ -972,12 +985,14 @@ export default function HomeScreen() {
 
   const getActiveRide = () => {
     if (getActiveRideInFlightRef.current) {
-      logger.debug("getActiveRide skipped — request already in flight");
+      logger.debug("getActiveRide coalesced — request already in flight");
+      pendingGetActiveRideRef.current = true;
       return;
     }
     const now = Date.now();
     if (now - getActiveRideLastStartRef.current < GET_ACTIVE_RIDE_MIN_MS) {
-      logger.debug("getActiveRide skipped — fired within min-interval window");
+      logger.debug("getActiveRide coalesced — fired within min-interval window");
+      pendingGetActiveRideRef.current = true;
       return;
     }
     getActiveRideInFlightRef.current = true;
@@ -1244,6 +1259,11 @@ export default function HomeScreen() {
         clearTimeout(timeoutId);
         setLoading(false);
         getActiveRideInFlightRef.current = false;
+        const rerun = pendingGetActiveRideRef.current;
+        pendingGetActiveRideRef.current = false;
+        if (rerun) {
+          setTimeout(() => getActiveRide(), 0);
+        }
       });
   };
 

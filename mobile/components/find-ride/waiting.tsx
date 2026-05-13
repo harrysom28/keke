@@ -29,6 +29,7 @@ import {
   getRiderHeaderCopy,
   getTripContext,
 } from "@/components/ride-in-transit/rideStates";
+import { isRiderMatchedOrBeyond } from "@/utils/activeRidePayload";
 import { RideStatusHeader } from "@/components/ride-in-transit/RideStatusHeader";
 import { TripDetailsCard } from "@/components/ride-in-transit/TripDetailsCard";
 import { UserInfoCard } from "@/components/ride-in-transit/UserInfoCard";
@@ -232,7 +233,7 @@ export const WaitingView = ({
     data?.driver && typeof data.driver === "object"
       ? Object.keys(data.driver).length > 0
       : false;
-  const isAccepted = data?.accepted_by_driver || (data as any)?.acceptedByDriver || false;
+  const isAccepted = isRiderMatchedOrBeyond(data as Record<string, unknown>);
   const rideStatusLower = String((data as any)?.status ?? "").toLowerCase();
   const isDriverArrived =
     rideStatusLower === "arrived" || rideStatusLower === "driver_arrived";

@@ -70,3 +70,42 @@ export function isTerminalRideStatus(status: string): boolean {
 export function isRestorableRideStatus(status: string): boolean {
   return (ACTIVE_RIDE_RESTORABLE_STATUSES as readonly string[]).includes(status);
 }
+
+/** Status strings the API uses while no driver is locked in yet (see backend mapRideStatusForClientApi). */
+const RIDER_MATCHING_PHASE_STATUSES = ["requested", "searching", "pending"];
+
+/**
+ * True once a driver is assigned / ride left the “finding driver” phase.
+ * Prefer this over `accepted_by_driver` alone — some payloads briefly lag the boolean
+ * after Pusher/events, which kept the per-driver countdown UI stuck until the next poll.
+ */
+export function isRiderMatchedOrBeyond(
+  ride: Record<string, unknown> | null | undefined
+): boolean {
+  if (!ride || typeof ride !== "object") return false;
+  const r = ride as Record<string, unknown>;
+  if (r.accepted_by_driver === true || r.acceptedByDriver === true) return true;
+
+  const st = getRideStatusLower(r);
+  const driverIdRaw = r.driver_id ?? r.driverId;
+  const driverId =
+    driverIdRaw != null && String(driverIdRaw).trim() !== ""
+      ? String(driverIdRaw).trim()
+      : "";
+
+  const drv = r.driver;
+  const hasDriverPayload =
+    drv != null &&
+    typeof drv === "object" &&
+    Object.keys(drv as object).length > 0;
+
+  if (driverId || hasDriverPayload) {
+    return true;
+  }
+
+  if (!st || RIDER_MATCHING_PHASE_STATUSES.includes(st)) {
+    return false;
+  }
+
+  return true;
+}

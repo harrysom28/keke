@@ -2,6 +2,7 @@ import AppStore from "@/store";
 import { setAppData } from "@/store/AppSlice";
 import apiClient from "@/utils/apiClient";
 import logger from "@/utils/logger";
+import type { NotificationRequest } from "expo-notifications";
 import messaging from "@react-native-firebase/messaging";
 import { Pusher, PusherEvent } from "@pusher/pusher-websocket-react-native";
 import { router } from "expo-router";
@@ -273,6 +274,57 @@ export const mapFirebaseToPayload = (remoteMessage: any): NotificationPayload =>
   };
 };
 
+/** Maps Expo push delivery (backend uses Expo Push API for `ExponentPushToken[...]`). */
+export const mapExpoNotificationRequestToPayload = (
+  request: NotificationRequest
+): NotificationPayload => {
+  const content = request.content;
+  const rawData = content.data || {};
+  const data: Record<string, string> = {};
+  if (rawData && typeof rawData === "object") {
+    for (const [k, v] of Object.entries(rawData as Record<string, unknown>)) {
+      data[k] = v == null ? "" : typeof v === "string" ? v : String(v);
+    }
+  }
+  const rideId = data.ride_id || data.rideId || "";
+  const title =
+    (content.title != null && content.title !== ""
+      ? String(content.title)
+      : null) ||
+    data.title ||
+    "Notification";
+  const message =
+    (content.body != null && content.body !== ""
+      ? String(content.body)
+      : null) ||
+    data.message ||
+    data.body ||
+    "";
+
+  return {
+    id: String(data.id || data.notification_id || rideId || Date.now()),
+    notification_id: String(data.notification_id || data.id || Date.now()),
+    title: String(title),
+    message: String(message),
+    type: toType(data.type),
+    priority: toPriority(data.priority),
+    screen: data.screen ? String(data.screen) : undefined,
+    action_type:
+      data.action_type === "navigate" ||
+      data.action_type === "open_url" ||
+      data.action_type === "call_api"
+        ? data.action_type
+        : "none",
+    action_payload: parseActionPayload(data.action_payload),
+    ride_id: rideId ? String(rideId) : undefined,
+    duration_ms:
+      data.duration_ms != null ? Number(data.duration_ms) : undefined,
+    image_url: data.image_url ? String(data.image_url) : undefined,
+    delivered_at: new Date().toISOString(),
+    event_key: data.subType || data.sub_type || data.event_key || undefined,
+  };
+};
+
 export const handleNavigation = (payload: NotificationPayload): void => {
   if (payload.action_type !== "navigate") {
     return;
@@ -356,11 +408,6 @@ export const initFirebaseListeners = (): void => {
       }
     );
 
-    messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-      const payload = mapFirebaseToPayload(remoteMessage);
-      inboxHandler?.(payload);
-    });
-
     messaging()
       .getInitialNotification()
       .then((remoteMessage) => {
@@ -424,6 +471,7 @@ const notificationManager = {
   initPusherListener,
   initFirebaseListeners,
   mapFirebaseToPayload,
+  mapExpoNotificationRequestToPayload,
   handleNavigation,
   registerFcmToken,
   cleanupNotificationListeners,

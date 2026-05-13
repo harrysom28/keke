@@ -22,6 +22,7 @@ import tw from "@/lib/tailwind";
 import { useDispatch } from "react-redux";
 import { router, useFocusEffect } from "expo-router";
 import { AppContext } from "@/app/context";
+import { isRiderMatchedOrBeyond } from "@/utils/activeRidePayload";
 import { pusherManager } from "@/utils/pusherManager";
 
 interface Props {
@@ -140,6 +141,11 @@ const ActiveRideSheet = ({
     const rd: any = rideDataForWaiting || {};
     return String(rd?.ride_id || rd?._id || "").trim();
   }, [rideDataForWaiting]);
+
+  const riderMatchedOrBeyond = useMemo(
+    () => isRiderMatchedOrBeyond(rideDataForWaiting as Record<string, unknown>),
+    [rideDataForWaiting]
+  );
 
   const handleTripResolvedRef = useRef(handleTripResolved);
   handleTripResolvedRef.current = handleTripResolved;
@@ -263,7 +269,6 @@ const ActiveRideSheet = ({
     let h = 120;
     const hasDriver =
       rd?.driver && typeof rd.driver === "object" && Object.keys(rd.driver).length > 0;
-    const accepted = !!(rd?.accepted_by_driver || rd?.acceptedByDriver);
     const rawStatus = String(rd?.status ?? "").toLowerCase();
     const tripLike =
       !!rd?.is_ride_started ||
@@ -277,7 +282,7 @@ const ActiveRideSheet = ({
       case "WAITING":
         h += 520;
         if (hasDriver) h += 140;
-        if (accepted) {
+        if (riderMatchedOrBeyond) {
           h += 320;
           if (tripLike) h += 240;
         }
@@ -302,11 +307,15 @@ const ActiveRideSheet = ({
         h += resolvedScreenForLayout ? 360 : 200;
     }
     return h;
-  }, [resolvedScreenForLayout, rideDataForWaiting, showStaleRideWarning]);
+  }, [
+    resolvedScreenForLayout,
+    rideDataForWaiting,
+    showStaleRideWarning,
+    riderMatchedOrBeyond,
+  ]);
 
   const sheetHeight = useMemo(() => {
     const rd = rideDataForWaiting as any;
-    const accepted = !!(rd?.accepted_by_driver || rd?.acceptedByDriver);
     const rawStatus = String(rd?.status ?? "").toLowerCase();
     const tripLike =
       !!rd?.is_ride_started ||
@@ -316,7 +325,7 @@ const ActiveRideSheet = ({
       rawStatus.includes("in_progress") ||
       rawStatus === "started";
     const minH =
-      resolvedScreenForLayout === "WAITING" && accepted
+      resolvedScreenForLayout === "WAITING" && riderMatchedOrBeyond
         ? Math.min(screenHeight * 0.52, screenHeight * 0.9)
         : resolvedScreenForLayout === "WAITING"
         ? screenHeight * 0.72
@@ -324,7 +333,14 @@ const ActiveRideSheet = ({
     const maxH = screenHeight * 0.92;
     const target = measuredHeight ?? estimatedSheetHeight;
     return Math.max(minH, Math.min(target, maxH));
-  }, [screenHeight, measuredHeight, estimatedSheetHeight, resolvedScreenForLayout, rideDataForWaiting]);
+  }, [
+    screenHeight,
+    measuredHeight,
+    estimatedSheetHeight,
+    resolvedScreenForLayout,
+    rideDataForWaiting,
+    riderMatchedOrBeyond,
+  ]);
 
   const applySheetHeight = useCallback(
     (value: number) => {
@@ -409,18 +425,14 @@ const ActiveRideSheet = ({
         ? Object.keys(rideDataForWaiting as any).length
         : 0;
     const st = String((rideDataForWaiting as any)?.status ?? "").toLowerCase();
-    const accepted = !!(
-      (rideDataForWaiting as any)?.accepted_by_driver ||
-      (rideDataForWaiting as any)?.acceptedByDriver
-    );
     console.log("ActiveRideSheet render state:", {
       resolvedScreenForLayout,
       rideIdForHook: rideIdForHook ? String(rideIdForHook) : null,
       payloadKeys,
       status: st,
-      accepted,
+      accepted: riderMatchedOrBeyond,
     });
-  }, [rideIdForHook, rideDataForWaiting, resolvedScreenForLayout]);
+  }, [rideIdForHook, rideDataForWaiting, resolvedScreenForLayout, riderMatchedOrBeyond]);
 
   // Safety: if the sheet gets opened with no valid ride payload (stale state / race),
   // immediately close so the user is never trapped on a blank sheet.
@@ -456,9 +468,7 @@ const ActiveRideSheet = ({
     setCurrentView,
   ]);
 
-  const isRideAcceptedByDriver = !!(
-    (rideDataForWaiting as any)?.accepted_by_driver || (rideDataForWaiting as any)?.acceptedByDriver
-  );
+  const isRideAcceptedByDriver = riderMatchedOrBeyond;
 
   const screenForTimeout =
     currentView?.screen || (rideIdForHook ? "WAITING" : "");
