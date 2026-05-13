@@ -27,6 +27,7 @@ expo-env.d.ts
 # @end expo-cli
 .env.local
 
-# Sentry auth tokens for source-map / debug-symbol uploads (generated per-developer)
+# Sentry: ignore token-bearing copies; android/sentry.properties is tracked (org/project only).
 sentry.properties
 **/sentry.properties
+!android/sentry.properties

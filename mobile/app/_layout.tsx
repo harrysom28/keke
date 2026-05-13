@@ -17,7 +17,8 @@ import { addIncomingNotification, setLatestNotification, setUnreadCount } from "
 import { setAuthData } from "@/store/AuthSlice";
 import { getStoredTokens, setStoredTokens } from "@/utils/secureTokenStorage";
 import React, { useContext, useEffect, useState } from "react";
-import { AppState, LogBox, type AppStateStatus } from "react-native";
+import * as Device from "expo-device";
+import { AppState, LogBox, Platform, type AppStateStatus } from "react-native";
 
 LogBox.ignoreLogs([
   "Location update failed",
@@ -166,6 +167,20 @@ const NotificationBootstrap = () => {
 
   useEffect(() => {
     notificationManager.initFirebaseListeners();
+  }, []);
+
+  // Android 13+ (API 33): POST_NOTIFICATIONS must be in the manifest and requested at runtime
+  // or notifications are dropped on many devices even when the user intends to allow them.
+  useEffect(() => {
+    (async () => {
+      if (
+        Platform.OS === "android" &&
+        Device.osVersion &&
+        parseInt(Device.osVersion, 10) >= 13
+      ) {
+        await Notifications.requestPermissionsAsync();
+      }
+    })();
   }, []);
 
   useEffect(() => {

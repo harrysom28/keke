@@ -4,6 +4,8 @@ import {
   BackHandler,
   Image,
   Linking,
+  Platform,
+  Pressable,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -51,6 +53,8 @@ import { TripDetailsCard } from "@/components/ride-in-transit/TripDetailsCard";
 import { UserInfoCard } from "@/components/ride-in-transit/UserInfoCard";
 import { ProgressBar } from "@/components/ride-in-transit/ProgressBar";
 import { DriverActionButtons } from "@/components/ride-in-transit/ActionButtons";
+
+const OFFER_ACTION_HIT_SLOP = { top: 15, bottom: 15, left: 15, right: 15 } as const;
 
 const handleRideApiError = (err: unknown) => {
   showMessage({
@@ -444,7 +448,11 @@ const NewRide = ({
       backdropMaskColor="#19191900"
       openDuration={1000}
       disableKeyboardHandling={false}
-      style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px]`, { backgroundColor: "#fff" })}
+      style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px]`, {
+        backgroundColor: "#fff",
+        zIndex: 999,
+        ...(Platform.OS === "android" ? { elevation: 12 } : {}),
+      })}
     >
       <DriverChatModal
         data={{
@@ -465,7 +473,16 @@ const NewRide = ({
         data={data}
         loading={loading.change}
       />
+      <View
+        pointerEvents="box-none"
+        style={{
+          backgroundColor: "#fff",
+          zIndex: 999,
+          ...(Platform.OS === "android" ? { elevation: 10 } : {}),
+        }}
+      >
       <ScrollView
+        pointerEvents="auto"
         style={{ backgroundColor: "#fff" }}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ flexGrow: 0, paddingBottom: 16, paddingHorizontal: 16, gap: 8 }}
@@ -678,10 +695,19 @@ const NewRide = ({
           />
           </>
         ) : (
-          <View style={tw`flex-col mt-5 gap-y-4`}>
-            <TouchableOpacity
+          <View
+            style={[
+              tw`flex-col mt-5 gap-y-4`,
+              { zIndex: 999, elevation: Platform.OS === "android" ? 10 : 0 },
+            ]}
+          >
+            <Pressable
               onPress={AcceptRide}
-              style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[12px]`}
+              hitSlop={OFFER_ACTION_HIT_SLOP}
+              style={({ pressed }) => [
+                tw`min-h-[56px] flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[12px]`,
+                { opacity: pressed ? 0.7 : 1 },
+              ]}
             >
               {loading.accept ? (
                 <ActivityIndicator color="white" />
@@ -690,10 +716,14 @@ const NewRide = ({
                   Accept ride
                 </Text>
               )}
-            </TouchableOpacity>
-            <TouchableOpacity
+            </Pressable>
+            <Pressable
               onPress={RejectRide}
-              style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-base-green rounded-[12px]`}
+              hitSlop={OFFER_ACTION_HIT_SLOP}
+              style={({ pressed }) => [
+                tw`min-h-[56px] flex-row items-center justify-center gap-x-2 py-3 border border-base-green rounded-[12px]`,
+                { opacity: pressed ? 0.7 : 1 },
+              ]}
             >
               {loading.reject ? (
                 <ActivityIndicator color={tw.color("text-base-green")} />
@@ -702,7 +732,7 @@ const NewRide = ({
                   Decline
                 </Text>
               )}
-            </TouchableOpacity>
+            </Pressable>
             {offerSecondsLeft != null && offerSecondsLeft > 0 ? (
               <Text style={tw.style(`text-xs text-center text-[#6B7280]`, { fontFamily: "RobotoRegular" })}>
                 {offerSecondsLeft}s left to accept
@@ -741,6 +771,7 @@ const NewRide = ({
           </View>
         ) : null}
       </ScrollView>
+      </View>
     </BottomSheet>
   );
 };
