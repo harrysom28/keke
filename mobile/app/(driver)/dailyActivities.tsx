@@ -136,6 +136,10 @@ const DailyActivities = () => {
   const latestFormRef = useRef(state);
   latestFormRef.current = state;
 
+  /** Fresh bearer on each request without putting rotating `token` in resolve effect deps. */
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
   /** Which bank-list URL succeeded (0 = driver, 1 = payment). Resolve uses the same family first. */
   const bankListSourceRef = useRef(0);
 
@@ -200,6 +204,7 @@ const DailyActivities = () => {
     }
   }, [token, authHeaders]);
 
+  // Bank resolve: deps use `!!token` only so rotating access tokens do not re-trigger Paystack lookups.
   useEffect(() => {
     const digits = state.account_number.replace(/\D/g, "");
     if (!state.bank_code || digits.length !== 10 || !token) {
@@ -218,7 +223,7 @@ const DailyActivities = () => {
       return;
     }
 
-    // De-dupe identical resolve requests that can occur on re-renders / token refresh.
+    // De-dupe identical resolve requests that can occur on re-renders.
     // Avoid spamming Paystack + noisy logs when the payload hasn't changed.
     const dedupeKey = `${state.bank_code}|${digits}`;
     const now = Date.now();
@@ -244,7 +249,13 @@ const DailyActivities = () => {
             accountNumber: digitsAtRequest,
             bankCode: String(bankCodeAtRequest ?? "").trim(),
           };
-          const baseCfg = authHeaders();
+          const bearer = tokenRef.current;
+          const baseCfg = {
+            headers: {
+              Authorization: `Bearer ${bearer}`,
+              Accept: "application/json",
+            },
+          };
           const postCfg = {
             ...baseCfg,
             headers: {
@@ -312,7 +323,6 @@ const DailyActivities = () => {
           ) {
             return;
           }
-          setState((prev) => ({ ...prev, account_name: "" }));
           const apiDetail = getErrorMessage(
             error,
             "Could not verify this account number for the selected bank."
@@ -334,14 +344,7 @@ const DailyActivities = () => {
       clearTimeout(handle);
       setResolveLoading(false);
     };
-  }, [
-    state.bank_code,
-    state.account_number,
-    token,
-    authHeaders,
-    banksLoading,
-    ngBanks.length,
-  ]);
+  }, [state.bank_code, state.account_number, !!token, banksLoading, ngBanks.length]);
 
   const AddBank = () => {
     const digits = state.account_number.replace(/\D/g, "");
@@ -359,7 +362,8 @@ const DailyActivities = () => {
     if (!state.account_name.trim()) {
       showMessage({
         type: "danger",
-        message: "Account name is required. It will appear after your number is verified.",
+        message:
+          "Account name is required. Enter it exactly as on your bank statement or wallet if verification did not fill it.",
       });
       return;
     }

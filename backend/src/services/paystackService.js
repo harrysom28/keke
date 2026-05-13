@@ -281,6 +281,8 @@ export function normalizeNgBankCode(raw) {
   const s = String(raw == null ? '' : raw).trim();
   if (!s) return '';
   if (/^\d{2}$/.test(s)) return s.padStart(3, '0');
+  // Paystack JSON sometimes returns 6-digit institution codes as numbers (leading zero dropped).
+  if (/^\d{5}$/.test(s)) return s.padStart(6, '0');
   return s;
 }
 
