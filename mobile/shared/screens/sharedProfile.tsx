@@ -458,7 +458,7 @@ const SharedProfileScreen = ({ type }: Props) => {
       <ImageBackground
         style={tw`flex-1 bg-[#F7FAF7]`}
         source={require("@images/pattern-bg.png")}
-        imageStyle={tw`opacity-[0.06]`}
+        imageStyle={{ opacity: 0.06 }}
       >
         <StatusBar barStyle="light-content" />
         <View
