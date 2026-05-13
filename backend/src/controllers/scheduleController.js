@@ -8,6 +8,7 @@ import { calculateDistance } from '../utils/geolocation.js';
 import rideMatchingService from '../services/rideMatchingService.js';
 import { getSocketService } from '../services/socketService.js';
 import { processCancellation } from '../services/escrowWalletService.js';
+import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import { cache } from '../config/redis.js';
 
 /**
@@ -471,10 +472,17 @@ export const cancelScheduledBooking = asyncHandler(async (req, res) => {
   }
 
   const fareAmount = Number(ride?.fare?.totalFare || 0);
+  const hasWalletHold = await UserWalletTransaction.findOne({
+    idempotencyKey: `hold:${ride._id}`,
+    type: 'hold',
+  })
+    .select('_id')
+    .lean();
+  const ps = String(ride.paymentStatus || '').toLowerCase();
   const isEscrowRide =
-    ride.paymentMethod === 'wallet' &&
-    ['held', 'charged'].includes(String(ride.paymentStatus || '').toLowerCase()) &&
-    fareAmount > 0;
+    String(ride.paymentMethod || '').toLowerCase() === 'wallet' &&
+    (['held', 'charged'].includes(ps) || !!hasWalletHold) &&
+    (fareAmount > 0 || !!hasWalletHold);
 
   if (isEscrowRide) {
     await processCancellation(ride._id, riderId, driverUserId, fareAmount, cancellationScenario);

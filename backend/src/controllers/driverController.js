@@ -1801,6 +1801,29 @@ export const rejectRide = asyncHandler(async (req, res) => {
     ride.isScheduled &&
     ['accepted', 'driver_en_route', 'arrived', 'scheduled'].includes(ride.status)
   ) {
+    const riderId = ride.rider?._id ?? ride.rider;
+    const fareAmount = ride.fare?.totalFare ?? 0;
+    const hasWalletHold = await UserWalletTransaction.findOne({
+      idempotencyKey: `hold:${ride._id}`,
+      type: 'hold',
+    })
+      .select('_id')
+      .lean();
+    const ps = String(ride.paymentStatus || '').toLowerCase();
+    const isEscrow =
+      String(ride.paymentMethod || '').toLowerCase() === 'wallet' &&
+      (['held', 'charged'].includes(ps) || !!hasWalletHold);
+    if (isEscrow && (fareAmount > 0 || !!hasWalletHold)) {
+      try {
+        const { processCancellation } = await import('../services/escrowWalletService.js');
+        await processCancellation(ride._id, riderId, null, fareAmount, 'driverCancel');
+        logger.info(`Escrow released for driver-cancelled scheduled ride ${ride._id}`);
+      } catch (escrowErr) {
+        logger.error(
+          `Escrow release failed for scheduled driver-cancelled ride ${ride._id}: ${escrowErr.message}`
+        );
+      }
+    }
     await ride.cancelRide('driver', reason || 'Driver cancelled scheduled booking', 0, 'driverCancel');
     await ride.populate('rider', 'name phone profileImage rating deviceToken');
     driver.isAvailable = true;
@@ -1845,7 +1868,7 @@ export const rejectRide = asyncHandler(async (req, res) => {
     try {
       const riderId = ride.rider?._id ?? ride.rider;
       const fareAmount = ride.fare?.totalFare ?? 0;
-      if (riderId && fareAmount > 0 && ride.paymentMethod === 'wallet') {
+      if (riderId && String(ride.paymentMethod || '').toLowerCase() === 'wallet') {
         const hasHold = await UserWalletTransaction.findOne({
           idempotencyKey: `hold:${ride._id}`,
           type: 'hold',

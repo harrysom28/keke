@@ -692,10 +692,11 @@ export const cancelRide = asyncHandler(async (req, res) => {
   })
     .select('_id')
     .lean();
+  const paymentStatusLower = String(ride.paymentStatus || '').toLowerCase();
   // Wallet rides: release escrow when a hold exists even if paymentStatus was not persisted correctly.
   const isEscrow =
-    ride.paymentMethod === 'wallet' &&
-    (['held', 'charged'].includes(ride.paymentStatus) || !!hasWalletHold);
+    String(ride.paymentMethod || '').toLowerCase() === 'wallet' &&
+    (['held', 'charged'].includes(paymentStatusLower) || !!hasWalletHold);
   const previousRideStatus = ride.status;
 
   let cancellationFee = 0;
@@ -890,9 +891,10 @@ export const cancelRidePreview = asyncHandler(async (req, res) => {
     .select('_id')
     .lean();
 
+  const paymentStatusLowerPreview = String(ride.paymentStatus || '').toLowerCase();
   const isEscrow =
-    ride.paymentMethod === 'wallet' &&
-    (['held', 'charged'].includes(ride.paymentStatus) || !!hasWalletHold);
+    String(ride.paymentMethod || '').toLowerCase() === 'wallet' &&
+    (['held', 'charged'].includes(paymentStatusLowerPreview) || !!hasWalletHold);
 
   let feeAmount = 0;
   let feeReason = null;

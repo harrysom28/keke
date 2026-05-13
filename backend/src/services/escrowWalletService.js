@@ -123,7 +123,13 @@ export async function reconcileCancelledScheduledRideEscrows(riderId) {
 
   for (const ride of staleCancelledScheduledRides) {
     const fareAmount = Number(ride?.fare?.totalFare) || 0;
-    if (fareAmount <= 0) continue;
+    const hasHold = await UserWalletTransaction.findOne({
+      idempotencyKey: `hold:${ride._id}`,
+      type: 'hold',
+    })
+      .select('_id')
+      .lean();
+    if (fareAmount <= 0 && !hasHold) continue;
 
     let driverUserId = null;
     if (ride.driver) {
@@ -156,6 +162,97 @@ export async function reconcileCancelledScheduledRideEscrows(riderId) {
 }
 
 /**
+ * Release wallet holds whose ride is already terminal (cancelled / no driver) but no
+ * cancel/settle ledger line exists — e.g. scheduled driver cancel skipped escrow, or
+ * a release failed after the ride document was updated.
+ * Safe to run on every wallet read; processCancellation is idempotent per rideId.
+ */
+export async function reconcileOrphanedWalletHoldsForRider(riderId) {
+  const holds = await UserWalletTransaction.find({
+    userId: riderId,
+    type: 'hold',
+    rideId: { $exists: true, $ne: null },
+  })
+    .select('rideId')
+    .lean();
+
+  if (!holds.length) return { repaired: 0 };
+
+  let repaired = 0;
+
+  for (const h of holds) {
+    const rideId = h.rideId;
+    if (!rideId) continue;
+
+    const cancelTx = await UserWalletTransaction.findOne({
+      idempotencyKey: `cancel:${rideId}`,
+    })
+      .select('_id')
+      .lean();
+    const settleTx = await UserWalletTransaction.findOne({
+      idempotencyKey: `settle:${rideId}`,
+    })
+      .select('_id')
+      .lean();
+    if (cancelTx || settleTx) continue;
+
+    const ride = await Ride.findById(rideId)
+      .select('rider status paymentMethod cancellation driver fare.totalFare')
+      .lean();
+
+    if (!ride || String(ride.rider) !== String(riderId)) continue;
+    if (String(ride.paymentMethod || '').toLowerCase() !== 'wallet') continue;
+
+    const st = String(ride.status || '').toLowerCase();
+    if (!['cancelled', 'no-driver-found'].includes(st)) continue;
+
+    const fareAmount = Number(ride.fare?.totalFare) || 0;
+
+    let scenario = ride.cancellation?.cancellationScenario;
+    if (!scenario) {
+      if (st === 'no-driver-found') {
+        scenario = 'beforeAccept';
+      } else if (ride.cancellation?.cancelledBy === 'driver') {
+        scenario = 'driverCancel';
+      } else if (ride.driver) {
+        scenario = 'afterAccept';
+      } else {
+        scenario = 'beforeAccept';
+      }
+    }
+
+    let driverUserId = null;
+    if (ride.driver) {
+      const driverDoc = await Driver.findById(ride.driver).select('user').lean();
+      driverUserId = driverDoc?.user ?? null;
+    }
+
+    try {
+      const result = await processCancellation(rideId, riderId, driverUserId, fareAmount, scenario);
+      if (result?.skipped) continue;
+      repaired += 1;
+      await Ride.findByIdAndUpdate(rideId, {
+        $set: {
+          paymentStatus:
+            scenario === 'beforeAccept' || scenario === 'driverCancel' ? 'refunded' : 'partial',
+        },
+      });
+    } catch (err) {
+      logger.warn(
+        `reconcileOrphanedWalletHoldsForRider: processCancellation failed ride=${rideId}: ${err.message}`
+      );
+    }
+  }
+
+  if (repaired > 0) {
+    const wallet = await UserWallet.findOne({ userId: riderId, userType: 'rider' });
+    if (wallet) await syncLegacyUserBalanceFromWallet(riderId, wallet);
+  }
+
+  return { repaired };
+}
+
+/**
  * Validate rider has sufficient balance for fare + service charge. No money moved.
  */
 export async function validateRiderBalance(riderId, fareAmount) {
@@ -164,6 +261,7 @@ export async function validateRiderBalance(riderId, fareAmount) {
 
   if (wallet.availableBalance < breakdown.riderTotal && Number(wallet.heldBalance) > 0) {
     await reconcileCancelledScheduledRideEscrows(riderId);
+    await reconcileOrphanedWalletHoldsForRider(riderId);
     wallet = await getOrCreateRiderWallet(riderId);
   }
 

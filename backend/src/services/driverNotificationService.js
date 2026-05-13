@@ -144,8 +144,9 @@ export async function sendNoDriverFoundOnce(rideId) {
     .lean();
 
   const isEscrow =
-    updated.paymentMethod === 'wallet' &&
-    (['held', 'charged'].includes(updated.paymentStatus) || !!hasWalletHold);
+    String(updated.paymentMethod || '').toLowerCase() === 'wallet' &&
+    (['held', 'charged'].includes(String(updated.paymentStatus || '').toLowerCase()) ||
+      !!hasWalletHold);
 
   if (isEscrow && (fareAmount > 0 || hasWalletHold)) {
     try {

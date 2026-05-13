@@ -19,6 +19,7 @@ import { initializeTransaction, verifyTransaction, createDVAForUser } from '../s
 import { creditWalletFromPaystack } from '../services/walletFundingService.js';
 import {
   reconcileCancelledScheduledRideEscrows,
+  reconcileOrphanedWalletHoldsForRider,
   computeRiderWalletApiTotals,
 } from '../services/escrowWalletService.js';
 
@@ -32,6 +33,7 @@ const MIN_AMOUNT_NGN = 100;
 export const getWalletWithDVA = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   await reconcileCancelledScheduledRideEscrows(userId);
+  await reconcileOrphanedWalletHoldsForRider(userId);
   let user = await User.findById(userId)
     .select('balance paystackCustomerCode dvaAccountNumber dvaBankName dvaAccountName')
     .lean();
