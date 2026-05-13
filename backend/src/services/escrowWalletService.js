@@ -13,6 +13,23 @@ import Driver from '../models/Driver.js';
 import logger from '../utils/logger.js';
 import { getSettings, calculateFareBreakdown, getCancellationPolicy, getCancellationGuards } from './settingsService.js';
 
+/**
+ * Rider cancellation penalty split: up to this amount (NGN) goes to the driver; the rest is platform revenue.
+ * (Business rule: e.g. ₦200 penalty → ₦100 driver, ₦100 platform.)
+ */
+export const DRIVER_CANCELLATION_PENALTY_SHARE_CAP_NGN = 100;
+
+/**
+ * @param {number} totalPenaltyNgn — total cancellation fee charged to the rider (same currency as wallets).
+ * @returns {{ driverShare: number, platformShare: number, totalPenalty: number }}
+ */
+export function splitCancellationPenalty(totalPenaltyNgn) {
+  const n = Math.max(0, Math.round(Number(totalPenaltyNgn) || 0));
+  const driverShare = Math.min(DRIVER_CANCELLATION_PENALTY_SHARE_CAP_NGN, n);
+  const platformShare = Math.max(0, n - driverShare);
+  return { driverShare, platformShare, totalPenalty: n };
+}
+
 export class EscrowWalletError extends Error {
   constructor(code, message, data = {}) {
     super(message);
@@ -541,7 +558,12 @@ export async function processCancellation(rideId, riderId, driverUserId, fareAmo
         });
       } else if (scenario === 'afterAccept') {
         const cancelFee = policyAfterAccept.riderPenalty ?? 200;
-        const driverPayout = policyAfterAccept.driverPayout ?? 200;
+        const { driverShare: driverPayout, platformShare: platformRetention } = splitCancellationPenalty(cancelFee);
+        if (platformRetention > 0) {
+          logger.info(
+            `processCancellation ride ${rideId}: penalty ₦${cancelFee} → driver ₦${driverPayout}, platform ₦${platformRetention}`
+          );
+        }
         const refundAmount = Math.max(0, releaseAmount - cancelFee);
 
         let riderWallet = await UserWallet.findOneAndUpdate(

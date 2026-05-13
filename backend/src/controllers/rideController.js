@@ -24,6 +24,7 @@ import {
   chargeServiceFee,
   settleRide,
   processCancellation,
+  splitCancellationPenalty,
   EscrowWalletError,
 } from '../services/escrowWalletService.js';
 import SupportTicket from '../models/SupportTicket.js';
@@ -702,6 +703,7 @@ export const cancelRide = asyncHandler(async (req, res) => {
   let cancellationFee = 0;
   let cancellationScenario = null;
   let driverCompensation = 0;
+  let cancellationSplit = null;
 
   if (isEscrow && (fareAmount > 0 || !!hasWalletHold)) {
     if (cancelledBy === 'driver') {
@@ -723,7 +725,13 @@ export const cancelRide = asyncHandler(async (req, res) => {
     const { getCancellationPolicy } = await import('../services/settingsService.js');
     const policy = await getCancellationPolicy(cancellationScenario);
     cancellationFee = policy.riderPenalty ?? 0;
-    driverCompensation = policy.driverPayout ?? 0;
+    if (cancellationScenario === 'afterAccept' && cancellationFee > 0) {
+      const { driverShare, platformShare } = splitCancellationPenalty(cancellationFee);
+      driverCompensation = driverShare;
+      cancellationSplit = { driverCompensation: driverShare, platformRetention: platformShare };
+    } else {
+      driverCompensation = policy.driverPayout ?? 0;
+    }
     try {
       await processCancellation(ride._id, riderId, driverUserId, fareAmount, cancellationScenario);
     } catch (err) {
@@ -735,19 +743,16 @@ export const cancelRide = asyncHandler(async (req, res) => {
     const result = calculateCancellationFee(ride, cancelledBy);
     cancellationFee = result.cancellationFee;
     if (cancelledBy === 'rider' && ['accepted', 'driver_en_route', 'arrived'].includes(ride.status)) {
-      try {
-        const { getCancellationPolicy } = await import('../services/settingsService.js');
-        const fallbackScenario = ride.status === 'arrived' ? 'afterArrival' : 'afterAccept';
-        const policy = await getCancellationPolicy(fallbackScenario);
-        driverCompensation = policy.driverPayout ?? cancellationFee;
-      } catch {
-        driverCompensation = cancellationFee;
+      if (cancellationFee > 0) {
+        const { driverShare, platformShare } = splitCancellationPenalty(cancellationFee);
+        driverCompensation = driverShare;
+        cancellationSplit = { driverCompensation: driverShare, platformRetention: platformShare };
       }
     }
   }
 
   // Cancel ride
-  await ride.cancelRide(cancelledBy, reason, cancellationFee, cancellationScenario);
+  await ride.cancelRide(cancelledBy, reason, cancellationFee, cancellationScenario, cancellationSplit);
 
   // Cancel any automation timers for this ride
   if (global.automationTimers && global.automationTimers.has(rideId)) {
@@ -932,12 +937,19 @@ export const cancelRidePreview = asyncHandler(async (req, res) => {
     feeReason = feeAmount > 0 ? result.feeReason || 'A cancellation fee applies' : null;
   }
 
+  const feeSplit =
+    feeAmount > 0
+      ? splitCancellationPenalty(feeAmount)
+      : { driverShare: 0, platformShare: 0, totalPenalty: 0 };
+
   res.json({
     status: 'success',
     data: {
       fee_applies: feeAmount > 0,
       fee_amount: feeAmount,
       fee_reason: feeReason,
+      fee_driver_share: feeSplit.driverShare,
+      fee_platform_share: feeSplit.platformShare,
     },
   });
 });

@@ -20,6 +20,7 @@ export const FEE_CONFIG = {
   },
   cancellation: {
     beforeAccept: { riderPenalty: 0, driverPayout: 0 },
+    /** Rider penalty is charged in full; driver wallet credit uses split (₦100 cap to driver, rest platform). See escrowWalletService.splitCancellationPenalty. */
     afterAccept: { riderPenalty: 200, driverPayout: 200 },
     afterArrival: { riderPenalty: 0, driverPayout: 150 },
     driverCancel: { riderPenalty: 0, driverPenalty: 'strike' },

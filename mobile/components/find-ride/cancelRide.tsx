@@ -13,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { AntDesign, Ionicons, MaterialIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
 
 import Checkbox from "expo-checkbox";
@@ -264,11 +264,11 @@ function CancelRideModalInner({
             <View
               style={tw`flex-row items-start gap-x-2 bg-red-50 border border-red-200 rounded-xl p-3 mb-4`}
             >
-              <AntDesign
-                name="exclamationcircle"
-                size={16}
-                color="#E53E3E"
-                style={tw`mt-0.5`}
+              <Ionicons
+                name="warning"
+                size={20}
+                color="#DC2626"
+                style={tw`mt-0.5 shrink-0`}
               />
               <View style={tw`flex-1`}>
                 <Text

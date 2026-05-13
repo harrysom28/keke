@@ -96,15 +96,46 @@ export function getTripContext(data: AnyObj): { fromLabel: string; toLabel: stri
   return { fromLabel: String(fromLabel), toLabel: String(toLabel) };
 }
 
-export function getRiderHeaderCopy(state: RideState, data: AnyObj) {
+/** Human-readable driver label for rider UI (card, banners, etc.). */
+export function getRiderDriverDisplayName(data: AnyObj, emptyFallback = "Driver"): string {
   const driver = data?.driver ?? null;
-  const driverName =
-    driver?.driver_name ||
-    driver?.name ||
-    driver?.vehicle_name ||
-    driver?.user?.name ||
-    driver?.user?.fullName ||
-    "Unknown Driver";
+  const u = driver?.user ?? null;
+  const ride = data ?? {};
+  const trimStr = (s: unknown) => (typeof s === "string" ? s.trim() : "");
+
+  const first =
+    driver?.first_name ||
+    driver?.firstname ||
+    u?.first_name ||
+    u?.firstname ||
+    u?.firstName ||
+    "";
+  const last =
+    driver?.last_name ||
+    driver?.lastname ||
+    u?.last_name ||
+    u?.lastname ||
+    u?.lastName ||
+    "";
+  const joined = [first, last].filter(Boolean).join(" ").trim();
+
+  return (
+    joined ||
+    trimStr(driver?.driver_name) ||
+    trimStr(driver?.name) ||
+    trimStr(u?.name) ||
+    trimStr(u?.fullName) ||
+    trimStr(driver?.full_name) ||
+    trimStr(ride?.driver_name) ||
+    trimStr(ride?.driverName) ||
+    trimStr(driver?.vehicle_name) ||
+    trimStr(driver?.vehicleName) ||
+    emptyFallback
+  );
+}
+
+export function getRiderHeaderCopy(state: RideState, data: AnyObj) {
+  const driverName = getRiderDriverDisplayName(data, "Unknown Driver");
 
   const etaMin = parseMinutesLike(data?.arrival_time ?? data?.eta ?? data?.routeEta);
   const etaLabel =

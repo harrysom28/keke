@@ -4,6 +4,67 @@ import {
   isRiderMatchedOrBeyond,
 } from "@/utils/activeRidePayload";
 
+/** Driver / user string fields we never let a patch or stale GET wipe with null/empty when we already had a value. */
+const DRIVER_MERGE_STRING_KEYS = [
+  "driver_name",
+  "name",
+  "full_name",
+  "fullName",
+  "driver_image",
+  "image",
+  "vehicle_name",
+  "vehicleName",
+  "vehicle_color",
+  "licence_plate_number",
+  "license_plate_number",
+  "vehicle_make",
+  "vehicle_model",
+  "vehicle_type",
+  "phone",
+] as const;
+
+function isEmptyish(v: unknown): boolean {
+  if (v == null) return true;
+  if (typeof v === "string" && v.trim() === "") return true;
+  return false;
+}
+
+/**
+ * Like `{ ...prev, ...inc }` but keeps non-empty `prev` display strings when `inc` sends null/""/omitted
+ * (common when GET active-ride lags population or Pusher sends a partial driver object).
+ */
+export function mergeDriverPreferNonEmpty(
+  prev: Record<string, unknown> | null | undefined,
+  inc: Record<string, unknown> | null | undefined
+): Record<string, unknown> | null {
+  if (!inc && !prev) return null;
+  if (!prev || typeof prev !== "object") return inc && typeof inc === "object" ? { ...inc } : null;
+  if (!inc || typeof inc !== "object") return { ...prev };
+
+  const merged: Record<string, unknown> = { ...prev, ...inc };
+
+  for (const key of DRIVER_MERGE_STRING_KEYS) {
+    if (isEmptyish(inc[key]) && !isEmptyish(prev[key])) {
+      merged[key] = prev[key];
+    }
+  }
+
+  const pU = prev.user;
+  const iU = inc.user;
+  if (pU && typeof pU === "object" && !Array.isArray(pU) && iU && typeof iU === "object" && !Array.isArray(iU)) {
+    const u = { ...(pU as object), ...(iU as object) } as Record<string, unknown>;
+    if (isEmptyish((iU as { name?: unknown }).name) && !isEmptyish((pU as { name?: unknown }).name)) {
+      u.name = (pU as { name?: unknown }).name;
+    }
+    if (isEmptyish((iU as { profileImage?: unknown }).profileImage) && !isEmptyish((pU as { profileImage?: unknown }).profileImage)) {
+      u.profileImage = (pU as { profileImage?: unknown }).profileImage;
+    }
+    merged.user = u;
+  }
+
+  return merged;
+}
+
 /**
  * Merge backend `emitRideStatusUpdate` payloads (`ride.status` on private.ride.*)
  * into the rider's active-ride object so UI advances before GET active-ride catches up.
@@ -57,13 +118,13 @@ export function mergePusherRideStatusPatch(
 
   const prevDriver = existing.driver;
   const mergedDriver = hasDriverObj
-    ? {
-        ...(typeof prevDriver === "object" && prevDriver
-          ? (prevDriver as object)
-          : {}),
-        ...(drvPatch as object),
-      }
-    : prevDriver;
+    ? mergeDriverPreferNonEmpty(
+        typeof prevDriver === "object" && prevDriver
+          ? (prevDriver as Record<string, unknown>)
+          : null,
+        drvPatch as Record<string, unknown>
+      )
+    : (prevDriver as Record<string, unknown> | null | undefined);
 
   const driverIdFromPatch =
     hasDriverObj && (drvPatch as { driver_id?: string }).driver_id != null
@@ -75,7 +136,7 @@ export function mergePusherRideStatusPatch(
     status: patch.status ?? existing.status,
     internal_status: patch.internal_status ?? existing.internal_status,
     lifecycle_status: patch.lifecycle_status ?? existing.lifecycle_status,
-    ...(mergedDriver ? { driver: mergedDriver } : {}),
+    ...(mergedDriver && Object.keys(mergedDriver).length > 0 ? { driver: mergedDriver } : {}),
     ...(driverIdFromPatch
       ? { driver_id: driverIdFromPatch }
       : {}),
@@ -108,7 +169,25 @@ export function reconcileStaleActiveRideGet(
   }
 
   if (isRiderMatchedOrBeyond(incoming)) {
-    return incoming;
+    if (!isRiderMatchedOrBeyond(prev)) {
+      return incoming;
+    }
+    const out: Record<string, unknown> = { ...incoming };
+    const pd = prev.driver;
+    const id = incoming.driver;
+    const prevHasDriver =
+      pd != null && typeof pd === "object" && !Array.isArray(pd) && Object.keys(pd as object).length > 0;
+    const incHasDriver =
+      id != null && typeof id === "object" && !Array.isArray(id) && Object.keys(id as object).length > 0;
+    if (prevHasDriver && incHasDriver) {
+      out.driver = mergeDriverPreferNonEmpty(
+        pd as Record<string, unknown>,
+        id as Record<string, unknown>
+      );
+    } else if (prevHasDriver && !incHasDriver) {
+      out.driver = pd;
+    }
+    return out;
   }
 
   const merged: Record<string, unknown> = { ...incoming };

@@ -26,6 +26,7 @@ import apiClient from "@/utils/apiClient";
 import {
   getArrivingByLabel,
   getRideStateFromData,
+  getRiderDriverDisplayName,
   getRiderHeaderCopy,
   getTripContext,
 } from "@/components/ride-in-transit/rideStates";
@@ -275,22 +276,10 @@ export const WaitingView = ({
     if (!hasRideStarted) setShowOvertimeBanner(false);
   }, [hasRideStarted, rideId]);
 
-  const driverDisplayName = useMemo(() => {
-    const d: any = (data as any)?.driver ?? null;
-    const u: any = d?.user ?? null;
-    const first = u?.firstName || u?.first_name || "";
-    const last = u?.lastName || u?.last_name || "";
-    const fullFromUser = [first, last].filter(Boolean).join(" ").trim();
-    return (
-      fullFromUser ||
-      d?.driver_name ||
-      d?.full_name ||
-      d?.name ||
-      u?.name ||
-      u?.fullName ||
-      "Driver"
-    );
-  }, [data]);
+  const driverDisplayName = useMemo(
+    () => getRiderDriverDisplayName(data as Record<string, unknown>),
+    [data]
+  );
 
   // ── Pulse animation (driver-arrived state only) ─────────────────────────────
   const arrivedPulseAnim = useRef(new RNAnimated.Value(1)).current;
@@ -489,7 +478,7 @@ export const WaitingView = ({
 
               {hasDriver ? (
                 <UserInfoCard
-                  title="Driver"
+                  title={driverDisplayName !== "Driver" ? "Your driver" : undefined}
                   imageUrl={
                     (data as any)?.driver?.driver_image ||
                     (data as any)?.driver?.image ||
@@ -497,34 +486,7 @@ export const WaitingView = ({
                     (data as any)?.driver?.user?.image ||
                     null
                   }
-                  name={(() => {
-                    const d = (data as any)?.driver || {};
-                    const u = d?.user || {};
-                    const first =
-                      d?.first_name ||
-                      d?.firstname ||
-                      u?.first_name ||
-                      u?.firstname ||
-                      u?.firstName ||
-                      "";
-                    const last =
-                      d?.last_name ||
-                      d?.lastname ||
-                      u?.last_name ||
-                      u?.lastname ||
-                      u?.lastName ||
-                      "";
-                    const joined = [first, last].filter(Boolean).join(" ").trim();
-                    return (
-                      joined ||
-                      d?.driver_name ||
-                      d?.full_name ||
-                      d?.name ||
-                      u?.fullName ||
-                      u?.name ||
-                      "Driver"
-                    );
-                  })()}
+                  name={driverDisplayName}
                   ratingText={(() => {
                     const d = (data as any)?.driver || {};
                     const rating =
@@ -545,13 +507,18 @@ export const WaitingView = ({
                   })()}
                   subtitle={(() => {
                     const d = (data as any)?.driver || {};
-                    const car =
-                      [d?.vehicle_color, d?.vehicle_make, d?.vehicle_model]
-                        .filter(Boolean)
-                        .join(" ") ||
-                      d?.vehicle_type ||
+                    const namedVehicle = String(d?.vehicle_name || "").trim();
+                    const fromParts = [d?.vehicle_color, d?.vehicle_make, d?.vehicle_model]
+                      .filter(Boolean)
+                      .join(" ")
+                      .trim();
+                    const car = namedVehicle || fromParts || d?.vehicle_type || "";
+                    const plate =
+                      d?.licence_plate_number ||
+                      d?.vehicle_number ||
+                      d?.vehicle_plate ||
+                      d?.vehicleDetails?.plateNumber ||
                       "";
-                    const plate = d?.licence_plate_number || d?.vehicle_number || "";
                     const parts = [car, plate].filter(Boolean);
                     return parts.length ? parts.join(" • ") : null;
                   })()}

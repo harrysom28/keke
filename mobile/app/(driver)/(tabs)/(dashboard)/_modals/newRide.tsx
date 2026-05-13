@@ -448,6 +448,9 @@ const NewRide = ({
       backdropMaskColor="#19191900"
       openDuration={1000}
       disableKeyboardHandling={false}
+      // Same as findRide / bookRide: sheet body's PanResponder steals taps on Android (e.g. Samsung).
+      disableBodyPanning={Platform.OS === "android"}
+      closeOnDragDown={true}
       style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px]`, {
         backgroundColor: "#fff",
         zIndex: 999,
@@ -483,6 +486,8 @@ const NewRide = ({
       >
       <ScrollView
         pointerEvents="auto"
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
         style={{ backgroundColor: "#fff" }}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ flexGrow: 0, paddingBottom: 16, paddingHorizontal: 16, gap: 8 }}

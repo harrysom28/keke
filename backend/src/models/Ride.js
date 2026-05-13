@@ -204,6 +204,16 @@ const rideSchema = new mongoose.Schema(
         enum: ['beforeAccept', 'afterAccept', 'afterArrival', 'driverCancel'],
         default: undefined,
       },
+      /** Amount credited to driver from rider cancellation penalty (afterAccept). */
+      driverCompensation: {
+        type: Number,
+        default: null,
+      },
+      /** Penalty retained by platform (penalty minus driver compensation). */
+      platformRetention: {
+        type: Number,
+        default: null,
+      },
     },
     // Scheduled ride
     isScheduled: {
@@ -402,7 +412,13 @@ rideSchema.methods.completeRide = async function () {
 };
 
 // Cancel ride
-rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee = 0, cancellationScenario = null) {
+rideSchema.methods.cancelRide = async function (
+  cancelledBy,
+  reason = null,
+  fee = 0,
+  cancellationScenario = null,
+  split = null
+) {
   this.status = 'cancelled';
   // Cancellation is not a completion; ensure completion metadata never blocks save (older docs may contain invalid enums).
   this.completed_by = null;
@@ -413,6 +429,14 @@ rideSchema.methods.cancelRide = async function (cancelledBy, reason = null, fee 
     cancelledAt: new Date(),
     cancellationFee: fee,
     ...(cancellationScenario && { cancellationScenario }),
+    ...(split &&
+      typeof split.driverCompensation === 'number' && {
+        driverCompensation: split.driverCompensation,
+      }),
+    ...(split &&
+      typeof split.platformRetention === 'number' && {
+        platformRetention: split.platformRetention,
+      }),
   };
   if (cancellationScenario) {
     this.paymentStatus =

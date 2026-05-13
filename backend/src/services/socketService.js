@@ -355,6 +355,8 @@ class SocketService {
       cancelled_by: cancelledBy,
       reason: reason || null,
       cancellation_fee: ride.cancellation?.cancellationFee || 0,
+      driver_compensation: ride.cancellation?.driverCompensation ?? null,
+      platform_retention: ride.cancellation?.platformRetention ?? null,
       timestamp: new Date(),
     };
 

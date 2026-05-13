@@ -16,6 +16,7 @@ const DEFAULTS = {
   },
   cancellation: {
     afterAcceptPenalty: 200,
+    /** Legacy field; afterAccept driver credit is min(100, rider penalty). Kept for admin UI / docs. */
     afterAcceptPayout: 200,
     afterArrivalPayout: 150,
     gracePeriodSeconds: 60,
