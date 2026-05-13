@@ -303,9 +303,13 @@ const DailyActivities = () => {
             return;
           }
           setState((prev) => ({ ...prev, account_name: "" }));
+          const apiDetail = getErrorMessage(
+            error,
+            "Could not verify this account number for the selected bank."
+          );
           showMessage({
             type: "warning",
-            message: getErrorMessage(error, "Could not verify this account number for the selected bank."),
+            message: `${apiDetail} Enter your account name below exactly as it appears in your bank or wallet app — you can still save.`,
           });
         } finally {
           if (!cancelled) {
@@ -876,7 +880,7 @@ const DailyActivities = () => {
                     fontFamily: "RobotoRegular",
                   })}
                 >
-                  Filled automatically when your account number matches the bank.
+                  Filled automatically when possible. If not, type your name as shown in your bank or wallet app.
                 </Text>
                 <InputItem
                   hideLabel

@@ -12,6 +12,7 @@ import {
   initializeTransaction,
   verifyTransaction,
   listBanksNigeria,
+  normalizeNgBankCode,
   resolveAccountName,
 } from '../services/paystackService.js';
 
@@ -717,7 +718,8 @@ export const createBankAccount = asyncHandler(async (req, res) => {
     throw new ValidationError('Account number must be 10 digits');
   }
 
-  const code = bankCode != null && String(bankCode).trim() !== '' ? String(bankCode).trim() : '';
+  const trimmedCode = bankCode != null ? String(bankCode).trim() : '';
+  const code = trimmedCode ? normalizeNgBankCode(trimmedCode) : '';
   let finalAccountName = accountName != null ? String(accountName).trim() : '';
 
   const resolved = code ? await resolveAccountName({ account_number: digits, bank_code: code }) : null;
@@ -725,17 +727,17 @@ export const createBankAccount = asyncHandler(async (req, res) => {
   if (code) {
     if (resolved?.account_name) {
       finalAccountName = resolved.account_name;
-    } else if (resolved?.error && resolved.error !== 'paystack_unconfigured') {
-      throw new ValidationError(
-        typeof resolved.error === 'string' ? resolved.error : 'Could not verify this bank account.'
-      );
-    } else if (resolved?.error === 'paystack_unconfigured') {
-      if (!finalAccountName) {
+    } else if (!finalAccountName) {
+      if (resolved?.error === 'paystack_unconfigured') {
         throw new ValidationError('Account name is required');
       }
-    } else {
-      throw new ValidationError('Could not verify this bank account. Please check the number and bank.');
+      throw new ValidationError(
+        typeof resolved?.error === 'string'
+          ? resolved.error
+          : 'Could not verify this bank account. Enter your account name exactly as it appears with your bank, then try again.'
+      );
     }
+    // Verification failed but client supplied a name — keep it; payout accounts stay admin-verified.
   } else if (!finalAccountName) {
     throw new ValidationError('Account name is required');
   }
