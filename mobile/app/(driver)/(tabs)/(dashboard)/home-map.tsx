@@ -781,13 +781,23 @@ export default function HomeScreen() {
               <Marker
                 key={`${lat}-${long}-${idx}`}
                 coordinate={{
-                  latitude: typeof lat === 'string' ? parseFloat(lat) : lat,
-                  longitude: typeof long === 'string' ? parseFloat(long) : long,
+                  latitude: typeof lat === "string" ? parseFloat(lat) : lat,
+                  longitude: typeof long === "string" ? parseFloat(long) : long,
                 }}
                 anchor={{ x: 0.5, y: 0.5 }}
                 tracksViewChanges={false}
-                image={require("@images/driver.png")}
-              />
+              >
+                <View
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 7,
+                    backgroundColor: tw.color("base-green") || "#3C8F7C",
+                    borderWidth: 2,
+                    borderColor: "#FFFFFF",
+                  }}
+                />
+              </Marker>
             );
           })}
           

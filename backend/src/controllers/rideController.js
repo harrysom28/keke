@@ -762,39 +762,24 @@ export const cancelRide = asyncHandler(async (req, res) => {
     logger.info(`🧹 Cancelled automation timers for cancelled ride ${rideId}`);
   }
 
-  // Update driver availability if driver cancelled
-  if (cancelledBy === 'driver' && ride.driver) {
-    const driver = await Driver.findById(ride.driver);
-    if (driver) {
-      driver.isAvailable = true;
-      await driver.save();
-    }
-
-    // Find alternative driver if rider cancelled after driver accepted
-    if (ride.status === 'accepted') {
-      const alternativeDriver = await rideMatchingService.findAlternativeDriver(
-        ride,
-        ride.driver._id
-      );
-      if (alternativeDriver) {
-        // Reassign ride to alternative driver
-        ride.driver = alternativeDriver._id;
-        ride.status = 'accepted';
-        ride.acceptedByDriver = true;
-        ride.acceptedAt = new Date();
-        ride.statusHistory.push({
-          status: 'accepted',
-          timestamp: new Date(),
-          note: `Reassigned to alternative driver ${alternativeDriver._id}`,
-        });
-        await ride.save();
-
-        const socketService = getSocketService();
-        if (socketService) {
-          socketService.emitRideAccepted(ride, alternativeDriver);
-          socketService.emitRideStatusUpdate(ride, 'accepted', alternativeDriver);
-        }
+  // Return driver to the matching pool when a matched trip is cancelled (rider or driver).
+  // Rider cancel previously left is_available=false so the app stayed on "On a trip" until manual toggle.
+  if (
+    ride.driver &&
+    ['accepted', 'driver_en_route', 'arrived', 'in-progress'].includes(previousRideStatus)
+  ) {
+    try {
+      const driverId = ride.driver._id ?? ride.driver;
+      const driver = await Driver.findById(driverId);
+      if (driver) {
+        driver.isAvailable = true;
+        await driver.save();
+        logger.info(
+          `Driver ${driver._id} is_available restored after ${cancelledBy} cancelled ride ${rideId}`
+        );
       }
+    } catch (availErr) {
+      logger.error(`Failed to restore driver availability after cancel: ${availErr.message}`);
     }
   }
 

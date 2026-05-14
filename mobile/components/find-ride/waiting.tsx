@@ -27,6 +27,7 @@ import {
   getArrivingByLabel,
   getRideStateFromData,
   getRiderDriverDisplayName,
+  getRiderDriverPersonalName,
   getRiderHeaderCopy,
   getTripContext,
 } from "@/components/ride-in-transit/rideStates";
@@ -281,6 +282,13 @@ export const WaitingView = ({
     [data]
   );
 
+  /** Bold line on driver card: real name when API sends it; else vehicle / "Driver" (matches driver-side "Passenger" + name). */
+  const driverCardName = useMemo(() => {
+    const personal = getRiderDriverPersonalName(data as Record<string, unknown>).trim();
+    if (personal) return personal;
+    return getRiderDriverDisplayName(data as Record<string, unknown>, "Driver");
+  }, [data]);
+
   // ── Pulse animation (driver-arrived state only) ─────────────────────────────
   const arrivedPulseAnim = useRef(new RNAnimated.Value(1)).current;
 
@@ -478,7 +486,7 @@ export const WaitingView = ({
 
               {hasDriver ? (
                 <UserInfoCard
-                  title={driverDisplayName !== "Driver" ? "Your driver" : undefined}
+                  title="Driver"
                   imageUrl={
                     (data as any)?.driver?.driver_image ||
                     (data as any)?.driver?.image ||
@@ -486,7 +494,7 @@ export const WaitingView = ({
                     (data as any)?.driver?.user?.image ||
                     null
                   }
-                  name={driverDisplayName}
+                  name={driverCardName}
                   ratingText={(() => {
                     const d = (data as any)?.driver || {};
                     const rating =

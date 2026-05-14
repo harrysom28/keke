@@ -5,7 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 const BRAND_GREEN = "#3C8F7C";
 
 interface Props {
-  /** Optional small label above the name (e.g. “Your driver”). */
+  /** Optional small label above the name (e.g. “Driver” / “Passenger”). */
   title?: string;
   imageUrl?: string | null;
   name: string;
@@ -104,10 +104,8 @@ const styles = StyleSheet.create({
   },
   titleLabel: {
     fontSize: 11,
-    color: "#6B7280",
-    fontFamily: "RobotoMedium",
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
+    color: "#9CA3AF",
+    fontFamily: "RobotoRegular",
   },
   avatar: {
     width: 52,

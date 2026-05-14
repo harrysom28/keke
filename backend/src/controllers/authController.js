@@ -81,21 +81,23 @@ function parseLoginIdentifier(emailPhone) {
  * Register/Signup user
  */
 export const register = asyncHandler(async (req, res) => {
+  const registerT0 = Date.now();
   const { email_phone_number, referral_code, password, device_id, device_token, role } = req.body;
 
   const { phone, email, phoneQuery } = parseLoginIdentifier(email_phone_number);
 
-  // Check if user already exists (OTP-first flow should be idempotent).
-  // `phoneQuery` covers every legacy shape (digits-only, with/without
-  // leading 0 or country code) so we never create a duplicate when a
-  // user signs up with a slightly different formatting of the same
-  // number they used last time.
-  const existingUser = await User.findOne({
-    $or: [
-      ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
-      ...(email ? [{ email }] : []),
-    ],
-  });
+  const cleanedReferral = typeof referral_code === 'string' ? referral_code.trim() : '';
+
+  // Look up existing account and optional referrer in parallel (saves one RTT on new signups with a referral code).
+  const [existingUser, referrerDoc] = await Promise.all([
+    User.findOne({
+      $or: [
+        ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
+        ...(email ? [{ email }] : []),
+      ],
+    }),
+    cleanedReferral ? User.findOne({ referralCode: cleanedReferral }).select('_id') : Promise.resolve(null),
+  ]);
 
   // Helper to generate/store/send OTP for a user
   const sendOtpForUser = async (userDoc, statusCode, baseMessage) => {
@@ -106,9 +108,18 @@ export const register = asyncHandler(async (req, res) => {
       logOtpToTerminal(otp, userDoc.phone || userDoc.email, 'signup/verification');
     }
 
-    // Store OTP for whatever identifiers exist
-    if (userDoc.phone) await storeOTP(userDoc.phone, otp, 'verification');
-    if (userDoc.email) await storeOTP(userDoc.email.toLowerCase(), otp, 'verification');
+    // Store OTP for whatever identifiers exist (parallel when both phone and email — rare on phone-first signup).
+    await Promise.all([
+      userDoc.phone ? storeOTP(userDoc.phone, otp, 'verification') : Promise.resolve(),
+      userDoc.email ? storeOTP(userDoc.email.toLowerCase(), otp, 'verification') : Promise.resolve(),
+    ]);
+
+    logger.info({
+      event: 'register_otp_ready',
+      ms: Date.now() - registerT0,
+      statusCode,
+      identifiers: [userDoc.phone && 'phone', userDoc.email && 'email'].filter(Boolean),
+    });
 
     // Respond immediately after OTP is stored (do not block on SMS/email providers)
     const message = baseMessage;
@@ -176,6 +187,11 @@ export const register = asyncHandler(async (req, res) => {
     // Avoid a second OTP when the user double-submits signup: same code stays valid
     const throttleId = existingUser.phone || existingUser.email?.toLowerCase();
     if (throttleId && (await wasOtpIssuedRecently(throttleId, 'verification'))) {
+      logger.info({
+        event: 'register_response',
+        path: 'otp_recently_sent',
+        ms: Date.now() - registerT0,
+      });
       return res.status(200).json({
         status: 'success',
         message: 'Verification code already sent. Please check your messages.',
@@ -207,13 +223,8 @@ export const register = asyncHandler(async (req, res) => {
     deviceToken: device_token,
   };
 
-  // If a referral code was provided, link the referrer (do NOT overwrite this user's unique referralCode)
-  const cleanedReferral = typeof referral_code === 'string' ? referral_code.trim() : '';
-  if (cleanedReferral) {
-    const referrer = await User.findOne({ referralCode: cleanedReferral });
-    if (referrer) {
-      userData.referredBy = referrer._id;
-    }
+  if (referrerDoc) {
+    userData.referredBy = referrerDoc._id;
   }
 
   const user = await User.create(userData);

@@ -498,8 +498,8 @@ export const cancelScheduledBooking = asyncHandler(async (req, res) => {
     global.automationTimers.delete(rideIdToCancel);
   }
 
-  // If driver cancelled, make them available again
-  if (isDriver && ride.driver) {
+  // Assigned driver must return to the pool when the booking is cancelled (rider or driver).
+  if (ride.driver) {
     const driver = await Driver.findById(ride.driver._id);
     if (driver) {
       driver.isAvailable = true;

@@ -9,8 +9,7 @@ import { validators } from "@/utils/formValidators";
 import GoogleAuthButton from "@/components/googleAuth";
 import { OTP_TARGET } from "./otpcode";
 import PhoneInput from "@perttu/react-native-phone-number-input";
-import { REGISTER, VALIDATE_REFERRAL_CODE } from "@/constants";
-import axios from "axios";
+import apiClient from "@/utils/apiClient";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useRouter } from "expo-router";
@@ -59,8 +58,9 @@ const SignUp = () => {
     const trimmedReferral = state.referral_code?.trim() ?? "";
     if (trimmedReferral) {
       try {
-        const { data } = await axios.get(VALIDATE_REFERRAL_CODE, {
+        const { data } = await apiClient.get("auth/referral-code/validate", {
           params: { code: trimmedReferral },
+          timeout: 15000,
         });
         if (!data?.valid) {
           return showMessage({
@@ -71,7 +71,7 @@ const SignUp = () => {
       } catch {
         return showMessage({
           type: "warning",
-          message: "Could not verify referral code. Please try again.",
+          message: "Could not verify referral code. Check your connection and try again.",
         });
       }
     }
@@ -95,8 +95,8 @@ const SignUp = () => {
 
     submitLockRef.current = true;
     setLoading(true);
-    axios
-      .post(REGISTER, dta)
+    apiClient
+      .post("auth/user/signup", dta, { timeout: 60000 })
       .then(({ data }) => {
         console.log("Registration response:", data);
         showMessage({
@@ -118,18 +118,37 @@ const SignUp = () => {
         dispatch(updateRegistration({ ...registration, email_phone_number: dta?.email_phone_number }));
         router.push({ pathname: `/otpcode`, params: item });
       })
-      .catch((err) => {
-        console.log("Registration error:", err?.response?.data || err.message);
+      .catch((err: unknown) => {
+        const e = err as {
+          code?: string;
+          message?: string;
+          response?: { data?: { message?: string; error?: string | { message?: string; name?: string } } };
+        };
+        console.log("Registration error:", e?.response?.data || e?.message);
+
+        const msg = String(e?.message ?? "");
+        const isTimeout =
+          e?.code === "ECONNABORTED" || /timeout/i.test(msg);
+        const noResponse = e?.response == null;
+        if (isTimeout || noResponse) {
+          showMessage({
+            type: "danger",
+            message: __DEV__
+              ? "Could not reach the API (timeout or network). Check internet, firewall, and EXPO_PUBLIC_API_URL / runtime override in mobile/.env."
+              : "Could not reach our servers. Check your internet connection and try again.",
+          });
+          return;
+        }
 
         // Do not navigate to OTP on error — the previous logic treated missing `otp_confirmed` as
         // "navigate anyway", which is always true on failures (e.g. 500 when Redis is down).
-        if (err?.response?.data?.message) {
+        if (e?.response?.data?.message) {
           showMessage({
             type: "danger",
-            message: err.response.data.message,
+            message: e.response.data.message,
           });
-        } else if (err?.response?.data?.error) {
-          const errorData = err.response.data.error;
+        } else if (e?.response?.data?.error) {
+          const errorData = e.response.data.error;
           const errorMessage =
             typeof errorData === "string"
               ? errorData

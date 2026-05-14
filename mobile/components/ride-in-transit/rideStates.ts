@@ -96,8 +96,11 @@ export function getTripContext(data: AnyObj): { fromLabel: string; toLabel: stri
   return { fromLabel: String(fromLabel), toLabel: String(toLabel) };
 }
 
-/** Human-readable driver label for rider UI (card, banners, etc.). */
-export function getRiderDriverDisplayName(data: AnyObj, emptyFallback = "Driver"): string {
+/**
+ * Driver's personal name only (no vehicle fallback).
+ * Use for the rider trip card primary line so we don't show "YOUR DRIVER" above a vehicle string.
+ */
+export function getRiderDriverPersonalName(data: AnyObj): string {
   const driver = data?.driver ?? null;
   const u = driver?.user ?? null;
   const ride = data ?? {};
@@ -128,6 +131,18 @@ export function getRiderDriverDisplayName(data: AnyObj, emptyFallback = "Driver"
     trimStr(driver?.full_name) ||
     trimStr(ride?.driver_name) ||
     trimStr(ride?.driverName) ||
+    ""
+  );
+}
+
+/** Human-readable driver label for headers/banners (includes vehicle as last resort before fallback). */
+export function getRiderDriverDisplayName(data: AnyObj, emptyFallback = "Driver"): string {
+  const personal = getRiderDriverPersonalName(data).trim();
+  if (personal) return personal;
+
+  const driver = data?.driver ?? null;
+  const trimStr = (s: unknown) => (typeof s === "string" ? s.trim() : "");
+  return (
     trimStr(driver?.vehicle_name) ||
     trimStr(driver?.vehicleName) ||
     emptyFallback
