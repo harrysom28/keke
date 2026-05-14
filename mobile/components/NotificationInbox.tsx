@@ -762,13 +762,13 @@ const styles = StyleSheet.create({
   rowOuter: {
     flexDirection: "row",
     alignItems: "flex-start",
-    marginBottom: 12,
+    marginBottom: 10,
   },
   dot: {
     width: 10,
     height: 10,
     borderRadius: 5,
-    marginTop: 18,
+    marginTop: 16,
     marginRight: 10,
   },
   dotUnread: {
@@ -780,7 +780,7 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
     borderRadius: 16,
-    padding: 14,
+    padding: 11,
   },
   cardUnread: {
     backgroundColor: "#F0FFF4",
@@ -798,9 +798,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   iconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: "#ECFDF5",
     alignItems: "center",
     justifyContent: "center",
@@ -814,7 +814,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 8,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   cardTitle: {
     flex: 1,

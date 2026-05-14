@@ -299,6 +299,11 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
 
       console.log('📤 Creating ride:', requestData);
 
+      console.log(
+        'Submitting ride request with driver_id:',
+        rideData?.driver_id || 'none - will broadcast'
+      );
+
       // Use apiClient instead of axios for automatic token refresh
       // Use 'booking/confirm-ride' which is the correct endpoint (alias for request-ride)
       const response = await apiClient.post('booking/confirm-ride', requestData);

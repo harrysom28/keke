@@ -25,7 +25,7 @@ import {
   DRIVER_EARNINGS,
 } from "@/constants";
 import { Defs, Line, LinearGradient, Path, Stop, Svg } from "react-native-svg";
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { TBooking, TDriverActiveRide, TDriverStats } from "@/types";
 import {
   formatBookingDate,
@@ -103,7 +103,8 @@ const Home = () => {
   useEffect(() => {
     markInitialDriverRouteHandled();
   }, []);
-  const { subscription, unread_count } = useSelector(AppDetailsState);
+  const { subscription, unread_count, driverTimeOnlineFromPusher } =
+    useSelector(AppDetailsState);
   const [activeRide, setActiveRide] = useState<Partial<TDriverActiveRide>>({});
   const [booking, setBooking] = useState<Partial<TBooking>>({});
   const [viewbooking, setViewbooking] = useState<Partial<TBooking>>({});
@@ -580,47 +581,6 @@ const Home = () => {
       .finally(() => setVLoading(false));
   };
 
-  const driverOfferChannel = useMemo(() => {
-    const id = user?.profile?.driver_id;
-    return id ? `private-driver-${id}` : "";
-  }, [user?.profile?.driver_id]);
-
-  usePusherChannel({
-    channel: driverOfferChannel || "private-driver-offer-miss",
-    visible: !!driverOfferChannel && isFocused,
-    onEvent: (event) => {
-      const ev = event as { eventName?: string; name?: string; data?: unknown };
-      const name = ev.eventName ?? ev.name;
-      if (name === "ONLINE_TIME_UPDATE") {
-        let raw: unknown = ev.data;
-        if (typeof raw === "string") {
-          try {
-            raw = JSON.parse(raw) as Record<string, unknown>;
-          } catch {
-            raw = {};
-          }
-        }
-        const label =
-          raw && typeof raw === "object" && raw !== null && "timeOnline" in raw
-            ? String((raw as { timeOnline?: string }).timeOnline)
-            : "";
-        if (label) {
-          setActivity((prev) => ({ ...prev, time_online: label }));
-        }
-        return;
-      }
-      if (name !== "ride-request") return;
-      dispatch(setAppData({ driverPendingRideOffer: true }));
-      Vibration.vibrate([0, 400, 200, 400]);
-      safeShowMessage({
-        type: "info",
-        message: "New ride request — opening map to respond.",
-        duration: 5000,
-      });
-      router.push("/(driver)/(tabs)/(dashboard)/home-map");
-    },
-  });
-
   usePusherChannel({
     channel: `private-passenger_cancelled`,
     visible: !subscription.passenger_cancelled,
@@ -808,7 +768,9 @@ const Home = () => {
                 fontFamily: "RobotoMedium",
               })}
             >
-              {activity?.time_online ?? "00h 00m"}
+              {driverTimeOnlineFromPusher ??
+                activity?.time_online ??
+                "00h 00m"}
             </Text>
           </View>
         </View>

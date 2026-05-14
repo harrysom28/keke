@@ -79,7 +79,8 @@ interface IPosition {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { subscription, unread_count } = useSelector(AppDetailsState);
+  const { subscription, unread_count, driverRideOfferPusherSeq, driverRideOfferPusherPayload } =
+    useSelector(AppDetailsState);
   const { getCurrentUser, apiConfig, notificationEvent } =
     useContext(AppContext);
   const isFocused = useIsFocused();
@@ -250,11 +251,6 @@ export default function HomeScreen() {
     }
   }, [isFocused]);
 
-  const driverPusherChannel = useMemo(() => {
-    const id = user?.profile?.driver_id;
-    return id ? `private-driver-${id}` : "";
-  }, [user?.profile?.driver_id]);
-
   const handlePusherRideRequest = useCallback((raw: Record<string, unknown>) => {
     dispatch(setAppData({ driverPendingRideOffer: true }));
     const rider = raw.rider as { name?: string; rating?: number } | undefined;
@@ -302,6 +298,23 @@ export default function HomeScreen() {
     setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
     newRideSheetRef.current?.open();
   }, [dispatch]);
+
+  const lastProcessedRideOfferSeqRef = useRef(0);
+  useEffect(() => {
+    const seq = driverRideOfferPusherSeq ?? 0;
+    const payload = driverRideOfferPusherPayload;
+    if (!payload || !seq || seq === lastProcessedRideOfferSeqRef.current) {
+      return;
+    }
+    lastProcessedRideOfferSeqRef.current = seq;
+    handlePusherRideRequest(payload);
+    dispatch(setAppData({ driverRideOfferPusherPayload: null }));
+  }, [
+    driverRideOfferPusherSeq,
+    driverRideOfferPusherPayload,
+    handlePusherRideRequest,
+    dispatch,
+  ]);
 
   const getPendingRide = () => {
     axios
@@ -623,30 +636,6 @@ export default function HomeScreen() {
       }
     }
   }, [location?.longitude, address?.formattedAddress, isFocused, debouncedUpdateLocation]);
-
-  usePusherChannel({
-    channel: driverPusherChannel || "private-driver-off",
-    visible: !!driverPusherChannel,
-    onSubscriptionSucceeded: () => {},
-    onEvent: (event) => {
-      const ev = event as { eventName?: string; name?: string; data?: unknown };
-      const name = ev.eventName ?? ev.name;
-      if (name !== "ride-request") {
-        return;
-      }
-      let payload: Record<string, unknown> = {};
-      if (typeof event.data === "string") {
-        try {
-          payload = JSON.parse(event.data) as Record<string, unknown>;
-        } catch {
-          payload = {};
-        }
-      } else if (event.data && typeof event.data === "object") {
-        payload = event.data as Record<string, unknown>;
-      }
-      handlePusherRideRequest(payload);
-    },
-  });
 
   usePusherChannel({
     channel: `private-passenger_cancelled`,

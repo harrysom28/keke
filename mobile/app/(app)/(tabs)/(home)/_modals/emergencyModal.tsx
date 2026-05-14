@@ -2,13 +2,16 @@ import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import {
   Dimensions,
   Image,
+  Linking,
   Modal,
+  Platform,
+  Pressable,
   StatusBar,
   Text,
   TouchableWithoutFeedback,
   View,
 } from "react-native";
-import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
+import { Pressable as GesturePressable, TouchableOpacity } from "react-native-gesture-handler";
 import { Path, Svg } from "react-native-svg";
 import React, { useMemo, useState } from "react";
 
@@ -20,6 +23,9 @@ import tw from "@/lib/tailwind";
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
 }
+
+/** Same as driver new-offer accept/decline — RN Pressable + hitSlop so taps work inside bottom sheets on small Android screens. */
+const EMERGENCY_ACTION_HIT_SLOP = { top: 15, bottom: 15, left: 15, right: 15 } as const;
 
 const EmergencyModal = ({ bottomSheetRef }: Props) => {
   const [show, setShow] = useState(false);
@@ -69,7 +75,12 @@ const EmergencyModal = ({ bottomSheetRef }: Props) => {
           </View>
         )}
       >
-        <View style={tw`flex-col items-center gap-y-4`}>
+        <View
+          style={[
+            tw`flex-col items-center gap-y-4 w-full`,
+            Platform.OS === "android" ? { zIndex: 10, elevation: 12 } : null,
+          ]}
+        >
           <Text
             style={tw.style(`text-2xl text-center`, {
               fontFamily: "RobotoBold",
@@ -78,40 +89,53 @@ const EmergencyModal = ({ bottomSheetRef }: Props) => {
             Emergency Alert
           </Text>
           <Text
-            style={tw.style(`text-base text-[#A0A0A0] text-center mb-4`, {
+            style={tw.style(`text-base text-[#A0A0A0] text-center mb-2 px-1`, {
               fontFamily: "RobotoRegular",
             })}
           >
-            Your live location and rider`s contact has been sent to your
-            emergency Alert
+            Your live location and your rider's contact have been sent to your
+            emergency contacts.
           </Text>
-          <TouchableOpacity
-            style={tw`flex-row justify-center bg-base-error w-full py-4 rounded-[8px]`}
-          >
-            <Text
-              style={tw.style(`text-white text-base`, {
-                fontFamily: "RobotoBold",
-              })}
+          <View style={tw`w-[92%] max-w-[360px] self-center gap-y-3`}>
+            <Pressable
+              onPress={() => {
+                Linking.openURL("tel:112").catch(() => {});
+              }}
+              hitSlop={EMERGENCY_ACTION_HIT_SLOP}
+              style={({ pressed }) => [
+                tw`min-h-[52px] w-full flex-row items-center justify-center rounded-[12px] bg-base-error px-4 py-3.5`,
+                { opacity: pressed ? 0.85 : 1 },
+              ]}
             >
-              Call the Police
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              bottomSheetRef?.current?.close();
-              setShow(false);
-              router.push("/(app)/setEmergencyContact");
-            }}
-            style={tw`flex-row justify-center border border-base-error w-full py-4 rounded-[8px]`}
-          >
-            <Text
-              style={tw.style(`text-base-error text-base`, {
-                fontFamily: "RobotoBold",
-              })}
+              <Text
+                style={tw.style(`text-center text-base text-white`, {
+                  fontFamily: "RobotoBold",
+                })}
+              >
+                Call the Police
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                bottomSheetRef?.current?.close();
+                setShow(false);
+                router.push("/(app)/setEmergencyContact");
+              }}
+              hitSlop={EMERGENCY_ACTION_HIT_SLOP}
+              style={({ pressed }) => [
+                tw`min-h-[52px] w-full flex-row items-center justify-center rounded-[12px] border border-base-error bg-white px-4 py-3.5`,
+                { opacity: pressed ? 0.85 : 1 },
+              ]}
             >
-              Send message
-            </Text>
-          </TouchableOpacity>
+              <Text
+                style={tw.style(`text-center text-base text-base-error`, {
+                  fontFamily: "RobotoBold",
+                })}
+              >
+                Send message
+              </Text>
+            </Pressable>
+          </View>
         </View>
       </BottomSheet>
       {/* </Portal> */}
@@ -131,7 +155,7 @@ const EmergencyModal = ({ bottomSheetRef }: Props) => {
               flex: 1,
             })}
           >
-            <Pressable
+            <GesturePressable
               style={tw`flex-col items-center gap-y-4 pt-24 px-4 absolute top-[20%] left-6 right-6 h-[500px] bg-white rounded-[20px]`}
             >
               <Text
@@ -163,7 +187,7 @@ const EmergencyModal = ({ bottomSheetRef }: Props) => {
                 source={require("@/assets/images/emergency-not-found.png")}
                 style={tw`self-center`}
               />
-            </Pressable>
+            </GesturePressable>
           </View>
         </TouchableWithoutFeedback>
       </Modal>

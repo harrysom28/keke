@@ -97,21 +97,7 @@ export default function useNotification() {
         }
       });
 
-    // Handle push notifications when the app is in the background
-    messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-      console.log("Message handled in the background!", remoteMessage);
-      const notification = {
-        title: remoteMessage.notification.title,
-        body: remoteMessage.notification.body,
-        data: remoteMessage.data, // optional data payload
-      };
-
-      // Schedule the notification with a null trigger to show immediately
-      await Notifications.scheduleNotificationAsync({
-        content: notification,
-        trigger: null,
-      });
-    });
+    // Background/killed: setBackgroundMessageHandler is registered in index.js (firebaseBackgroundHandler.js).
 
     const handlePushNotification = async (remoteMessage) => {
       const data = remoteMessage?.data || {};

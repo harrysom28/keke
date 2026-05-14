@@ -73,6 +73,12 @@ interface IState {
   pendingOpenChatRideId?: string | null;
   /** Driver: show Home tab badge when a sequential ride offer is waiting on the map screen. */
   driverPendingRideOffer?: boolean;
+  /** Pusher `ONLINE_TIME_UPDATE` on private-driver channel (see app/(driver)/_layout). */
+  driverTimeOnlineFromPusher?: string | null;
+  /** Pusher ride-request payload for home-map (single shared channel subscription in driver layout). */
+  driverRideOfferPusherPayload?: Record<string, unknown> | null;
+  /** Bumps when a new ride-offer payload is staged for home-map. */
+  driverRideOfferPusherSeq?: number;
   latest_notification: null | {
     id?: string;
     notification_id: string;
@@ -111,6 +117,9 @@ const InitialState: IState = {
   unread_count: 0,
   pendingOpenChatRideId: null,
   driverPendingRideOffer: false,
+  driverTimeOnlineFromPusher: null,
+  driverRideOfferPusherPayload: null,
+  driverRideOfferPusherSeq: 0,
   latest_notification: null,
 };
 const AppSlice = createSlice({
@@ -253,6 +262,9 @@ const AppSlice = createSlice({
     /** Clear driver/driver-offer related UI flags (used on logout and role switches). */
     clearDriverState: (state) => {
       state.driverPendingRideOffer = false;
+      state.driverTimeOnlineFromPusher = null;
+      state.driverRideOfferPusherPayload = null;
+      state.driverRideOfferPusherSeq = 0;
       // Also drop any live driver GPS in utils (in case a ride was in-flight).
       const utils = (state.ride?.utils ?? {}) as any;
       state.ride.utils = { ...(utils || {}), driverLiveLocation: null };
