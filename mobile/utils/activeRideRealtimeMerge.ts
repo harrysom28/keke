@@ -150,6 +150,53 @@ export function mergePusherRideStatusPatch(
   return next;
 }
 
+/** Patch when driver cancels but ride returns to matching (not terminal). */
+export function buildRideRematchingStatusPatch(
+  rideId: string
+): Record<string, unknown> {
+  const id = String(rideId || "").trim();
+  return {
+    ride_id: id,
+    rideId: id,
+    status: "requested",
+    internal_status: "searching",
+    accepted_by_driver: false,
+    acceptedByDriver: false,
+    driver: null,
+    driver_id: null,
+    driverId: null,
+  };
+}
+
+/** Optimistic patch when driver accepts — used when push arrives before Pusher/GET catch up. */
+export function buildRideAcceptedStatusPatch(
+  rideId: string,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const id = String(rideId || "").trim();
+  const driverPatch = extra.driver;
+  const hasDriverObj =
+    driverPatch != null &&
+    typeof driverPatch === "object" &&
+    !Array.isArray(driverPatch) &&
+    Object.keys(driverPatch as object).length > 0;
+
+  return {
+    ride_id: id,
+    rideId: id,
+    status: "accepted",
+    internal_status: "accepted",
+    lifecycle_status: "DRIVER_ASSIGNED",
+    accepted_by_driver: true,
+    acceptedByDriver: true,
+    ...(extra.driver_id != null || extra.driverId != null
+      ? { driver_id: String(extra.driver_id ?? extra.driverId) }
+      : {}),
+    ...(hasDriverObj ? { driver: driverPatch } : {}),
+    ...extra,
+  };
+}
+
 /**
  * If GET active-ride briefly lags Pusher (replica/caching), don't let a stale body
  * wipe acceptance/driver data we already know is true.

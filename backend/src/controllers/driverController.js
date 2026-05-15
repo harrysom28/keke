@@ -1846,6 +1846,20 @@ export const rejectRide = asyncHandler(async (req, res) => {
     }
 
     try {
+      const { getSocketService } = await import('../services/socketService.js');
+      const socketService = getSocketService();
+      if (socketService) {
+        await socketService.emitRideCancelled(
+          ride,
+          'driver',
+          reason || 'Driver cancelled scheduled booking'
+        );
+      }
+    } catch (emitErr) {
+      logger.warn(`Scheduled cancel realtime emit failed: ${emitErr.message}`);
+    }
+
+    try {
       const { updateDriverCancellationRate } = await import('../services/driverStatisticsService.js');
       await updateDriverCancellationRate(driver._id);
     } catch (error) {
@@ -1929,9 +1943,12 @@ export const rejectRide = asyncHandler(async (req, res) => {
 
   try {
     const { sendToUser } = await import('../services/notificationService.js');
+    const rematching = ride.status === 'searching';
     await sendToUser(ride.rider, 'rider', {
       title: 'Driver cancelled',
-      message: 'Your driver cancelled the ride. We are finding you a new driver.',
+      message: rematching
+        ? 'Your driver cancelled the ride. We are finding you a new driver.'
+        : 'Your driver cancelled the ride.',
       type: 'alert',
       priority: 'high',
       screen: 'home',
@@ -1941,6 +1958,21 @@ export const rejectRide = asyncHandler(async (req, res) => {
     });
   } catch (err) {
     logger.error(`Ride rejected notification failed: ${err.message}`);
+  }
+
+  try {
+    await ride.populate('rider', 'name phone profileImage rating deviceToken');
+    const { getSocketService } = await import('../services/socketService.js');
+    const socketService = getSocketService();
+    if (socketService) {
+      await socketService.emitRideCancelled(
+        ride,
+        'driver',
+        reason || 'Driver cancelled'
+      );
+    }
+  } catch (emitErr) {
+    logger.warn(`Realtime cancel emit failed for ride ${rideId}: ${emitErr.message}`);
   }
 
   // Update driver cancellation rate
@@ -2251,6 +2283,8 @@ export const startRide = asyncHandler(async (req, res) => {
       screen: 'ride',
       duration_ms: 4000,
       ride_id: ride._id,
+      action_type: 'navigate',
+      action_payload: { screen: 'ActiveRide', rideId: ride._id.toString() },
       event_key: 'ride_started',
       data: { subType: 'ride_started', rideId: ride._id.toString() },
     });

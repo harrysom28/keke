@@ -48,6 +48,8 @@ import {
   isTerminalRideStatus,
 } from "@/utils/activeRidePayload";
 import {
+  buildRideAcceptedStatusPatch,
+  buildRideRematchingStatusPatch,
   mergePusherRideStatusPatch,
   reconcileStaleActiveRideGet,
 } from "@/utils/activeRideRealtimeMerge";
@@ -1049,6 +1051,48 @@ export default function HomeScreen() {
     []
   );
 
+  const applyRideAcceptedPatchFn = useCallback(
+    (rideId: string, extra: Record<string, unknown> = {}) => {
+      const id = String(rideId || "").trim();
+      if (!id) return;
+      applyPusherRideStatusPatchFn(buildRideAcceptedStatusPatch(id, extra));
+    },
+    [applyPusherRideStatusPatchFn]
+  );
+
+  const handleDriverCancelledRide = useCallback(
+    (payload?: Record<string, unknown> | null) => {
+      const st = String(
+        payload?.internal_status ?? payload?.status ?? ""
+      ).toLowerCase();
+      const rematching = st === "searching" || st === "requested";
+
+      safeShowMessage({
+        type: "danger",
+        message: rematching
+          ? "Your driver cancelled. Finding another driver…"
+          : "Your driver has cancelled the ride",
+      });
+
+      if (rematching) {
+        const rideId = String(
+          payload?.ride_id ?? payload?.rideId ?? tempRef.current?.ride_id ?? ""
+        ).trim();
+        if (rideId) {
+          applyPusherRideStatusPatchFn(buildRideRematchingStatusPatch(rideId));
+        }
+        getActiveRide();
+        return;
+      }
+
+      clearRideState();
+      activeRideSheetRef?.current?.close();
+      dispatch(setAppData({ isBooking: false }));
+      getActiveRide();
+    },
+    [applyPusherRideStatusPatchFn, clearRideState, dispatch]
+  );
+
   const getActiveRide = () => {
     if (getActiveRideInFlightRef.current) {
       logger.debug("getActiveRide coalesced — request already in flight");
@@ -1779,16 +1823,11 @@ export default function HomeScreen() {
 
   usePusherChannel({
     channel: `private.driver_cancelled`,
-    visible: !subscription.driver_cancelled,
-    onSubscriptionSucceeded: () => {
-      dispatch(setSubscriptionUtils({ driver_cancelled: true }));
-    },
+    visible: !!token,
     onEvent: (event) => {
-      logger.info(`Driver cancelled event received: ${event}`);
-      safeShowMessage({ type: "danger", message: "Driver has cancelled the ride" });
-      clearRideState();
-      activeRideSheetRef?.current?.close();
-      getActiveRide();
+      const payload = parsePusherDataPayload((event as { data?: unknown }).data);
+      logger.info(`Driver cancelled event received: ${String((event as { eventName?: string })?.eventName)}`);
+      handleDriverCancelledRide(payload);
     },
   });
 
@@ -1842,10 +1881,36 @@ export default function HomeScreen() {
     onEvent: (event) => {
       if (!activeRideId) return;
       const name = (event as { eventName?: string })?.eventName;
-      if (name === "ride.status") {
-        applyPusherRideStatusPatchFn(
-          parsePusherDataPayload((event as { data?: unknown }).data)
-        );
+      const payload = parsePusherDataPayload((event as { data?: unknown }).data);
+      if (name === "ride.status" && payload) {
+        const st = String(
+          payload.internal_status ?? payload.status ?? ""
+        ).toLowerCase();
+        if (st === "cancelled" || st === "canceled") {
+          handleDriverCancelledRide(payload);
+          return;
+        }
+        applyPusherRideStatusPatchFn(payload);
+        setTimeout(() => getActiveRide(), 600);
+        return;
+      }
+      if (
+        name === "ride_cancelled" ||
+        name === "ride-cancelled" ||
+        name === "RIDE_CANCELLED" ||
+        name === "driver_cancelled"
+      ) {
+        handleDriverCancelledRide(payload);
+        return;
+      }
+      if (
+        (name === "ride_accepted" || name === "RIDE_ACCEPTED") &&
+        payload
+      ) {
+        const rideId = String(payload.ride_id ?? payload.rideId ?? activeRideId);
+        applyRideAcceptedPatchFn(rideId, payload);
+        setTimeout(() => getActiveRide(), 600);
+        return;
       }
       logger.info(`Ride channel event: ${String(name || "unknown")}`);
       getActiveRide();
@@ -1867,14 +1932,49 @@ export default function HomeScreen() {
       const name = event?.eventName;
       if (!name) return;
 
+      const payload = parsePusherDataPayload(event?.data);
+      if (!payload) return;
+
       if (name === "ride.status") {
-        applyPusherRideStatusPatchFn(parsePusherDataPayload(event?.data));
-        getActiveRide();
+        const st = String(
+          payload.internal_status ?? payload.status ?? ""
+        ).toLowerCase();
+        if (st === "cancelled" || st === "canceled") {
+          handleDriverCancelledRide(payload);
+          return;
+        }
+        applyPusherRideStatusPatchFn(payload);
+        setTimeout(() => getActiveRide(), 600);
         return;
       }
 
-      const payload = parsePusherDataPayload(event?.data);
-      if (!payload) return;
+      const subTypeEarly =
+        payload?.subType ?? payload?.event_key ?? payload?.sub_type ?? name;
+      if (
+        subTypeEarly === "driver_cancelled" ||
+        subTypeEarly === "ride_cancelled_by_driver" ||
+        subTypeEarly === "ride_cancelled" ||
+        name === "ride_cancelled" ||
+        name === "ride-cancelled" ||
+        name === "driver_cancelled"
+      ) {
+        handleDriverCancelledRide(payload);
+        return;
+      }
+      if (
+        subTypeEarly === "ride_accepted" ||
+        name === "ride_accepted" ||
+        name === "RIDE_ACCEPTED"
+      ) {
+        const rideId = String(
+          payload.ride_id ?? payload.rideId ?? activeRideId ?? ""
+        ).trim();
+        if (rideId) {
+          applyRideAcceptedPatchFn(rideId, payload);
+          setTimeout(() => getActiveRide(), 600);
+        }
+        return;
+      }
 
       const activeRiderRideId = String(
         temp?.ride_id ??
@@ -2187,10 +2287,38 @@ export default function HomeScreen() {
       return;
     }
     logger.debug("Notification event received", { event: notificationEvent });
-    if (notificationEvent?.body !== "") {
+    const notifSubType =
+      notificationEvent?.data?.sub_type ??
+      notificationEvent?.data?.subType ??
+      "";
+    const notifRideId = String(
+      notificationEvent?.data?.rideId ??
+        notificationEvent?.data?.ride_id ??
+        ""
+    ).trim();
+
+    if (notifSubType === "ride_accepted" && notifRideId) {
+      applyRideAcceptedPatchFn(notifRideId);
+      getActiveRide();
+    }
+
+    if (
+      notifSubType === "ride_cancelled_by_driver" ||
+      notifSubType === "driver_cancelled"
+    ) {
+      // GET active-ride reflects terminal cancel vs rematching; Pusher may also fire.
+      getActiveRide();
+    }
+
+    if (
+      notificationEvent?.body !== "" &&
+      notifSubType !== "ride_accepted" &&
+      notifSubType !== "ride_cancelled_by_driver" &&
+      notifSubType !== "driver_cancelled"
+    ) {
       safeShowMessage({ message: notificationEvent?.body, type: "info" });
     }
-    // Ride refresh is handled by Pusher + focus; avoid getActiveRide on every notification tick
+
     if (notificationEvent?.data?.sub_type === "private.completed_ride") {
       tripCompletedRef.current = true;
       setTripCompleted(true);
@@ -2202,7 +2330,7 @@ export default function HomeScreen() {
       setPaymentReceipt(true);
       getActiveRide();
     }
-  }, [notificationEvent]);
+  }, [notificationEvent, applyRideAcceptedPatchFn, handleDriverCancelledRide]);
 
   // Use throttled location update hook to prevent rate limiting
   const updateLocation = useThrottledLocationUpdate();

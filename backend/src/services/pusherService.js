@@ -117,6 +117,92 @@ class PusherService {
   }
 
   /**
+   * Explicit rider event when a driver accepts (mobile listens on private-user-{riderId}).
+   */
+  emitRideAccepted(ride, driver = null) {
+    if (!this.pusher || !ride?.rider) {
+      return;
+    }
+
+    try {
+      const riderId = ride.rider._id?.toString?.() || ride.rider.toString();
+      const payload = {
+        ride_id: ride._id.toString(),
+        rideId: ride._id.toString(),
+        status: 'accepted',
+        internal_status: 'accepted',
+        subType: 'ride_accepted',
+        event_key: 'ride_accepted',
+        driver: driver
+          ? {
+              driver_id: driver._id.toString(),
+              driver_user_id: driver.user?._id?.toString(),
+              driver_name: driver.user?.name,
+              driver_image: driver.user?.profileImage,
+              driver_rating: driver.rating?.average || 0,
+              vehicle_name:
+                driver.vehicleDetails?.make && driver.vehicleDetails?.model
+                  ? `${driver.vehicleDetails.make} ${driver.vehicleDetails.model}`
+                  : null,
+              vehicle_color: driver.vehicleDetails?.color || null,
+              licence_plate_number: driver.vehicleDetails?.plateNumber || null,
+            }
+          : null,
+        timestamp: new Date().toISOString(),
+      };
+
+      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride_accepted', payload);
+      this.pusher.trigger(`private-user-${riderId}`, 'ride_accepted', payload);
+      this.pusher.trigger(`private.user.${riderId}`, 'ride_accepted', payload);
+      this.pusher.trigger(`private.user-${riderId}`, 'ride_accepted', payload);
+      logger.debug(`Pusher: ride_accepted emitted for ride ${ride._id}`);
+    } catch (error) {
+      logger.error(`Failed to emit ride_accepted via Pusher: ${error.message}`);
+    }
+  }
+
+  /**
+   * Rider/driver cancel — mobile clears active ride UI from private-user / private.ride channels.
+   */
+  emitRideCancelled(ride, cancelledBy = 'driver', reason = null) {
+    if (!this.pusher || !ride?.rider) {
+      return;
+    }
+
+    try {
+      const riderId = ride.rider._id?.toString?.() || ride.rider.toString();
+      const internalStatus = ride.status || 'cancelled';
+      const clientStatus =
+        internalStatus === 'searching' ? 'requested' : internalStatus;
+      const payload = {
+        ride_id: ride._id.toString(),
+        rideId: ride._id.toString(),
+        status: clientStatus,
+        internal_status: internalStatus,
+        cancelled_by: cancelledBy,
+        reason: reason || null,
+        subType: cancelledBy === 'driver' ? 'driver_cancelled' : 'ride_cancelled',
+        event_key:
+          cancelledBy === 'driver' ? 'ride_cancelled_by_driver' : 'ride_cancelled_by_rider',
+        timestamp: new Date().toISOString(),
+      };
+
+      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride.status', payload);
+      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride_cancelled', payload);
+      this.pusher.trigger(`private-user-${riderId}`, 'ride.status', payload);
+      this.pusher.trigger(`private-user-${riderId}`, 'ride_cancelled', payload);
+      this.pusher.trigger(`private.user.${riderId}`, 'ride.status', payload);
+      this.pusher.trigger(`private.user-${riderId}`, 'ride_cancelled', payload);
+      // Legacy channel the rider app still listens on
+      this.pusher.trigger('private.driver_cancelled', 'driver_cancelled', payload);
+      this.pusher.trigger(`private-user-${riderId}`, 'driver_cancelled', payload);
+      logger.debug(`Pusher: ride_cancelled emitted for ride ${ride._id} (${internalStatus})`);
+    } catch (error) {
+      logger.error(`Failed to emit ride_cancelled via Pusher: ${error.message}`);
+    }
+  }
+
+  /**
    * Emit ride completed event
    */
   emitRideCompleted(ride) {

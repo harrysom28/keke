@@ -786,20 +786,21 @@ export const cancelRide = asyncHandler(async (req, res) => {
   // Send notifications via Socket.io
   const socketService = getSocketService();
   if (socketService) {
-    socketService.emitRideCancelled(ride, cancelledBy, reason);
+    await socketService.emitRideCancelled(ride, cancelledBy, reason);
   }
 
   try {
     const { sendToUser } = await import('../services/notificationService.js');
     if (cancelledBy === 'driver') {
       await sendToUser(riderId, 'rider', {
+        event_key: 'ride_cancelled_by_driver',
         title: 'Driver cancelled',
         message: 'Your driver cancelled the ride. We are finding you a new driver.',
-        type: 'alert',
         priority: 'high',
+        ride_id: ride._id.toString(),
         screen: 'home',
-        ride_id: ride._id,
-        event_key: 'ride_cancelled_by_driver',
+        action_type: 'navigate',
+        action_payload: { screen: 'home', rideId: ride._id.toString() },
         data: { subType: 'driver_cancelled', rideId: ride._id.toString() },
       });
     }
@@ -1306,20 +1307,22 @@ export const assignNewDriver = asyncHandler(async (req, res) => {
     socketService.emitRideStatusUpdate(ride, 'accepted', alternativeDriver);
   }
 
-  // Push notification to rider: new driver assigned
+  // Push notification to rider: new driver assigned (ride_accepted)
   try {
-    const { createNotification } = await import('../services/notificationService.js');
-    const riderUser = await User.findById(ride.rider._id).select('deviceToken').lean();
-    if (riderUser?.deviceToken) {
-      await createNotification(
-        { _id: ride.rider._id, deviceToken: riderUser.deviceToken },
-        'ride_accepted',
-        'New driver assigned',
-        'A new driver has been assigned to your ride and is on the way.',
-        { rideId: ride._id.toString(), screen: 'home' },
-        ride._id
-      );
-    }
+    const { sendToUser } = await import('../services/notificationService.js');
+    const riderId = ride.rider._id || ride.rider;
+    const driverName = ride.driver?.user?.name || 'Your driver';
+    await sendToUser(riderId, 'rider', {
+      event_key: 'ride_accepted',
+      title: 'Driver is on the way!',
+      message: `${driverName} has accepted your ride and is heading to your pickup.`,
+      priority: 'high',
+      ride_id: ride._id.toString(),
+      screen: 'home',
+      action_type: 'navigate',
+      action_payload: { screen: 'home', rideId: ride._id.toString() },
+      data: { subType: 'ride_accepted', rideId: ride._id.toString() },
+    });
   } catch (err) {
     logger.error(`New driver assigned push notification failed: ${err.message}`);
   }

@@ -241,7 +241,7 @@ class SocketService {
   /**
    * Emit ride accepted notification to rider
    */
-  emitRideAccepted(ride, driver) {
+  async emitRideAccepted(ride, driver) {
     if (!this.io) {
       return;
     }
@@ -272,6 +272,15 @@ class SocketService {
 
     this.io.to(`user:${ride.rider._id.toString()}`).emit('ride-accepted', acceptedData);
     this.io.to(`user:${ride.rider._id.toString()}`).emit('RIDE_ACCEPTED', acceptedData);
+
+    try {
+      const { getPusherService } = await import('./pusherService.js');
+      const pusherService = getPusherService();
+      pusherService?.emitRideAccepted?.(ride, driver);
+    } catch (error) {
+      logger.warn(`Failed to emit ride_accepted via Pusher: ${error.message}`);
+    }
+
     logger.info(`Ride accepted notification sent to rider for ride ${ride._id}`);
   }
 
@@ -344,26 +353,44 @@ class SocketService {
   /**
    * Emit ride cancelled notification
    */
-  emitRideCancelled(ride, cancelledBy, reason) {
+  async emitRideCancelled(ride, cancelledBy, reason) {
     if (!this.io) {
       return;
     }
 
+    const internalStatus = ride.status || 'cancelled';
+    const clientStatus = internalStatus === 'searching' ? 'requested' : internalStatus;
     const cancelledData = {
       ride_id: ride._id.toString(),
-      status: 'cancelled',
+      rideId: ride._id.toString(),
+      status: clientStatus,
+      internal_status: internalStatus,
       cancelled_by: cancelledBy,
       reason: reason || null,
       cancellation_fee: ride.cancellation?.cancellationFee || 0,
       driver_compensation: ride.cancellation?.driverCompensation ?? null,
       platform_retention: ride.cancellation?.platformRetention ?? null,
+      subType: cancelledBy === 'driver' ? 'driver_cancelled' : 'ride_cancelled',
+      event_key:
+        cancelledBy === 'driver' ? 'ride_cancelled_by_driver' : 'ride_cancelled_by_rider',
       timestamp: new Date(),
     };
 
     this.io.to(`user:${ride.rider._id.toString()}`).emit('ride-cancelled', cancelledData);
+    this.io.to(`user:${ride.rider._id.toString()}`).emit('RIDE_CANCELLED', cancelledData);
     if (ride.driver) {
-      this.io.to(`driver:${ride.driver._id.toString()}`).emit('ride-cancelled', cancelledData);
+      const driverRoom = ride.driver._id?.toString?.() || ride.driver.toString();
+      this.io.to(`driver:${driverRoom}`).emit('ride-cancelled', cancelledData);
     }
+
+    try {
+      const { getPusherService } = await import('./pusherService.js');
+      const pusherService = getPusherService();
+      pusherService?.emitRideCancelled?.(ride, cancelledBy, reason);
+    } catch (error) {
+      logger.warn(`Failed to emit ride_cancelled via Pusher: ${error.message}`);
+    }
+
     logger.info(`Ride cancelled notification sent for ride ${ride._id}`);
   }
 
