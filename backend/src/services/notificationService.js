@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import axios from 'axios';
+import admin from 'firebase-admin';
 import logger from '../utils/logger.js';
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
@@ -8,8 +9,22 @@ import Ride from '../models/Ride.js';
 import UserWallet from '../models/UserWallet.js';
 import UserNotification from '../models/UserNotification.js';
 import mongoose from 'mongoose';
-import { getMessaging, getFirebaseProjectId } from '../config/firebaseAdmin.js';
 import { getPusherService } from './pusherService.js';
+
+let firebaseInitialized = false;
+try {
+  const serviceAccountJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+  if (serviceAccountJson && !admin.apps.length) {
+    const serviceAccount = JSON.parse(serviceAccountJson);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    firebaseInitialized = true;
+    logger.info('Firebase Admin SDK initialized');
+  }
+} catch (e) {
+  logger.error('Failed to initialize Firebase Admin SDK:', e.message);
+}
 
 // ---------------------------------------------------------------------------
 // TASK 1: STANDARDIZED PUSH PAYLOAD FORMAT
@@ -495,14 +510,16 @@ const sendExpoPushNotification = async (expoToken, title, body, data = {}, userI
  * TASK 2: On invalid token errors, remove from user.
  */
 const sendFcmViaFirebaseAdmin = async (deviceToken, title, body, data = {}, userId = null) => {
-  const messaging = getMessaging();
-  if (!messaging) return { success: false };
+  if (!firebaseInitialized) {
+    logger.warn('FCM skipped: Firebase Admin SDK not initialized');
+    return { success: false };
+  }
 
   const expectedProject =
     process.env.EXPECTED_FIREBASE_PROJECT_ID ||
     process.env.FIREBASE_ANDROID_PROJECT_ID ||
     process.env.FIREBASE_PROJECT_ID;
-  const actualProject = getFirebaseProjectId();
+  const actualProject = admin.app()?.options?.projectId || null;
   if (expectedProject && actualProject && expectedProject !== actualProject) {
     logger.error(
       `FCM Firebase project mismatch: Admin SDK is using project_id="${actualProject}" but EXPECTED_FIREBASE_PROJECT_ID / FIREBASE_PROJECT_ID="${expectedProject}". Push may fail for client tokens registered to the other project. Align service account JSON or env vars with the mobile app Firebase project.`
@@ -528,7 +545,7 @@ const sendFcmViaFirebaseAdmin = async (deviceToken, title, body, data = {}, user
       },
       apns: { payload: { aps: { sound: 'default', badge: 1 } } },
     };
-    await messaging.send(message);
+    await admin.messaging().send(message);
     logger.info(`FCM (Firebase Admin) push sent: ${title}`);
     return { success: true };
   } catch (error) {

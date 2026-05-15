@@ -1,6 +1,10 @@
 import * as Location from "expo-location";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ensureForegroundLocationAccess,
+  type LocationAccessPurpose,
+} from "@/utils/locationPermission";
 
 // In dev/simulator, iOS/Android often report a fixed US location. Override to Abakaliki so the map shows your intended test region.
 const SIMULATOR_DEFAULT_COORDS = [
@@ -92,7 +96,10 @@ async function reverseGeocodeAndPublish(coords: Location.LocationObjectCoords) {
   }
 }
 
-async function ensureSharedLocationStarted() {
+async function ensureSharedLocationStarted(
+  purpose: LocationAccessPurpose = "rider",
+  showRationale = false
+) {
   if (sharedWatchSubscription || sharedStartPromise) {
     if (sharedStartPromise) {
       await sharedStartPromise;
@@ -104,10 +111,14 @@ async function ensureSharedLocationStarted() {
     console.log("📍 Starting location watch");
     publishSharedSnapshot({ loading: true, locationError: "" });
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") {
+    const access = await ensureForegroundLocationAccess(purpose, {
+      showRationale,
+    });
+    if (!access.granted) {
       publishSharedSnapshot({
-        locationError: "Permission to access location was denied",
+        locationError: access.servicesEnabled
+          ? "Permission to access location was denied"
+          : "Location services are turned off",
         loading: false,
       });
       return;
@@ -208,15 +219,34 @@ function stopSharedLocationIfUnused() {
   }
 }
 
-export function useCurrentLocation({ isFocused }: { isFocused: boolean }) {
+export function useCurrentLocation({
+  isFocused,
+  purpose = "rider",
+  /** Show in-app rationale before the OS dialog (e.g. driver going online). */
+  showRationaleOnRequest = false,
+}: {
+  isFocused: boolean;
+  purpose?: LocationAccessPurpose;
+  showRationaleOnRequest?: boolean;
+}) {
   const [location, setLocation] = useState<Location.LocationObjectCoords>(sharedSnapshot.location);
   const [locationError, setLocationError] = useState(sharedSnapshot.locationError);
   const [address, setAddress] = useState<Location.LocationGeocodedAddress>(sharedSnapshot.address);
   const [loading, setLoading] = useState(sharedSnapshot.loading);
   const isSubscribedRef = useRef(false);
+  const purposeRef = useRef(purpose);
+  const rationaleRef = useRef(showRationaleOnRequest);
 
-  const getLocation = useCallback(async () => {
-    await ensureSharedLocationStarted();
+  useEffect(() => {
+    purposeRef.current = purpose;
+    rationaleRef.current = showRationaleOnRequest;
+  }, [purpose, showRationaleOnRequest]);
+
+  const getLocation = useCallback(async (opts?: { showRationale?: boolean }) => {
+    await ensureSharedLocationStarted(
+      purposeRef.current,
+      opts?.showRationale ?? rationaleRef.current
+    );
   }, []);
 
   useEffect(() => {
@@ -236,19 +266,17 @@ export function useCurrentLocation({ isFocused }: { isFocused: boolean }) {
     };
   }, []);
 
-  // Automatically start location tracking on mount
+  // Request location when this screen is focused (rider home, driver map, etc.)
   useEffect(() => {
-    if (isFocused) {
-      sharedConsumers += 1;
-      (async () => {
-        await getLocation();
-      })();
+    if (!isFocused) return;
 
-      return () => {
-        sharedConsumers = Math.max(0, sharedConsumers - 1);
-        stopSharedLocationIfUnused();
-      };
-    }
+    sharedConsumers += 1;
+    void getLocation();
+
+    return () => {
+      sharedConsumers = Math.max(0, sharedConsumers - 1);
+      stopSharedLocationIfUnused();
+    };
   }, [getLocation, isFocused]);
 
   return { location, address, locationError, loading, getLocation };

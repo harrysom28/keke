@@ -58,6 +58,7 @@ import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
+import { ensureForegroundLocationAccess } from "@/utils/locationPermission";
 
 /** Map schedule/closest API shape (ride_id, nested pickup/dropoff, scheduled_at) to home card fields. */
 function mapClosestBookingForHome(raw: Record<string, unknown>): Partial<TBooking> & Record<string, unknown> {
@@ -257,7 +258,15 @@ const Home = () => {
       );
       return;
     }
-    patchAvailability(true);
+    void (async () => {
+      const access = await ensureForegroundLocationAccess("driver", {
+        showRationale: true,
+      });
+      if (!access.granted) {
+        return;
+      }
+      patchAvailability(true);
+    })();
   };
 
   useEffect(() => {

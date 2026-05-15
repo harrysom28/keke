@@ -72,6 +72,8 @@ import logger from "@/utils/logger";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
+import { LocationPermissionBanner } from "@/components/LocationPermissionBanner";
+import { resolveLocationPermissionFromBanner } from "@/utils/locationPermission";
 import { useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import usePusherChannel from "@/hooks/usePusherChannel";
@@ -240,7 +242,13 @@ export default function HomeScreen() {
   const pendingGetActiveRideRef = useRef(false);
   const GET_ACTIVE_RIDE_MIN_MS = 400;
   const locationRef = useRef({ latitude: 0, longitude: 0 });
-  const { location, address, loading: locationLoading, locationError, getLocation: refreshLocation } = useCurrentLocation({ isFocused });
+  const {
+    location,
+    address,
+    loading: locationLoading,
+    locationError,
+    getLocation: refreshLocation,
+  } = useCurrentLocation({ isFocused, purpose: "rider" });
 
   locationRef.current = { latitude: location.latitude, longitude: location.longitude };
   const tempRef = useRef<TRide>({} as TRide);
@@ -2481,19 +2489,15 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Location permission / loading prompt - so user knows why map might not show current location */}
           {locationError ? (
-            <View style={tw`mx-4 mt-2 px-4 py-3 bg-amber-100 dark:bg-amber-900/30 rounded-xl flex-row items-center justify-between`}>
-              <Text style={tw`text-amber-800 dark:text-amber-200 text-sm flex-1`} numberOfLines={2}>
-                Location access is needed to show your position on the map.
-              </Text>
-              <TouchableOpacity
-                onPress={() => typeof refreshLocation === 'function' && refreshLocation()}
-                style={tw`ml-3 px-4 py-2 bg-amber-500 rounded-lg`}
-              >
-                <Text style={tw`text-white font-semibold text-sm`}>Allow</Text>
-              </TouchableOpacity>
-            </View>
+            <LocationPermissionBanner
+              purpose="rider"
+              loading={locationLoading}
+              onEnable={async () => {
+                const ok = await resolveLocationPermissionFromBanner("rider");
+                if (ok) await refreshLocation({ showRationale: false });
+              }}
+            />
           ) : locationLoading && !hasValidLocation ? (
             <View style={tw`mx-4 mt-2 px-4 py-2 bg-white/90 dark:bg-gray-800/90 rounded-xl flex-row items-center`}>
               <Text style={tw`text-gray-600 dark:text-gray-300 text-sm`}>Getting your location…</Text>

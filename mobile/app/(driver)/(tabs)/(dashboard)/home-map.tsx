@@ -63,6 +63,8 @@ import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import Svg, { Path } from "react-native-svg";
 import { consumeInitialDriverRouteRedirect } from "@/utils/driverInitialRoute";
+import { LocationPermissionBanner } from "@/components/LocationPermissionBanner";
+import { resolveLocationPermissionFromBanner } from "@/utils/locationPermission";
 
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
@@ -119,7 +121,13 @@ export default function HomeScreen() {
   >([]);
 
   const mapRef = useRef<MapView>(null);
-  const { location, address } = useCurrentLocation({ isFocused });
+  const {
+    location,
+    address,
+    locationError: mapLocationError,
+    loading: mapLocationLoading,
+    getLocation: refreshMapLocation,
+  } = useCurrentLocation({ isFocused, purpose: "driver" });
   const [mapReady, setMapReady] = useState(false);
 
   // Only use actual GPS location - don't show map until we have real coordinates
@@ -873,6 +881,16 @@ export default function HomeScreen() {
             marginTop: insets.top,
           })}
         >
+          {mapLocationError ? (
+            <LocationPermissionBanner
+              purpose="driver"
+              loading={mapLocationLoading}
+              onEnable={async () => {
+                const ok = await resolveLocationPermissionFromBanner("driver");
+                if (ok) await refreshMapLocation({ showRationale: false });
+              }}
+            />
+          ) : null}
           <View
             style={tw.style(
               `flex-row items-center justify-between px-4 h-[52px] bg-black`

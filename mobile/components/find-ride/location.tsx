@@ -45,6 +45,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
   const { ride } = useSelector(AppDetailsState);
   const { user } = useSelector(AuthState);
   const { location: currentLocation, address: currentAddress } = useCurrentLocation({
+    purpose: "rider",
     isFocused: screenLive,
   });
   const { apiConfig } = useContext(AppContext);

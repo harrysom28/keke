@@ -124,7 +124,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   const dispatch = useDispatch();
   const { apiConfig } = useContext(AppContext);
   const { rideUtils } = useSelector(AppDetailsState);
-  const { location } = useCurrentLocation({ isFocused: true });
+  const { location } = useCurrentLocation({ isFocused: true, purpose: "rider" });
   const [selectedDate, setSelectedDate] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).dayOffset); // 0=Today, 1=Tomorrow, 2=day after...
   const [selectedTime, setSelectedTime] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).time);
   const [showTimePicker, setShowTimePicker] = useState(false);
