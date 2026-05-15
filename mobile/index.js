@@ -1,3 +1,3 @@
-// Register FCM background handler before Expo Router / React mounts.
-import "./firebaseBackgroundHandler";
+// FCM background handler + Expo foreground handler before React mounts.
+import "./lib/firebaseMessagingBackground";
 import "expo-router/entry";

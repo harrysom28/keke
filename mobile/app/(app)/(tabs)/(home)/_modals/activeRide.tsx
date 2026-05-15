@@ -24,6 +24,7 @@ import { router, useFocusEffect } from "expo-router";
 import { AppContext } from "@/app/context";
 import { isRiderMatchedOrBeyond } from "@/utils/activeRidePayload";
 import { pusherManager } from "@/utils/pusherManager";
+import { isValidMongoRideId, resolveRideId } from "@/utils/resolveRideId";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -586,27 +587,61 @@ const ActiveRideSheet = ({
     return undefined;
   }, [isRideAcceptedByDriver, secondsLeft, phase]);
 
+  const cancelRideId = useMemo(() => {
+    const waiting = currentView?.data?.waiting as Record<string, unknown> | undefined;
+    return (
+      resolveRideId(waiting) ||
+      resolveRideId(temp as Record<string, unknown>) ||
+      rideIdForHook ||
+      ""
+    );
+  }, [currentView?.data?.waiting, temp, rideIdForHook]);
+
+  const finishCancelRideUI = useCallback(() => {
+    cancelDriverRequestTimers();
+    dispatch(clearRideState());
+    if (clearMap) clearMap({ navigateHome: true });
+    bottomSheetRef?.current?.close();
+    setCurrentView((prev) => ({ ...prev, screen: "" }));
+    setModal(false);
+  }, [
+    bottomSheetRef,
+    cancelDriverRequestTimers,
+    clearMap,
+    dispatch,
+    setCurrentView,
+  ]);
+
   const CancelRide = (
     data: { reason: string; description: string },
     loading: React.Dispatch<React.SetStateAction<boolean>>,
     executable: () => void,
     showError: (text: string) => void
   ) => {
+    const rideId = cancelRideId;
+    if (!rideId || !isValidMongoRideId(rideId)) {
+      showError("Could not find this ride. Close and refresh, then try again.");
+      return;
+    }
+
+    const reason = data.description
+      ? `${data.reason}: ${data.description}`
+      : data.reason;
+
     loading(true);
-    const rideId =
-      (currentView?.data?.waiting as any)?.ride_id ||
-      (currentView?.data?.waiting as any)?.rideId ||
-      (temp as any)?.ride_id ||
-      (temp as any)?.rideId;
-    const reason = data.description ? `${data.reason}: ${data.description}` : data.reason;
-    
-    // Use apiClient for automatic token refresh.
     (async () => {
       try {
         await apiClient.post("booking/cancel-ride", { rideId, reason });
         executable();
+        finishCancelRideUI();
       } catch (err: any) {
-        let errorMessage = "An unexpected error occurred.";
+        const status = err?.response?.status ?? err?.status;
+        if (status === 404) {
+          executable();
+          finishCancelRideUI();
+          return;
+        }
+        let errorMessage = "Could not cancel ride. Please try again.";
         if (err?.response?.data?.message) {
           errorMessage =
             typeof err.response.data.message === "string"
@@ -620,12 +655,6 @@ const ActiveRideSheet = ({
         }
         showError(errorMessage);
       } finally {
-        // Always cleanup locally (404 = already gone, network error = still don't trap user).
-        cancelDriverRequestTimers();
-        dispatch(clearRideState());
-        if (clearMap) clearMap({ navigateHome: true });
-        bottomSheetRef?.current?.close();
-        setCurrentView((prev) => ({ ...prev, screen: "" }));
         loading(false);
       }
     })();
@@ -997,13 +1026,7 @@ const ActiveRideSheet = ({
       <CancelRideModal
         show={modal}
         setShow={setModal}
-        rideId={
-          rideIdForHook ||
-          (currentView?.data?.waiting as any)?.ride_id ||
-          (currentView?.data?.waiting as any)?.rideId ||
-          (temp as any)?.ride_id ||
-          (temp as any)?.rideId
-        }
+        rideId={cancelRideId || undefined}
         action={(data, loading, executable, showError) =>
           CancelRide(data, loading, executable, showError)
         }
@@ -1047,6 +1070,9 @@ const ActiveRideSheet = ({
             paddingRight: 8,
           })}
           activeOpacity={0.7}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel="Close ride panel"
         >
           <View style={tw`h-[32px] w-[32px] flex-col items-center justify-center bg-black rounded-full`}>
             <AntDesign name="close" size={20} color="white" />
@@ -1084,14 +1110,15 @@ const ActiveRideSheet = ({
                     </Text>
                   </TouchableOpacity>
 
-                  {rideId ? (
+                  {cancelRideId ? (
                     <TouchableOpacity
                       onPress={() => {
                         cancelDriverRequestTimers();
                         setModal(true);
                       }}
                       activeOpacity={0.85}
-                      style={tw`w-full border border-[#EF4444] py-4 rounded-xl`}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={tw`w-full border border-[#EF4444] py-4 rounded-xl min-h-[48px] justify-center`}
                     >
                       <Text style={tw.style(`text-[#EF4444] text-center text-base`, { fontFamily: "RobotoMedium" })}>
                         Cancel ride

@@ -86,7 +86,7 @@
         "expo-notifications",
         {
           "color": "#ffffff",
-          "defaultChannel": "default",
+          "defaultChannel": "rides",
           "enableBackgroundRemoteNotifications": true
         }
       ],

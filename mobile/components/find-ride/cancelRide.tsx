@@ -46,14 +46,19 @@ const CheckItem = ({ item, isChecked, setChecked }: CProps) => {
   return (
     <Pressable
       style={tw.style(
-        `flex-row items-center gap-x-3.5 py-4 px-2.5 rounded-[8px] border `,
+        `flex-row items-center gap-x-3.5 py-4 px-2.5 rounded-[8px] border min-h-[48px]`,
         isChecked ? `border-base-green` : `border-[#D0D0D0]`
       )}
       onPress={setChecked}
+      hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+      accessibilityRole="radio"
+      accessibilityState={{ checked: isChecked }}
     >
       <Checkbox
         style={tw`text-base-green border border-[#D0D0D0]`}
         value={isChecked}
+        onValueChange={() => setChecked()}
+        color={isChecked ? tw.color("base-green") : undefined}
       />
       <Text
         style={tw.style("text-lg text-[#000000CF]", {
@@ -311,15 +316,22 @@ function CancelRideModalInner({
           />
 
           <Pressable
-            onPress={() =>
+            onPress={() => {
+              if (!rideId) {
+                showError("Ride not found. Close and try again from your active ride.");
+                return;
+              }
               action(
                 { reason: checked, description },
                 setLoading,
                 () => setPrompt(true),
                 showError
-              )
-            }
-            style={tw`mb-8 bg-base-green py-4 rounded`}
+              );
+            }}
+            style={tw`mb-8 bg-base-green py-4 rounded min-h-[48px] justify-center`}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Submit cancellation"
           >
             {loading ? (
               <ActivityIndicator color="white" />

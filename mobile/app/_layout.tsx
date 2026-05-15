@@ -167,6 +167,9 @@ const NotificationBootstrap = () => {
 
   useEffect(() => {
     notificationManager.initFirebaseListeners();
+    import("@/lib/expoNotificationsSetup")
+      .then(({ initExpoNotifications }) => initExpoNotifications())
+      .catch(() => {});
   }, []);
 
   // Android 13+ (API 33): POST_NOTIFICATIONS must be in the manifest and requested at runtime

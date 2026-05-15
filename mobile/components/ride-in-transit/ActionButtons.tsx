@@ -1,6 +1,5 @@
 import React, { useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
-import { TouchableOpacity } from "react-native-gesture-handler";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { RideState } from "./rideStates";
 
@@ -21,16 +20,20 @@ function IconButton({
   accessibilityLabel: string;
 }) {
   return (
-    <TouchableOpacity
+    <Pressable
       onPress={onPress}
-      style={[styles.iconBtn, disabled && { opacity: 0.5 }]}
+      style={({ pressed }) => [
+        styles.iconBtn,
+        disabled && { opacity: 0.5 },
+        pressed && !disabled && { opacity: 0.85 },
+      ]}
       disabled={disabled}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      activeOpacity={0.8}
     >
       <Ionicons name={icon} size={22} color={BRAND_GREEN} />
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
@@ -62,15 +65,21 @@ export function RiderActionButtons({
         />
       </View>
 
-      <TouchableOpacity
+      <Pressable
         onPress={dangerPress}
-        style={[styles.dangerBtn, showEmergency && styles.emergencyBtn]}
-        activeOpacity={0.85}
+        style={({ pressed }) => [
+          styles.dangerBtn,
+          showEmergency && styles.emergencyBtn,
+          pressed && { opacity: 0.88 },
+        ]}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        accessibilityRole="button"
+        accessibilityLabel={dangerLabel}
       >
         <Text style={[styles.dangerText, showEmergency && styles.emergencyText]}>
           {dangerLabel}
         </Text>
-      </TouchableOpacity>
+      </Pressable>
     </View>
   );
 }
@@ -114,10 +123,10 @@ export function DriverActionButtons({
 
   return (
     <View style={styles.wrap}>
-      <TouchableOpacity
+      <Pressable
         onPress={primary.onPress}
-        style={styles.primaryBtn}
-        activeOpacity={0.85}
+        style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.9 }]}
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
       >
         <View style={styles.primaryRow}>
           {primary.label === "Open Navigation" ? (
@@ -125,18 +134,22 @@ export function DriverActionButtons({
           ) : null}
           <Text style={styles.primaryText}>{primary.label}</Text>
         </View>
-      </TouchableOpacity>
+      </Pressable>
 
       <View style={styles.rowBetween}>
-        <TouchableOpacity
+        <Pressable
           onPress={secondary.onPress}
-          style={[styles.secondaryBtn, secondary.label === "I\u2019ve arrived" && styles.secondaryBtnArrived]}
-          activeOpacity={0.85}
+          style={({ pressed }) => [
+            styles.secondaryBtn,
+            secondary.label === "I\u2019ve arrived" && styles.secondaryBtnArrived,
+            pressed && { opacity: 0.88 },
+          ]}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Text style={[styles.secondaryText, secondary.label === "I\u2019ve arrived" && styles.secondaryTextArrived]}>
             {secondary.label}
           </Text>
-        </TouchableOpacity>
+        </Pressable>
         <View style={styles.row}>
           <IconButton icon="call-outline" onPress={onCall} accessibilityLabel="Call passenger" />
           <IconButton icon="chatbubble-ellipses-outline" onPress={onChat} accessibilityLabel="Chat passenger" />

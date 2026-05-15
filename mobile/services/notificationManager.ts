@@ -432,20 +432,37 @@ export const initFirebaseListeners = (): void => {
 
 export const registerFcmToken = async (): Promise<void> => {
   try {
-    // Prefer Expo Push Tokens (ExponentPushToken[...]) to avoid APNs/FCM setup complexity.
-    // On simulators, this returns null (push requires physical device).
     const token = await registerForPushNotifications();
     if (!token) {
       logger.debug("Push token not available (likely simulator or permissions denied)");
       return;
     }
 
-    // New endpoint requested by backend: /api/auth/push-token
-    await apiClient.post("auth/push-token", { token, type: "expo" });
-    // Backward compatibility (existing backend route)
-    await apiClient.post("notifications/fcm-token", { token });
+    const isExpo = token.startsWith("ExponentPushToken[");
+    if (isExpo) {
+      await apiClient.post("auth/push-token", { token, type: "expo" });
+      await apiClient.post("notifications/fcm-token", { token });
+      logger.debug("Expo push token registered with backend");
+    } else {
+      await apiClient.post("notifications/fcm-token", { token });
+      await apiClient.post("auth/push-token", { token, type: "fcm" });
+      logger.debug("Native FCM/APNs token registered with backend");
+    }
 
-    logger.debug("Push token registered with backend", { type: "expo" });
+    // When Expo token is primary, also register native FCM if different (Android hybrid builds).
+    if (isExpo) {
+      try {
+        const Notifications = await import("expo-notifications");
+        const native = await Notifications.getDevicePushTokenAsync();
+        const nativeToken = native?.data?.trim();
+        if (nativeToken && nativeToken !== token) {
+          await apiClient.post("notifications/fcm-token", { token: nativeToken });
+          logger.debug("Secondary native push token registered");
+        }
+      } catch {
+        // Native token optional
+      }
+    }
   } catch (error) {
     logger.error(
       "FCM token registration failed",

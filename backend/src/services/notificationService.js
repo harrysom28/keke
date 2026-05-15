@@ -434,12 +434,20 @@ const stringifyData = (data) =>
  */
 const sendExpoPushNotification = async (expoToken, title, body, data = {}, userId = null) => {
   try {
+    const priority = data.priority === 'high' || data.priority === 'critical' ? 'high' : 'default';
+    const channelId =
+      priority === 'high'
+        ? 'rides'
+        : data.type === 'payment'
+          ? 'payments'
+          : 'general';
     const payload = {
       to: expoToken,
       title,
       body,
       sound: 'default',
-      priority: 'high',
+      priority,
+      channelId,
       data: stringifyData(data),
     };
     const response = await axios.post(

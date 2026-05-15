@@ -4,6 +4,7 @@ import {
   Modal,
   Pressable,
   Text,
+  TouchableOpacity,
   View,
   StyleSheet,
   KeyboardAvoidingView,
@@ -16,7 +17,7 @@ import { AntDesign, Entypo, Ionicons } from "@expo/vector-icons";
 import { Defs, Line, LinearGradient, Stop, Svg } from "react-native-svg";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { router } from "expo-router";
-import { TouchableOpacity } from "react-native-gesture-handler";
+import { TouchableAction } from "@/components/ui/TouchableAction";
 
 import { TRide } from "@/types";
 import tw from "@/lib/tailwind";
@@ -820,25 +821,20 @@ export const WaitingView = ({
                 { paddingBottom: Math.max(insets.bottom + 8, 16) },
               ]}
             >
-              <TouchableOpacity
+              <TouchableAction
+                label="Cancel ride"
                 onPress={cancel}
-                style={styles.searchCancelBtn}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Cancel ride"
-              >
-                <Text style={styles.searchCancelText}>Cancel ride</Text>
-              </TouchableOpacity>
+                containerStyle={styles.searchCancelBtn}
+                labelStyle={styles.searchCancelText}
+              />
 
-              <TouchableOpacity
+              <TouchableAction
+                label="Change pickup"
+                variant="ghost"
                 onPress={onSearchAgain ?? action}
-                style={styles.searchChangePickup}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityLabel="Change pickup"
-              >
-                <Text style={styles.searchChangePickupText}>Change pickup</Text>
-              </TouchableOpacity>
+                containerStyle={styles.searchChangePickup}
+                labelStyle={styles.searchChangePickupText}
+              />
             </View>
           </View>
         ) : (
@@ -1085,9 +1081,13 @@ export const WaitingView = ({
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity onPress={cancel} style={styles.cancelButton} activeOpacity={0.8}>
-              <Text style={styles.cancelButtonText}>Cancel ride</Text>
-            </TouchableOpacity>
+            <TouchableAction
+              label="Cancel ride"
+              variant="danger"
+              onPress={cancel}
+              containerStyle={styles.cancelButton}
+              labelStyle={styles.cancelButtonText}
+            />
 
             <Text style={styles.reassuranceText}>Most rides are matched within 60 seconds</Text>
           </View>
