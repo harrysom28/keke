@@ -15,12 +15,17 @@ export function configureExpoNotificationHandler(): void {
         unknown
       >;
       const priority = String(data.priority || "medium");
+      const screen = String(data.screen || "");
+      const notifType = String(data.type || "");
+      const isRideLifecycle =
+        screen === "ride" && (notifType === "alert" || notifType === "banner");
       const isHigh = priority === "high" || priority === "critical";
-      if (isHigh && Platform.OS === "android") {
+      if ((isHigh || isRideLifecycle) && Platform.OS === "android") {
         Vibration.vibrate(300);
       }
       return {
-        shouldShowAlert: isHigh || priority === "medium",
+        shouldShowAlert:
+          isHigh || priority === "medium" || isRideLifecycle,
         shouldPlaySound: true,
         shouldSetBadge: true,
       };

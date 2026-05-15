@@ -24,6 +24,7 @@ import { TRide } from "@/types";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { useDispatch } from "react-redux";
 
@@ -136,6 +137,7 @@ let Ratings: Array<string> = ["Bad", "Poor", "OK", "Great", "Excellent"];
 const ReviewSheet = ({ temp, action }: Props) => {
   const { apiConfig } = useContext(AppContext);
   const dispatch = useDispatch();
+  const insets = useCombinedSafeInsets();
   const [rating, setRating] = useState(5);
   const [review, setReview] = useState("");
   const [tip, setTip] = useState<string>(Tips[0]);
@@ -188,9 +190,10 @@ const ReviewSheet = ({ temp, action }: Props) => {
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <View style={tw`flex-1`}>
           <ScrollView
-            keyboardShouldPersistTaps="handled"
+            style={tw`flex-1`}
+            keyboardShouldPersistTaps="always"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={tw`pb-6`}
+            contentContainerStyle={tw`pb-4`}
           >
             <AirbnbRating
               count={5}
@@ -265,10 +268,19 @@ const ReviewSheet = ({ temp, action }: Props) => {
                 Enter other amount
               </Text>
             </Pressable>
+          </ScrollView>
 
+          <View
+            style={[
+              tw`bg-white border-t border-[#F0F0F0] pt-3 px-0`,
+              { paddingBottom: Math.max(insets.bottom + 8, 12) },
+            ]}
+            collapsable={false}
+          >
             <Pressable
               onPress={CreateReview}
-              style={tw`mt-8 bg-base-green py-4 rounded`}
+              style={tw`bg-base-green py-4 rounded min-h-[48px] justify-center`}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               {loading ? (
                 <ActivityIndicator color="white" />
@@ -282,7 +294,7 @@ const ReviewSheet = ({ temp, action }: Props) => {
                 </Text>
               )}
             </Pressable>
-          </ScrollView>
+          </View>
         </View>
       </TouchableWithoutFeedback>
     </>

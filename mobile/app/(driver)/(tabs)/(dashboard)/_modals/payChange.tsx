@@ -109,11 +109,14 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
       backdropMaskColor="#19191900"
       openDuration={1000}
       disableKeyboardHandling={false}
+      disableBodyPanning={true}
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
+      <View style={{ flex: 1 }}>
       <ScrollView
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
+        style={{ flex: 1 }}
+        keyboardShouldPersistTaps="always"
+        contentContainerStyle={{ flexGrow: 0, paddingBottom: 8 }}
         showsVerticalScrollIndicator={false}
       >
         <View
@@ -159,9 +162,12 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
           />
           <ListItem label="Balance" value={`₦${amount}`} />
         </View>
+      </ScrollView>
+      <View style={tw`border-t border-[#F0F0F0] pt-3`} collapsable={false}>
         <Pressable
           onPress={handlePay}
-          style={tw`mt-14 bg-base-green py-4 rounded`}
+          style={tw`bg-base-green py-4 rounded min-h-[48px] justify-center`}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           {loading ? (
             <ActivityIndicator color="white" />
@@ -175,7 +181,8 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
             </Text>
           )}
         </Pressable>
-      </ScrollView>
+      </View>
+      </View>
     </BottomSheet>
   );
 };

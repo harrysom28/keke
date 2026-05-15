@@ -42,6 +42,7 @@ const EmergencyModal = ({ bottomSheetRef }: Props) => {
         height={sheetHeight}
         ref={bottomSheetRef}
         disableKeyboardHandling={false}
+        disableBodyPanning={true}
         style={tw`gap-y-4 pb-5 px-5 rounded-t-[40px] bg-white`}
         backdropMaskColor={tw.color(`bg-base-error bg-opacity-50`)}
         customDragHandleComponent={() => (

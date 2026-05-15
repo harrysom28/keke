@@ -1,5 +1,4 @@
-import { BackHandler, Text, useWindowDimensions, View } from "react-native";
-import { TouchableOpacity } from "react-native-gesture-handler";
+import { BackHandler, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { AntDesign } from "@expo/vector-icons";
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -961,6 +960,7 @@ const ActiveRideSheet = ({
       backdropMaskColor="#19191900"
       openDuration={1000}
       disableKeyboardHandling={false}
+      disableBodyPanning={true}
       style={tw`px-6 py-0 rounded-t-[40px] bg-white`}
       closeOnDragDown={false}
     >

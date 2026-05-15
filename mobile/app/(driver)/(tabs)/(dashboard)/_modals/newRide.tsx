@@ -53,8 +53,18 @@ import { TripDetailsCard } from "@/components/ride-in-transit/TripDetailsCard";
 import { UserInfoCard } from "@/components/ride-in-transit/UserInfoCard";
 import { ProgressBar } from "@/components/ride-in-transit/ProgressBar";
 import { DriverActionButtons } from "@/components/ride-in-transit/ActionButtons";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 
 const OFFER_ACTION_HIT_SLOP = { top: 15, bottom: 15, left: 15, right: 15 } as const;
+
+const sheetActionFooter = {
+  width: "100%" as const,
+  backgroundColor: "#fff",
+  borderTopWidth: 1,
+  borderTopColor: "#E5E7EB",
+  paddingTop: 8,
+  paddingHorizontal: 16,
+};
 
 const handleRideApiError = (err: unknown) => {
   showMessage({
@@ -92,6 +102,7 @@ const NewRide = ({
 }: Props) => {
   const { apiConfig } = useContext(AppContext);
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const insets = useCombinedSafeInsets();
   const [loading, setLoading] = useState({
     accept: false,
     start: false,
@@ -448,8 +459,7 @@ const NewRide = ({
       backdropMaskColor="#19191900"
       openDuration={1000}
       disableKeyboardHandling={false}
-      // Same as findRide / bookRide: sheet body's PanResponder steals taps on Android (e.g. Samsung).
-      disableBodyPanning={Platform.OS === "android"}
+      disableBodyPanning={true}
       closeOnDragDown={true}
       style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px]`, {
         backgroundColor: "#fff",
@@ -479,6 +489,7 @@ const NewRide = ({
       <View
         pointerEvents="box-none"
         style={{
+          flex: 1,
           backgroundColor: "#fff",
           zIndex: 999,
           ...(Platform.OS === "android" ? { elevation: 10 } : {}),
@@ -486,11 +497,11 @@ const NewRide = ({
       >
       <ScrollView
         pointerEvents="auto"
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         nestedScrollEnabled
-        style={{ backgroundColor: "#fff" }}
+        style={{ flex: 1, backgroundColor: "#fff" }}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ flexGrow: 0, paddingBottom: 16, paddingHorizontal: 16, gap: 8 }}
+        contentContainerStyle={{ flexGrow: 0, paddingBottom: 8, paddingHorizontal: 16, gap: 8 }}
       >
         {/* Light, trustworthy header + live state */}
         <View style={{ marginTop: 8 }}>
@@ -632,80 +643,133 @@ const NewRide = ({
             </Text>
           </View>
         </View>
+      </ScrollView>
 
-        {/* Primary actions */}
-        {accepted ? (
-          <>
-            {(() => {
-              const inTrip =
-                liveRideState === "trip_started" || liveRideState === "near_destination";
-              const isTooFarFromDropoff =
-                inTrip && typeof distanceToDropoff === "number" && distanceToDropoff > 1000;
-              return isTooFarFromDropoff ? (
-                <Text
-                  style={{
-                    color: "#EF4444",
-                    fontSize: 12,
-                    textAlign: "center",
-                    marginBottom: 6,
-                  }}
-                >
-                  {`${(distanceToDropoff! / 1000).toFixed(1)}km from destination — get closer to end trip`}
-                </Text>
-              ) : null;
-            })()}
-          <DriverActionButtons
-            state={liveRideState}
-            onOpenNavigation={openNavigation}
-            onMarkArrived={MarkPickupArrived}
-            onStartTrip={StartRide}
-            onCompleteTrip={() => {
-              const inTrip =
-                liveRideState === "trip_started" || liveRideState === "near_destination";
-              const isTooFarFromDropoff =
-                inTrip && typeof distanceToDropoff === "number" && distanceToDropoff > 1000;
-              if (isTooFarFromDropoff) {
-                Alert.alert(
-                  "Too far from destination",
-                  `You are ${(distanceToDropoff! / 1000).toFixed(1)}km away. Get closer before ending the trip.`,
-                  [{ text: "OK" }]
-                );
-                return;
-              }
-              Alert.alert("Complete Trip", "Have you arrived at the destination?", [
-                { text: "Not yet", style: "cancel" },
-                {
-                  text: "Yes, complete",
-                  style: "destructive",
-                  onPress: () => CompleteRide(),
-                },
-              ]);
-            }}
-            onCall={() => {
-              const p = data?.passenger as
-                | { passenger_phone_number?: string; phone?: string }
-                | undefined;
-              const num = (p?.passenger_phone_number || p?.phone || "") as string;
-              if (!num) {
-                showMessage({ type: "warning", message: "Phone number not available" });
-                return;
-              }
-              Linking.openURL(num.startsWith("0") ? `tel:${num}` : `tel:+${num}`).catch(() =>
-                showMessage({ type: "warning", message: "Unable to make call." })
-              );
-            }}
-            onChat={() => setChatModal(true)}
-            onCancel={RejectRide}
-            loading={{ arrived: loading.arrived, start: loading.start, complete: loading.complete }}
-          />
-          </>
-        ) : (
+      {accepted ? (
+        <>
+          {(() => {
+            const inTrip =
+              liveRideState === "trip_started" || liveRideState === "near_destination";
+            const isTooFarFromDropoff =
+              inTrip && typeof distanceToDropoff === "number" && distanceToDropoff > 1000;
+            return isTooFarFromDropoff ? (
+              <Text
+                style={{
+                  color: "#EF4444",
+                  fontSize: 12,
+                  textAlign: "center",
+                  marginBottom: 6,
+                  paddingHorizontal: 16,
+                }}
+              >
+                {`${(distanceToDropoff! / 1000).toFixed(1)}km from destination — get closer to end trip`}
+              </Text>
+            ) : null;
+          })()}
           <View
             style={[
-              tw`flex-col mt-5 gap-y-4`,
-              { zIndex: 999, elevation: Platform.OS === "android" ? 10 : 0 },
+              sheetActionFooter,
+              { paddingBottom: Math.max(insets.bottom + 8, 12) },
             ]}
+            collapsable={false}
           >
+            <DriverActionButtons
+              state={liveRideState}
+              onOpenNavigation={openNavigation}
+              onMarkArrived={MarkPickupArrived}
+              onStartTrip={StartRide}
+              onCompleteTrip={() => {
+                const inTrip =
+                  liveRideState === "trip_started" || liveRideState === "near_destination";
+                const isTooFarFromDropoff =
+                  inTrip && typeof distanceToDropoff === "number" && distanceToDropoff > 1000;
+                if (isTooFarFromDropoff) {
+                  Alert.alert(
+                    "Too far from destination",
+                    `You are ${(distanceToDropoff! / 1000).toFixed(1)}km away. Get closer before ending the trip.`,
+                    [{ text: "OK" }]
+                  );
+                  return;
+                }
+                Alert.alert("Complete Trip", "Have you arrived at the destination?", [
+                  { text: "Not yet", style: "cancel" },
+                  {
+                    text: "Yes, complete",
+                    style: "destructive",
+                    onPress: () => CompleteRide(),
+                  },
+                ]);
+              }}
+              onCall={() => {
+                const p = data?.passenger as
+                  | { passenger_phone_number?: string; phone?: string }
+                  | undefined;
+                const num = (p?.passenger_phone_number || p?.phone || "") as string;
+                if (!num) {
+                  showMessage({ type: "warning", message: "Phone number not available" });
+                  return;
+                }
+                Linking.openURL(num.startsWith("0") ? `tel:${num}` : `tel:+${num}`).catch(() =>
+                  showMessage({ type: "warning", message: "Unable to make call." })
+                );
+              }}
+              onChat={() => setChatModal(true)}
+              onCancel={RejectRide}
+              loading={{
+                arrived: loading.arrived,
+                start: loading.start,
+                complete: loading.complete,
+              }}
+            />
+          </View>
+          {accepted && hasRideStarted && data?.drop_off_completed ? (
+            <View
+              style={[
+                sheetActionFooter,
+                { paddingBottom: Math.max(insets.bottom + 8, 12), paddingTop: 0 },
+              ]}
+              collapsable={false}
+            >
+              <View style={tw`flex-col gap-y-3`}>
+                <TouchableOpacity
+                  disabled={payment_type === "wallet"}
+                  onPress={() => setShow(true)}
+                  style={tw.style(
+                    `flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[12px] min-h-[48px]`,
+                    { opacity: payment_type === "wallet" ? 0 : 1 }
+                  )}
+                  activeOpacity={0.85}
+                >
+                  <Text style={tw.style(`text-base text-white uppercase`, { fontFamily: "RobotoBold" })}>
+                    Pay change
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={ConfirmPayment}
+                  style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[12px] min-h-[48px]`}
+                  activeOpacity={0.85}
+                >
+                  {loading.confirm ? (
+                    <ActivityIndicator color="white" />
+                  ) : (
+                    <Text style={tw.style(`text-base text-white uppercase`, { fontFamily: "RobotoBold" })}>
+                      Confirm payment
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+        </>
+      ) : (
+        <View
+          style={[
+            sheetActionFooter,
+            { paddingBottom: Math.max(insets.bottom + 8, 12) },
+          ]}
+          collapsable={false}
+        >
+          <View style={tw`flex-col gap-y-4`}>
             <Pressable
               onPress={AcceptRide}
               hitSlop={OFFER_ACTION_HIT_SLOP}
@@ -744,38 +808,8 @@ const NewRide = ({
               </Text>
             ) : null}
           </View>
-        )}
-
-        {/* Keep pay-change / confirm-payment flow when dropoff completed */}
-        {accepted && hasRideStarted && data?.drop_off_completed ? (
-          <View style={tw`flex-col mt-2 gap-y-3`}>
-            <TouchableOpacity
-              disabled={payment_type === "wallet"}
-              onPress={() => setShow(true)}
-              style={tw.style(
-                `flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[12px]`,
-                { opacity: payment_type === "wallet" ? 0 : 1 }
-              )}
-            >
-              <Text style={tw.style(`text-base text-white uppercase`, { fontFamily: "RobotoBold" })}>
-                Pay change
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={ConfirmPayment}
-              style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[12px]`}
-            >
-              {loading.confirm ? (
-                <ActivityIndicator color="white" />
-              ) : (
-                <Text style={tw.style(`text-base text-white uppercase`, { fontFamily: "RobotoBold" })}>
-                  Confirm payment
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        ) : null}
-      </ScrollView>
+        </View>
+      )}
       </View>
     </BottomSheet>
   );

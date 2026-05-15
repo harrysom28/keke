@@ -2302,6 +2302,16 @@ export default function HomeScreen() {
       getActiveRide();
     }
 
+    const rideLifecycleRefreshKeys = new Set([
+      "driver_arrived",
+      "ride_arrived",
+      "ride_started",
+      "ride_completed",
+    ]);
+    if (rideLifecycleRefreshKeys.has(notifSubType) && notifRideId) {
+      getActiveRide();
+    }
+
     if (
       notifSubType === "ride_cancelled_by_driver" ||
       notifSubType === "driver_cancelled"
@@ -2310,11 +2320,15 @@ export default function HomeScreen() {
       getActiveRide();
     }
 
+    const silentRideKeys = new Set([
+      "ride_accepted",
+      "ride_cancelled_by_driver",
+      "driver_cancelled",
+      ...rideLifecycleRefreshKeys,
+    ]);
     if (
       notificationEvent?.body !== "" &&
-      notifSubType !== "ride_accepted" &&
-      notifSubType !== "ride_cancelled_by_driver" &&
-      notifSubType !== "driver_cancelled"
+      !silentRideKeys.has(notifSubType)
     ) {
       safeShowMessage({ message: notificationEvent?.body, type: "info" });
     }

@@ -270,7 +270,8 @@ export const mapFirebaseToPayload = (remoteMessage: any): NotificationPayload =>
       data.duration_ms != null ? Number(data.duration_ms) : undefined,
     image_url: data.image_url ? String(data.image_url) : undefined,
     delivered_at: new Date().toISOString(),
-    event_key: data.subType || data.sub_type || undefined,
+    event_key:
+      data.event_key || data.subType || data.sub_type || undefined,
   };
 };
 
@@ -321,7 +322,8 @@ export const mapExpoNotificationRequestToPayload = (
       data.duration_ms != null ? Number(data.duration_ms) : undefined,
     image_url: data.image_url ? String(data.image_url) : undefined,
     delivered_at: new Date().toISOString(),
-    event_key: data.subType || data.sub_type || data.event_key || undefined,
+    event_key:
+      data.event_key || data.subType || data.sub_type || undefined,
   };
 };
 

@@ -738,7 +738,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
         openDuration={1000}
         closeDuration={1000}
         disableKeyboardHandling={false}
-        disableBodyPanning={Platform.OS === "android"}
+        disableBodyPanning={true}
         style={tw.style(`px-5 py-4 rounded-t-[32px] bg-white`)}
         closeOnDragDown={false}
       >

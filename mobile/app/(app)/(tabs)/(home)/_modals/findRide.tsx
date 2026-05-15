@@ -587,7 +587,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         disableKeyboardHandling={false}
         // Android: PanResponder on the sheet body steals/conflicts with TextInput & ScrollView touches
         // on some devices (e.g. Samsung). Drag-to-close still works via the handle bar.
-        disableBodyPanning={Platform.OS === "android"}
+        disableBodyPanning={true}
         style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`, {
           position: 'relative',
         })}
@@ -623,7 +623,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       openDuration={1000}
       closeDuration={1000}
       disableKeyboardHandling={false}
-      disableBodyPanning={Platform.OS === "android"}
+      disableBodyPanning={true}
       style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`, {
         position: 'relative',
       })}

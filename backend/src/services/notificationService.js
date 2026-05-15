@@ -119,6 +119,37 @@ const shouldSendPushForNotification = (notification) => {
   return false;
 };
 
+const RIDE_PUSH_EVENT_KEYS = new Set([
+  'ride_accepted',
+  'ride_arrived',
+  'driver_arrived',
+  'ride_started',
+  'ride_completed',
+  'ride_cancelled',
+  'ride_cancelled_by_driver',
+  'driver_cancelled',
+  'fare_locked',
+]);
+
+/** Ensures ride lifecycle notifications always push and carry alert/ride screen metadata. */
+const normalizeRidePushPayload = (payload = {}) => {
+  const eventKey =
+    payload.event_key || payload.data?.subType || payload.data?.sub_type || 'general';
+  if (!RIDE_PUSH_EVENT_KEYS.has(eventKey)) {
+    return payload;
+  }
+  const isAccept = eventKey === 'ride_accepted';
+  return {
+    ...payload,
+    event_key: eventKey,
+    type: payload.type || 'alert',
+    screen: payload.screen || 'ride',
+    priority:
+      payload.priority ||
+      (isAccept || eventKey === 'driver_arrived' ? 'high' : 'normal'),
+  };
+};
+
 const notificationToRealtimePayload = (notification, userNotification) => ({
   id: userNotification._id.toString(),
   notification_id: notification._id.toString(),
@@ -427,7 +458,13 @@ const isInvalidDeviceToken = (errorCode, message) => {
  */
 const removeDeviceTokenFromUser = async (userId) => {
   try {
-    await User.findByIdAndUpdate(userId, { $set: { deviceToken: null } });
+    await User.findByIdAndUpdate(userId, {
+      $set: {
+        deviceToken: null,
+        fcm_token: null,
+        expoPushToken: null,
+      },
+    });
     logger.info(`Removed invalid device token for user ${userId}`);
   } catch (err) {
     logger.error(`Failed to remove device token for user ${userId}: ${err.message}`);
@@ -930,6 +967,7 @@ export const dispatchToUser = async (
           action_payload: coerceActionPayloadString(notification.action_payload),
           ride_id: String(notification.ride_id || ''),
           subType: String(notification.event_key || 'general'),
+          event_key: String(notification.event_key || 'general'),
           priority: String(notification.priority || 'normal'),
         },
         android: { priority: 'high' },
@@ -983,7 +1021,9 @@ export const sendToUser = async (userId, userRole, notifPayload) => {
     }
 
     const normalizedRole = normalizeUserRole(userRole || user.role);
-    const { disable_retry, disableRetry, ...restPayload } = notifPayload || {};
+    const { disable_retry, disableRetry, ...restPayload } = normalizeRidePushPayload(
+      notifPayload || {}
+    );
     const notification = await createNotification({
       ...restPayload,
       target_role: normalizedRole,

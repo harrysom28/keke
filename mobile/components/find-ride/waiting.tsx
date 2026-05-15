@@ -455,6 +455,10 @@ export const WaitingView = ({
     [liveRideState, data]
   );
 
+  const hasStickyFooter =
+    isAccepted || isSearchingState || (!isAccepted && !isSearchingState);
+  const footerPad = { paddingBottom: Math.max(insets.bottom + 8, 12) };
+
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <View style={styles.wrapper}>
@@ -464,13 +468,16 @@ export const WaitingView = ({
       >
         <ScrollView
           style={styles.scrollContainer}
-          contentContainerStyle={styles.container}
+          contentContainerStyle={[
+            styles.container,
+            hasStickyFooter && styles.containerWithFooter,
+          ]}
           scrollEnabled={true}
           bounces={true}
           showsVerticalScrollIndicator={true}
           contentInsetAdjustmentBehavior="automatic"
           nestedScrollEnabled={true}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
         >
           {/* ── Accepted / In-Transit (modernized) ── */}
           {isAccepted ? (
@@ -686,53 +693,6 @@ export const WaitingView = ({
                   </View>
                 </View>
               </Modal>
-
-              <RiderActionButtons
-                state={liveRideState}
-                onChat={() => {
-                  try {
-                    chat();
-                  } catch {
-                    showMessage({ type: "warning", message: "Chat is not available right now." });
-                  }
-                }}
-                onCall={() => {
-                  const driver = (data as any)?.driver || {};
-                  const phone =
-                    driver?.driver_phone ||
-                    driver?.phone ||
-                    driver?.phone_number ||
-                    driver?.user?.phone ||
-                    driver?.user?.phoneNumber ||
-                    (data as any)?.driver_phone ||
-                    "";
-                  if (!phone) {
-                    showMessage({ type: "warning", message: "Driver phone number not available" });
-                    return;
-                  }
-                  Linking.openURL(`tel:${String(phone).trim()}`).catch(() =>
-                    showMessage({
-                      type: "danger",
-                      message: "Unable to make call. Please try again.",
-                    })
-                  );
-                }}
-                onCancel={cancel}
-                onEmergency={() => {
-                  const rideId = (data as any)?.ride_id || (data as any)?._id || "";
-                  try {
-                    router.push({
-                      pathname: "/(app)/(tabs)/(profile)/contact",
-                      params: {
-                        ...(rideId ? { rideId } : {}),
-                        subject: "Emergency / safety issue",
-                      } as any,
-                    });
-                  } catch {
-                    showMessage({ type: "warning", message: "Unable to open support right now." });
-                  }
-                }}
-              />
             </>
           ) : null}
 
@@ -813,28 +773,6 @@ export const WaitingView = ({
                 <Text style={styles.searchInfoLabel}>EST. WAIT</Text>
                 <Text style={styles.searchInfoValue}>~{estWaitMin} min</Text>
               </View>
-            </View>
-
-            <View
-              style={[
-                styles.searchActions,
-                { paddingBottom: Math.max(insets.bottom + 8, 16) },
-              ]}
-            >
-              <TouchableAction
-                label="Cancel ride"
-                onPress={cancel}
-                containerStyle={styles.searchCancelBtn}
-                labelStyle={styles.searchCancelText}
-              />
-
-              <TouchableAction
-                label="Change pickup"
-                variant="ghost"
-                onPress={onSearchAgain ?? action}
-                containerStyle={styles.searchChangePickup}
-                labelStyle={styles.searchChangePickupText}
-              />
             </View>
           </View>
         ) : (
@@ -1052,47 +990,122 @@ export const WaitingView = ({
           </View>
         )}
 
-        {/* ── Action buttons (driver-arrived state only; searching has its own, accepted handled above) ── */}
-        {!isAccepted && !isSearchingState ? (
-          <View style={[styles.actionButtons, { paddingBottom: Math.max(insets.bottom + 8, 16) }]}>
-            <TouchableOpacity
-              onPress={onRequestNewDriver ?? action}
-              style={styles.primaryButton}
-              activeOpacity={0.8}
-            >
-              <Ionicons
-                name="swap-horizontal-outline"
-                size={18}
-                color="#fff"
-                style={{ marginRight: 6 }}
-              />
-              <Text style={styles.primaryButtonText}>Try another driver</Text>
-            </TouchableOpacity>
+        </ScrollView>
 
-            {onSearchAgain && (
-              <TouchableOpacity onPress={onSearchAgain} style={styles.textButton} activeOpacity={0.7}>
-                <Ionicons
-                  name="location-outline"
-                  size={15}
-                  color={BRAND_GREEN}
-                  style={{ marginRight: 4 }}
-                />
-                <Text style={styles.textButtonText}>Change pickup</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableAction
-              label="Cancel ride"
-              variant="danger"
-              onPress={cancel}
-              containerStyle={styles.cancelButton}
-              labelStyle={styles.cancelButtonText}
+        {isAccepted ? (
+          <View style={[styles.actionFooter, footerPad]} collapsable={false}>
+            <RiderActionButtons
+              state={liveRideState}
+              onChat={() => {
+                try {
+                  chat();
+                } catch {
+                  showMessage({ type: "warning", message: "Chat is not available right now." });
+                }
+              }}
+              onCall={() => {
+                const driver = (data as any)?.driver || {};
+                const phone =
+                  driver?.driver_phone ||
+                  driver?.phone ||
+                  driver?.phone_number ||
+                  driver?.user?.phone ||
+                  driver?.user?.phoneNumber ||
+                  (data as any)?.driver_phone ||
+                  "";
+                if (!phone) {
+                  showMessage({ type: "warning", message: "Driver phone number not available" });
+                  return;
+                }
+                Linking.openURL(`tel:${String(phone).trim()}`).catch(() =>
+                  showMessage({
+                    type: "danger",
+                    message: "Unable to make call. Please try again.",
+                  })
+                );
+              }}
+              onCancel={cancel}
+              onEmergency={() => {
+                const rideId = (data as any)?.ride_id || (data as any)?._id || "";
+                try {
+                  router.push({
+                    pathname: "/(app)/(tabs)/(profile)/contact",
+                    params: {
+                      ...(rideId ? { rideId } : {}),
+                      subject: "Emergency / safety issue",
+                    } as any,
+                  });
+                } catch {
+                  showMessage({ type: "warning", message: "Unable to open support right now." });
+                }
+              }}
             />
+          </View>
+        ) : isSearchingState ? (
+          <View style={[styles.actionFooter, footerPad]} collapsable={false}>
+            <View style={styles.searchActions}>
+              <TouchableAction
+                label="Cancel ride"
+                onPress={cancel}
+                containerStyle={styles.searchCancelBtn}
+                labelStyle={styles.searchCancelText}
+              />
+              <TouchableAction
+                label="Change pickup"
+                variant="ghost"
+                onPress={onSearchAgain ?? action}
+                containerStyle={styles.searchChangePickup}
+                labelStyle={styles.searchChangePickupText}
+              />
+            </View>
+          </View>
+        ) : !isAccepted && !isSearchingState ? (
+          <View style={[styles.actionFooter, footerPad]} collapsable={false}>
+            <View style={styles.actionButtons}>
+              <TouchableOpacity
+                onPress={onRequestNewDriver ?? action}
+                style={styles.primaryButton}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="swap-horizontal-outline"
+                  size={18}
+                  color="#fff"
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={styles.primaryButtonText}>Try another driver</Text>
+              </TouchableOpacity>
 
-            <Text style={styles.reassuranceText}>Most rides are matched within 60 seconds</Text>
+              {onSearchAgain ? (
+                <TouchableOpacity
+                  onPress={onSearchAgain}
+                  style={styles.textButton}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="location-outline"
+                    size={15}
+                    color={BRAND_GREEN}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={styles.textButtonText}>Change pickup</Text>
+                </TouchableOpacity>
+              ) : null}
+
+              <TouchableAction
+                label="Cancel ride"
+                variant="danger"
+                onPress={cancel}
+                containerStyle={styles.cancelButton}
+                labelStyle={styles.cancelButtonText}
+              />
+
+              <Text style={styles.reassuranceText}>
+                Most rides are matched within 60 seconds
+              </Text>
+            </View>
           </View>
         ) : null}
-        </ScrollView>
       </KeyboardAvoidingView>
     </View>
   );
@@ -1120,6 +1133,18 @@ const styles = StyleSheet.create({
     // Trip in progress: ensure fare card/action area isn't clipped on small screens.
     paddingBottom: 72,
     width: "100%",
+  },
+  containerWithFooter: {
+    paddingBottom: 16,
+  },
+  actionFooter: {
+    width: "100%",
+    backgroundColor: "#fff",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#E5E7EB",
+    paddingTop: 4,
+    zIndex: 20,
+    elevation: 12,
   },
 
   issuesRow: {

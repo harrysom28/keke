@@ -120,14 +120,17 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
       backdropMaskColor="#19191900"
       openDuration={1000}
       disableKeyboardHandling={false}
+      disableBodyPanning={true}
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
       {display === "payment" ? (
         <ConfirmPayment bottomSheetRef={bottomSheetRef} />
       ) : (
+        <View style={{ flex: 1 }}>
         <ScrollView
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
+          style={{ flex: 1 }}
+          keyboardShouldPersistTaps="always"
+          contentContainerStyle={{ flexGrow: 0, paddingBottom: 8 }}
           showsVerticalScrollIndicator={false}
         >
           <View
@@ -201,33 +204,38 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
               />
             </View>
           </View>
-          <View style={tw`flex-col mt-5 gap-y-4`}>
-            <TouchableOpacity
-              // onPress={() => setIsRideStarted(true)}
-              style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
-            >
-              <Text
-                style={tw.style(`text-base text-white uppercase`, {
-                  fontFamily: "RobotoBold",
-                })}
-              >
-                Make Payment
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => bottomSheetRef?.current?.close()}
-              style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-base-green rounded-[8px]`}
-            >
-              <Text
-                style={tw.style(`text-base text-base-green uppercase`, {
-                  fontFamily: "RobotoBold",
-                })}
-              >
-                Appeal
-              </Text>
-            </TouchableOpacity>
-          </View>
         </ScrollView>
+        <View
+          style={tw`border-t border-[#F0F0F0] pt-3 flex-col gap-y-4`}
+          collapsable={false}
+        >
+          <TouchableOpacity
+            style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px] min-h-[48px]`}
+            activeOpacity={0.85}
+          >
+            <Text
+              style={tw.style(`text-base text-white uppercase`, {
+                fontFamily: "RobotoBold",
+              })}
+            >
+              Make Payment
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => bottomSheetRef?.current?.close()}
+            style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-base-green rounded-[8px] min-h-[48px]`}
+            activeOpacity={0.85}
+          >
+            <Text
+              style={tw.style(`text-base text-base-green uppercase`, {
+                fontFamily: "RobotoBold",
+              })}
+            >
+              Appeal
+            </Text>
+          </TouchableOpacity>
+        </View>
+        </View>
       )}
     </BottomSheet>
   );
