@@ -5,7 +5,7 @@ import { getRedisClient } from '../config/redis.js';
 
 const windowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10);
 /** Mobile apps poll several endpoints; default 100/15min per IP was too easy to hit from one driver session. */
-const maxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '400', 10);
+const maxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000', 10);
 
 /**
  * Set in server startup after ensureRedisConnected():
@@ -91,6 +91,25 @@ export function initRateLimiters() {
           return true;
         }
       }
+
+      // Skip rate limiting for authenticated admin users
+      if (req.user?.role === 'admin') return true;
+
+      // Skip for authenticated users on polling endpoints
+      // (notifications, health, earnings - high-frequency but legitimate)
+      const pollingPaths = [
+        '/api/notifications/unread-count',
+        '/api/driver/earnings',
+        '/api/auth/user/me',
+        '/api/health',
+        '/api/config/public',
+        '/api/driver/home',
+      ];
+      const requestUrl = req.originalUrl || req.url || '';
+      if (req.user && pollingPaths.some((p) => requestUrl.includes(p))) {
+        return true;
+      }
+
       return false;
     },
 
@@ -106,6 +125,51 @@ export function initRateLimiters() {
       res.status(429).json({
         status: 'error',
         message: 'Too many requests from this IP, please try again later.',
+      });
+    },
+  });
+
+  limiters.adminLimiter = rateLimit({
+    windowMs,
+    max: process.env.NODE_ENV === 'production' ? 2000 : 10000,
+    store: makeRedisStore('rl:admin:'),
+
+    skip: (req) => {
+      if (process.env.NODE_ENV === 'test') {
+        return true;
+      }
+
+      if (process.env.NODE_ENV !== 'production' && process.env.SKIP_RATE_LIMIT === 'true') {
+        const clientIp = req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress;
+        const isLocal =
+          clientIp === '::1' ||
+          clientIp === '127.0.0.1' ||
+          clientIp === '::ffff:127.0.0.1' ||
+          clientIp?.includes('10.0.2.2') ||
+          clientIp?.includes('localhost') ||
+          clientIp?.startsWith('192.168.') ||
+          clientIp?.startsWith('172.') ||
+          clientIp?.startsWith('10.');
+
+        if (isLocal) {
+          return true;
+        }
+      }
+      return false;
+    },
+
+    message: {
+      status: 'error',
+      message: 'Too many admin requests, please try again later.',
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+
+    handler: (req, res) => {
+      logger.warn(`Admin rate limit exceeded for IP: ${req.ip}`);
+      res.status(429).json({
+        status: 'error',
+        message: 'Too many admin requests, please try again later.',
       });
     },
   });

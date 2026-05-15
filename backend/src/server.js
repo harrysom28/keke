@@ -32,6 +32,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import { ensureRedisConnected, closeRedisConnection, isRedisConfigured } from './config/redis.js';
 import { securityMiddleware } from './middleware/security.js';
+import { optionalAuth } from './middleware/auth.js';
 import { initRateLimiters, limiters } from './middleware/rateLimiter.js';
 import {
   errorHandler,
@@ -551,7 +552,15 @@ const startServer = async () => {
 
     initRateLimiters();
     const { default: routes } = await import('./routes/index.js');
-    app.use('/api', limiters.apiLimiter);
+    app.use('/api', optionalAuth);
+    app.use('/api/admin', limiters.adminLimiter);
+    app.use('/api', (req, res, next) => {
+      const path = req.originalUrl || req.url || '';
+      if (path.startsWith('/api/admin')) {
+        return next();
+      }
+      return limiters.apiLimiter(req, res, next);
+    });
     app.use('/api', routes);
 
     // 404 catch-all must run after all route mounts
