@@ -16,6 +16,7 @@ import { PAY_CHANGE } from "@/constants";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
+import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
 
 interface LProps {
   label: string;
@@ -61,6 +62,8 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
   const { apiConfig } = useContext(AppContext);
   const [loading, setLoading] = useState(false);
   const [amount, setAmount] = useState("");
+  const insets = useCombinedSafeInsets();
+  const footerPad = sheetFooterBottomPadding(insets.bottom);
 
   const handlePay = () => {
     setLoading(true);
@@ -163,7 +166,10 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
           <ListItem label="Balance" value={`₦${amount}`} />
         </View>
       </ScrollView>
-      <View style={tw`border-t border-[#F0F0F0] pt-3`} collapsable={false}>
+      <View
+        style={[tw`border-t border-[#F0F0F0] pt-3`, { paddingBottom: footerPad }]}
+        collapsable={false}
+      >
         <Pressable
           onPress={handlePay}
           style={tw`bg-base-green py-4 rounded min-h-[48px] justify-center`}

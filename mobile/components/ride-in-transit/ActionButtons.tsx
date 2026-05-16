@@ -40,19 +40,21 @@ export function RiderActionButtons({
   onChat,
   onCancel,
   onEmergency,
+  compact = false,
 }: {
   state: RideState;
   onCall: () => void;
   onChat: () => void;
   onCancel: () => void;
   onEmergency: () => void;
+  compact?: boolean;
 }) {
   const showEmergency = state === "trip_started" || state === "near_destination";
   const dangerLabel = showEmergency ? "Emergency" : "Cancel ride";
   const dangerPress = showEmergency ? onEmergency : onCancel;
 
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, compact && styles.wrapCompact]}>
       <View style={styles.row}>
         <IconButton icon="call-outline" onPress={onCall} accessibilityLabel="Call driver" />
         <IconButton
@@ -88,6 +90,7 @@ export function DriverActionButtons({
   onChat,
   onCancel,
   loading,
+  compact = false,
 }: {
   state: RideState;
   onOpenNavigation: () => void;
@@ -98,6 +101,8 @@ export function DriverActionButtons({
   onChat: () => void;
   onCancel: () => void;
   loading?: { arrived?: boolean; start?: boolean; complete?: boolean };
+  /** Drop outer padding when rendered inside a sheet footer. */
+  compact?: boolean;
 }) {
   const primary = useMemo(() => {
     if (state === "heading_to_pickup") return { label: "Open Navigation", onPress: onOpenNavigation };
@@ -116,7 +121,7 @@ export function DriverActionButtons({
   }, [state, onMarkArrived, onOpenNavigation, onCancel, loading?.arrived]);
 
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, compact && styles.wrapCompact]}>
       <TouchableOpacity
         onPress={primary.onPress}
         style={styles.primaryBtn}
@@ -161,6 +166,11 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     gap: 10,
   },
+  wrapCompact: {
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
   row: {
     flexDirection: "row",
     justifyContent: "center",
@@ -171,6 +181,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 10,
+    width: "100%",
+    flexShrink: 0,
   },
   iconBtn: {
     width: 48,
@@ -195,6 +207,7 @@ const styles = StyleSheet.create({
     elevation: 4,
     minHeight: 48,
     justifyContent: "center",
+    marginBottom: 10,
   },
   primaryRow: {
     flexDirection: "row",

@@ -636,6 +636,13 @@ const Home = () => {
     }
   }, [notificationEvent, dispatch, fetchDriverDashboard]);
 
+  const { driverRideOfferPusherSeq, driverPendingRideOffer } = useSelector(AppDetailsState);
+
+  useEffect(() => {
+    if (!driverPendingRideOffer || !driverRideOfferPusherSeq) return;
+    router.push("/(driver)/(tabs)/(dashboard)/home-map");
+  }, [driverRideOfferPusherSeq, driverPendingRideOffer]);
+
   return (
     <>
       <DriverBookingSheet

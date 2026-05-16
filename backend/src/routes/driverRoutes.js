@@ -114,6 +114,7 @@ router.get('/security/pin-status', driverSecurityController.getPinStatusRoute);
 
 // Driver wallet and payout requests
 router.get('/wallet', payoutController.getMyWallet);
+router.get('/wallet/transactions', payoutController.getDriverWalletTransactions);
 router.get('/payouts', payoutController.getMyPayouts);
 router.post(
   '/payout/request',
@@ -129,6 +130,7 @@ router.post(
 
 // Ride management
 router.get('/rides/pending', driverController.getPendingRides);
+router.get('/rides/current-offer', driverController.getCurrentRideOffer);
 router.post('/rides/ack-request', requireDriverApproved, validationRules.ackRideOffer, validate, driverController.ackRideOffer);
 router.post('/rides/accept', requireDriverApproved, validationRules.acceptRide, validate, driverController.acceptRide);
 router.post('/rides/cancel', validationRules.rejectRide, validate, driverController.rejectRide);

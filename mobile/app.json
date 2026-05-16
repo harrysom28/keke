@@ -116,12 +116,13 @@
         "origin": false
       },
       "apiUrl": "https://api.getkekeapp.com",
-      "googleMapsApiKey": "AIzaSyC_YzZFaiK-ryYgPOS-b3DdFqz7o73WdgU",
+      "googleMapsApiKey": "",
       "googleClientId": "YOUR_GOOGLE_CLIENT_ID_HERE",
       "pusherKey": "1c30639ede328b1be2fc",
       "pusherCluster": "eu",
+      "physicalDeviceApiUrl": "https://api.getkekeapp.com",
       "eas": {
-        "projectId": "30082c2b-41a8-455d-86d3-984b6d259cd6"
+        "projectId": "94e02c15-7ea1-43dd-9eaa-5f03e9b9a871"
       }
     }
   }

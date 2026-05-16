@@ -902,8 +902,8 @@ function paymentRideIdString(payment) {
 
 /**
  * Get payment history - GET /api/user/payments
- * Includes Payment documents plus escrow wallet lines (fare_debit / service_charge)
- * when no matching Payment exists for that ride, so ride charges always appear.
+ * Merges Payment rows with UserWalletTransaction ledger lines (holds, releases,
+ * penalties, fare debits, top-ups, etc.) so wallet activity is fully visible.
  */
 export const getPaymentHistory = asyncHandler(async (req, res) => {
   const userId = req.user._id;
@@ -936,7 +936,7 @@ export const getPaymentHistory = asyncHandler(async (req, res) => {
     return res.json({
       status: 'success',
       data: {
-        payments: payments.map((payment) => formatPaymentResponse(payment)),
+        payments: payments.map((payment) => enrichRiderPaymentRow(payment)),
         pagination: {
           page,
           limit,
@@ -957,48 +957,45 @@ export const getPaymentHistory = asyncHandler(async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(FETCH_CAP)
       .lean(),
-    UserWalletTransaction.find({
-      userId,
-      type: { $in: ['fare_debit', 'service_charge'] },
-    })
+    UserWalletTransaction.find({ userId })
       .sort({ createdAt: -1 })
-      .limit(300)
+      .limit(400)
       .lean(),
   ]);
 
   const rideIdsWithFarePayment = new Set();
+  const topupRefs = new Set();
   for (const p of paymentDocs) {
     const rid = paymentRideIdString(p);
     if (rid) rideIdsWithFarePayment.add(rid);
+    if (p.reference) topupRefs.add(String(p.reference));
+    if (p.transactionId) topupRefs.add(String(p.transactionId));
   }
 
-  const paymentRows = paymentDocs.map((p) => formatPaymentResponse(p));
+  const paymentRows = paymentDocs.map((p) => enrichRiderPaymentRow(p));
+
+  const RIDER_LEDGER_FALLBACK = {
+    topup: 'Wallet top-up',
+    hold: 'Funds held for ride',
+    hold_release: 'Hold released to wallet',
+    service_charge: 'Service charge',
+    fare_debit: 'Ride payment',
+    fare_credit: 'Earnings credit',
+    platform_fee: 'Platform fee',
+    cancel_penalty: 'Cancellation fee',
+    cancel_payout: 'Cancellation compensation',
+    withdrawal: 'Withdrawal',
+    refund: 'Refund',
+  };
 
   const ledgerRows = [];
   for (const tx of ledgerDocs) {
-    if (!tx.rideId) continue;
-    const rid = tx.rideId.toString();
-    if (tx.type === 'fare_debit' && rideIdsWithFarePayment.has(rid)) {
-      continue;
-    }
-    ledgerRows.push({
-      payment_id: `ledger_${tx._id.toString()}`,
-      user_id: userId.toString(),
-      ride_id: rid,
-      amount: Math.abs(Number(tx.amount) || 0),
-      currency: 'NGN',
-      method: 'wallet',
-      status: tx.status || 'completed',
-      transaction_id: tx.idempotencyKey || null,
-      stripe_payment_intent_id: null,
-      refund_amount: 0,
-      created_at: tx.createdAt,
-      paid_at: tx.createdAt,
-      description:
-        tx.type === 'service_charge'
-          ? 'Service charge (ride)'
-          : 'Ride fare (wallet)',
+    const row = buildRiderWalletLedgerRow(tx, userId, {
+      rideIdsWithFarePayment,
+      topupRefs,
+      fallbackLabels: RIDER_LEDGER_FALLBACK,
     });
+    if (row) ledgerRows.push(row);
   }
 
   const merged = [...paymentRows, ...ledgerRows].sort(
@@ -1042,3 +1039,78 @@ const formatPaymentResponse = (payment) => {
     paid_at: payment.paidAt,
   };
 };
+
+function getPaymentMeta(payment, key) {
+  const m = payment.metadata;
+  if (!m) return null;
+  if (typeof m.get === 'function') return m.get(key);
+  return m[key];
+}
+
+function riderPaymentEntryType(payment) {
+  const rideId = paymentRideIdString(payment);
+  const amt = Number(payment.amount) || 0;
+  if (rideId && amt >= 0) return 'debit';
+  if (!rideId && amt > 0) return 'credit';
+  if (!rideId && amt < 0) return 'debit';
+  return 'neutral';
+}
+
+function riderPaymentDescription(payment) {
+  const rideId = paymentRideIdString(payment);
+  const amt = Number(payment.amount) || 0;
+  const metaType = getPaymentMeta(payment, 'type');
+  if (metaType === 'withdrawal' || amt < 0) return 'Withdrawal request';
+  if (payment.paymentType === 'wallet_topup' || (!rideId && amt > 0)) return 'Wallet top-up';
+  if (rideId) return 'Ride payment';
+  return 'Payment';
+}
+
+function enrichRiderPaymentRow(payment) {
+  const base = formatPaymentResponse(payment);
+  const rideId = paymentRideIdString(payment);
+  return {
+    ...base,
+    description: riderPaymentDescription(payment),
+    entry_type: riderPaymentEntryType(payment),
+    ledger_type: rideId ? 'ride_payment' : payment.paymentType || 'payment',
+    ledger_source: 'payment',
+  };
+}
+
+function buildRiderWalletLedgerRow(tx, userId, { rideIdsWithFarePayment, topupRefs, fallbackLabels }) {
+  const rawAmount = Number(tx.amount) || 0;
+  if (tx.type === 'service_charge' && rawAmount === 0) {
+    return null;
+  }
+  if (tx.type === 'topup' && tx.providerRef && topupRefs.has(String(tx.providerRef))) {
+    return null;
+  }
+  if (tx.type === 'fare_debit' && tx.rideId && rideIdsWithFarePayment.has(tx.rideId.toString())) {
+    return null;
+  }
+
+  const entry_type = rawAmount >= 0 ? 'credit' : 'debit';
+  const abs = Math.abs(rawAmount);
+  const description =
+    (tx.description && String(tx.description).trim()) || fallbackLabels[tx.type] || 'Wallet transaction';
+
+  return {
+    payment_id: `ledger_${tx._id.toString()}`,
+    user_id: userId.toString(),
+    ride_id: tx.rideId ? tx.rideId.toString() : null,
+    amount: abs,
+    currency: 'NGN',
+    method: 'wallet',
+    status: tx.status || 'completed',
+    transaction_id: tx.providerRef || tx.idempotencyKey || null,
+    stripe_payment_intent_id: null,
+    refund_amount: 0,
+    created_at: tx.createdAt,
+    paid_at: tx.createdAt,
+    description,
+    entry_type,
+    ledger_type: tx.type,
+    ledger_source: 'user_wallet',
+  };
+}

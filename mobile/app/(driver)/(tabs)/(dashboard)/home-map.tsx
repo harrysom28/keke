@@ -6,8 +6,8 @@ import {
 } from "@/store/AppSlice";
 import {
   DRIVER_ACTIVE_RIDE,
+  DRIVER_CURRENT_RIDE_OFFER,
   DRIVER_PASSENGER_LOCATION,
-  DRIVER_PENDING_RIDE,
   LOCATION_UPDATE,
 } from "@/constants";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -62,7 +62,10 @@ import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import Svg, { Path } from "react-native-svg";
-import { consumeInitialDriverRouteRedirect } from "@/utils/driverInitialRoute";
+import {
+  consumeInitialDriverRouteRedirect,
+  markInitialDriverRouteHandled,
+} from "@/utils/driverInitialRoute";
 import { LocationPermissionBanner } from "@/components/LocationPermissionBanner";
 import { resolveLocationPermissionFromBanner } from "@/utils/locationPermission";
 
@@ -81,8 +84,13 @@ interface IPosition {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { subscription, unread_count, driverRideOfferPusherSeq, driverRideOfferPusherPayload } =
-    useSelector(AppDetailsState);
+  const {
+    subscription,
+    unread_count,
+    driverPendingRideOffer,
+    driverRideOfferPusherSeq,
+    driverRideOfferPusherPayload,
+  } = useSelector(AppDetailsState);
   const { getCurrentUser, apiConfig, notificationEvent } =
     useContext(AppContext);
   const isFocused = useIsFocused();
@@ -96,9 +104,13 @@ export default function HomeScreen() {
   // the dashboard home. Intentional in-session pushes (button tap, ride-offer
   // notification handler) run after the initial route is already marked
   // handled, so they fall through and render normally.
-  const [initialRedirecting, setInitialRedirecting] = useState(() =>
-    consumeInitialDriverRouteRedirect()
-  );
+  const [initialRedirecting, setInitialRedirecting] = useState(() => {
+    if (driverPendingRideOffer || driverRideOfferPusherPayload) {
+      markInitialDriverRouteHandled();
+      return false;
+    }
+    return consumeInitialDriverRouteRedirect();
+  });
   useEffect(() => {
     if (!initialRedirecting) return;
     router.replace("/(driver)/(tabs)/(dashboard)/home");
@@ -108,6 +120,7 @@ export default function HomeScreen() {
 
   const newRideSheetRef = useRef<BottomSheetMethods>(null);
   const payChangeSheetRef = useRef<BottomSheetMethods>(null);
+  const declinedOfferRideIdsRef = useRef<Set<string>>(new Set());
   const [ride, setRide] = useState<Partial<TDriverActiveRide>>({});
   const [offerDeadlineMs, setOfferDeadlineMs] = useState<number | null>(null);
   const [nearby, setNearby] = useState<
@@ -259,12 +272,32 @@ export default function HomeScreen() {
     }
   }, [isFocused]);
 
+  const clearOfferUI = useCallback(() => {
+    dispatch(setAppData({ driverPendingRideOffer: false }));
+    newRideSheetRef.current?.close();
+    setOfferDeadlineMs(null);
+    setRide((prev) => {
+      if (prev?.accepted_by_driver) return prev;
+      return {};
+    });
+  }, [dispatch]);
+
+  const handleDeclineOffer = useCallback(
+    (rideId: string) => {
+      const id = String(rideId || "").trim();
+      if (id) declinedOfferRideIdsRef.current.add(id);
+      clearOfferUI();
+    },
+    [clearOfferUI]
+  );
+
   const handlePusherRideRequest = useCallback((raw: Record<string, unknown>) => {
     dispatch(setAppData({ driverPendingRideOffer: true }));
     const rider = raw.rider as { name?: string; rating?: number } | undefined;
     const pickup = raw.pickup as { address?: string; lat?: number; lng?: number } | undefined;
     const dropoff = raw.dropoff as { address?: string; lat?: number; lng?: number } | undefined;
     const rideIdStr = String(raw.ride_id ?? "");
+    if (rideIdStr) declinedOfferRideIdsRef.current.delete(rideIdStr);
     const expiresSec = Number(raw.offer_expires_in ?? 60);
     const fare = raw.fare;
 
@@ -309,6 +342,7 @@ export default function HomeScreen() {
 
   const lastProcessedRideOfferSeqRef = useRef(0);
   useEffect(() => {
+    if (!isFocused) return;
     const seq = driverRideOfferPusherSeq ?? 0;
     const payload = driverRideOfferPusherPayload;
     if (!payload || !seq || seq === lastProcessedRideOfferSeqRef.current) {
@@ -318,56 +352,60 @@ export default function HomeScreen() {
     handlePusherRideRequest(payload);
     dispatch(setAppData({ driverRideOfferPusherPayload: null }));
   }, [
+    isFocused,
     driverRideOfferPusherSeq,
     driverRideOfferPusherPayload,
     handlePusherRideRequest,
     dispatch,
   ]);
 
-  const getPendingRide = () => {
+  const applyCurrentOfferPayload = useCallback(
+    (offerRide: Record<string, unknown> | null | undefined) => {
+      if (!offerRide || typeof offerRide !== "object") {
+        clearOfferUI();
+        return;
+      }
+      const rideIdStr = String(offerRide.ride_id ?? "").trim();
+      if (!rideIdStr || declinedOfferRideIdsRef.current.has(rideIdStr)) {
+        clearOfferUI();
+        return;
+      }
+      const expiresSec = Number(offerRide.offer_expires_in ?? 60);
+      dispatch(setAppData({ driverPendingRideOffer: true }));
+      const fareNum = Number(offerRide.fare ?? offerRide.cost ?? 0);
+      setRide({
+        ...(offerRide as Partial<TDriverActiveRide>),
+        ride_id: rideIdStr,
+        offer_id: String(offerRide.offer_id ?? ""),
+        cost: String(Math.round(fareNum)),
+        status: "requested",
+        accepted_by_driver: false,
+        is_ride_started: false,
+        drop_off_completed: false,
+      });
+      setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
+      newRideSheetRef.current?.open();
+    },
+    [clearOfferUI, dispatch]
+  );
+
+  const refreshCurrentOffer = useCallback(() => {
     axios
-      .get(DRIVER_PENDING_RIDE, apiConfig)
+      .get(DRIVER_CURRENT_RIDE_OFFER, apiConfig)
       .then(({ data }) => {
-        const rides = data?.data?.rides ?? data?.rides ?? [];
-        if (Array.isArray(rides) && rides.length > 0) {
-          dispatch(setAppData({ driverPendingRideOffer: true }));
-          setOfferDeadlineMs(null);
-          setRide(rides[0]);
-          newRideSheetRef.current?.open();
-        } else {
-          dispatch(setAppData({ driverPendingRideOffer: false }));
-          newRideSheetRef.current?.close();
-          setRide({});
-        }
+        const offerRide = data?.data?.ride ?? null;
+        applyCurrentOfferPayload(offerRide);
       })
       .catch((err) => {
-        console.log(err?.response?.data);
-        // Silently handle 404 errors (driver profile not found, etc.)
-        if (err?.response?.status === 404) {
-          console.log('Resource not found (404) - silently handling');
-          return;
-        }
-        // Use centralized error handler to extract safe string message
-        const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
-        safeShowMessage({
-          type: "danger",
-          message: errorMessage,
-        });
+        if (err?.response?.status === 404) return;
+        const errorMessage = getErrorMessage(err, "An error occurred. Please try again.");
+        safeShowMessage({ type: "danger", message: errorMessage });
       });
-    // .finally(() => setLoading(false));
-  };
+  }, [apiConfig, applyCurrentOfferPayload]);
 
   const handleOfferExpired = () => {
-    dispatch(setAppData({ driverPendingRideOffer: false }));
-    newRideSheetRef.current?.close();
-    setOfferDeadlineMs(null);
-    setRide((prev) => {
-      if (prev?.status === "requested" && !prev?.accepted_by_driver) {
-        return {};
-      }
-      return prev;
-    });
-    getPendingRide();
+    clearOfferUI();
+    refreshCurrentOffer();
   };
 
   useEffect(() => {
@@ -416,7 +454,7 @@ export default function HomeScreen() {
               );
             }, 100);
           }
-          getPendingRide();
+          refreshCurrentOffer();
         };
 
         // Backend: driver active-ride should mirror the rider contract — no finished trip should be returned as active.
@@ -496,6 +534,9 @@ export default function HomeScreen() {
     if (isFocused) {
       getActiveRide();
       getLocations();
+      if (driverPendingRideOffer) {
+        refreshCurrentOffer();
+      }
     }
   }, [isFocused]);
 
@@ -720,6 +761,7 @@ export default function HomeScreen() {
           onOfferResolved={() =>
             dispatch(setAppData({ driverPendingRideOffer: false }))
           }
+          onDeclineOffer={handleDeclineOffer}
           offerDeadlineMs={offerDeadlineMs}
           onOfferExpired={handleOfferExpired}
         />

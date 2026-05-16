@@ -10,8 +10,14 @@ import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import User from '../models/User.js';
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
+import Transaction from '../models/Transaction.js';
 import logger from '../utils/logger.js';
 import { getSettings, calculateFareBreakdown, getCancellationPolicy, getCancellationGuards } from './settingsService.js';
+import {
+  creditCancellationCompensation,
+  ensureWalletDayStats,
+  getOrCreateWallet,
+} from './walletService.js';
 
 /**
  * Rider cancellation penalty split: up to this amount (NGN) goes to the driver; the rest is platform revenue.
@@ -489,11 +495,21 @@ export async function driverCancelPayoutAllowed(driverUserId) {
   const { maxDriverPayoutsPerDay } = await getCancellationGuards();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const count = await UserWalletTransaction.countDocuments({
+  const legacyCount = await UserWalletTransaction.countDocuments({
     userId: driverUserId,
     type: 'cancel_payout',
     createdAt: { $gte: today },
   });
+  let driverWalletTxCount = 0;
+  const driverDoc = await Driver.findOne({ user: driverUserId }).select('_id').lean();
+  if (driverDoc?._id) {
+    driverWalletTxCount = await Transaction.countDocuments({
+      driverId: driverDoc._id,
+      type: 'cancellation_compensation',
+      createdAt: { $gte: today },
+    });
+  }
+  const count = legacyCount + driverWalletTxCount;
   return count < maxDriverPayoutsPerDay;
 }
 
@@ -511,6 +527,18 @@ export async function processCancellation(rideId, riderId, driverUserId, fareAmo
     return { success: true, scenario, skipped: true };
   }
 
+  if (driverUserId && (scenario === 'afterAccept' || scenario === 'afterArrival')) {
+    try {
+      const d = await Driver.findOne({ user: driverUserId }).select('_id').lean();
+      if (d?._id) {
+        await getOrCreateWallet(d._id);
+        await ensureWalletDayStats(d._id);
+      }
+    } catch (err) {
+      logger.warn(`processCancellation: driver wallet preload failed: ${err.message}`);
+    }
+  }
+
   const runCancellation = async (useSession) => {
     const session = useSession ? await mongoose.startSession().catch(() => null) : null;
     const opts = session ? { session } : {};
@@ -522,6 +550,15 @@ export async function processCancellation(rideId, riderId, driverUserId, fareAmo
       const policyAfterAccept = await getCancellationPolicy('afterAccept');
       const policyAfterArrival = await getCancellationPolicy('afterArrival');
       const allowDriverPayout = driverUserId ? await driverCancelPayoutAllowed(driverUserId) : false;
+
+      let driverMongoId = null;
+      if (driverUserId) {
+        const drow = await Driver.findOne({ user: driverUserId })
+          .select('_id')
+          .session(session || undefined)
+          .lean();
+        driverMongoId = drow?._id ?? null;
+      }
 
       if (scenario === 'beforeAccept' || scenario === 'driverCancel') {
         let actualRelease = releaseAmount;
@@ -596,25 +633,19 @@ export async function processCancellation(rideId, riderId, driverUserId, fareAmo
           status: 'completed',
         });
 
-        if (driverUserId && allowDriverPayout && driverPayout > 0) {
-          const driverWallet = await UserWallet.findOneAndUpdate(
-            { userId: driverUserId, userType: 'driver' },
-            { $inc: { availableBalance: driverPayout, totalEarned: driverPayout } },
-            { new: true, ...opts }
-          );
-          if (driverWallet) {
-            transactions.push({
-              userId: driverUserId,
-              rideId,
-              type: 'cancel_payout',
-              amount: driverPayout,
-              balanceBefore: driverWallet.availableBalance - driverPayout,
-              balanceAfter: driverWallet.availableBalance,
-              description: 'Cancellation compensation',
-              idempotencyKey: `cancel_driver:${rideId}`,
-              status: 'completed',
-            });
+        if (driverMongoId && allowDriverPayout && driverPayout > 0) {
+          try {
+            await creditCancellationCompensation(driverMongoId, driverPayout, rideId, session);
+          } catch (creditErr) {
+            logger.error(
+              `processCancellation ride ${rideId}: DriverWallet cancel credit failed: ${creditErr.message}`
+            );
+            throw creditErr;
           }
+        } else if (driverMongoId && driverPayout > 0 && !allowDriverPayout) {
+          logger.warn(
+            `processCancellation ride ${rideId}: driver compensation ₦${driverPayout} skipped (daily payout cap)`
+          );
         }
       } else if (scenario === 'afterArrival') {
         const driverPayout = policyAfterArrival.driverPayout ?? 150;
@@ -637,25 +668,19 @@ export async function processCancellation(rideId, riderId, driverUserId, fareAmo
           status: 'completed',
         });
 
-        if (driverUserId && allowDriverPayout && driverPayout > 0) {
-          const driverWallet = await UserWallet.findOneAndUpdate(
-            { userId: driverUserId, userType: 'driver' },
-            { $inc: { availableBalance: driverPayout, totalEarned: driverPayout } },
-            { new: true, ...opts }
-          );
-          if (driverWallet) {
-            transactions.push({
-              userId: driverUserId,
-              rideId,
-              type: 'cancel_payout',
-              amount: driverPayout,
-              balanceBefore: driverWallet.availableBalance - driverPayout,
-              balanceAfter: driverWallet.availableBalance,
-              description: 'Compensation — rider cancelled after arrival',
-              idempotencyKey: `cancel_driver:${rideId}`,
-              status: 'completed',
-            });
+        if (driverMongoId && allowDriverPayout && driverPayout > 0) {
+          try {
+            await creditCancellationCompensation(driverMongoId, driverPayout, rideId, session);
+          } catch (creditErr) {
+            logger.error(
+              `processCancellation ride ${rideId}: DriverWallet after-arrival credit failed: ${creditErr.message}`
+            );
+            throw creditErr;
           }
+        } else if (driverMongoId && driverPayout > 0 && !allowDriverPayout) {
+          logger.warn(
+            `processCancellation ride ${rideId}: arrival cancel compensation ₦${driverPayout} skipped (daily cap)`
+          );
         }
       }
 

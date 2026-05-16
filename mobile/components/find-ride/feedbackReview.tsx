@@ -24,7 +24,7 @@ import { TRide } from "@/types";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
-import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
 import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { useDispatch } from "react-redux";
 
@@ -273,7 +273,7 @@ const ReviewSheet = ({ temp, action }: Props) => {
           <View
             style={[
               tw`bg-white border-t border-[#F0F0F0] pt-3 px-0`,
-              { paddingBottom: Math.max(insets.bottom + 8, 12) },
+              { paddingBottom: sheetFooterBottomPadding(insets.bottom) },
             ]}
             collapsable={false}
           >

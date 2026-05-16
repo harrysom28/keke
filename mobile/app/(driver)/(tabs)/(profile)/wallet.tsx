@@ -39,6 +39,9 @@ interface Transaction {
   type: "topup" | "withdrawal" | "payment" | "refund";
   created_at: string;
   description?: string;
+  entry_type?: "credit" | "debit" | "neutral";
+  ledger_type?: string;
+  ride_id?: string | null;
 }
 
 const WalletScreen = () => {
@@ -112,24 +115,32 @@ const WalletScreen = () => {
   const fetchTransactions = async () => {
     setLoading(true);
     try {
-      const { data } = await apiClient.get("user/payments", {
-        params: { limit: 50 },
+      const { data } = await apiClient.get("driver/wallet/transactions", {
+        params: { limit: 80 },
       });
-      if (data?.data?.payments) {
-        // Transform payments to include type
-        const transformed = data.data.payments.map((payment: any) => ({
-          ...payment,
-          type: payment.ride_id
-            ? "payment"
-            : payment.amount > 0
-            ? "topup"
-            : "withdrawal",
+      if (data?.data?.transactions) {
+        const transformed = data.data.transactions.map((row: any) => ({
+          ...row,
+          type:
+            row.entry_type === "neutral"
+              ? "payment"
+              : row.entry_type === "credit"
+              ? "topup"
+              : row.entry_type === "debit"
+              ? row.ride_id
+                ? "payment"
+                : "withdrawal"
+              : row.ride_id
+              ? "payment"
+              : row.amount > 0
+              ? "topup"
+              : "withdrawal",
           description:
-            payment.description ||
-            (payment.ride_id
-              ? "Ride Payment"
-              : payment.amount > 0
-              ? "Wallet Top-up"
+            row.description ||
+            (row.ride_id
+              ? "Ride payment"
+              : row.amount > 0
+              ? "Wallet top-up"
               : "Withdrawal"),
         }));
         setTransactions(transformed);
@@ -248,30 +259,42 @@ const WalletScreen = () => {
     });
   };
 
-  const getTransactionIcon = (type: string, method: string) => {
-    if (type === "topup" || type === "refund") {
+  const getTransactionIcon = (
+    entryType: "credit" | "debit" | "neutral",
+    _method: string
+  ) => {
+    if (entryType === "credit") {
       return <AntDesign name="arrow-down" size={20} color="#3C8F7C" />;
-    } else if (type === "withdrawal") {
-      return <AntDesign name="arrow-up" size={20} color="#F31717" />;
-    } else {
-      return <Feather name="credit-card" size={20} color="#8F92A1" />;
     }
+    if (entryType === "debit") {
+      return <AntDesign name="arrow-up" size={20} color="#F31717" />;
+    }
+    return <Feather name="info" size={20} color="#8F92A1" />;
   };
 
-  const getTransactionColor = (type: string) => {
-    if (type === "topup" || type === "refund") {
-      return "#3C8F7C";
-    } else if (type === "withdrawal") {
-      return "#F31717";
-    } else {
-      return "#8F92A1";
+  const resolveEntryType = (item: Transaction): "credit" | "debit" | "neutral" => {
+    if (item.entry_type === "credit" || item.entry_type === "debit" || item.entry_type === "neutral") {
+      return item.entry_type;
     }
+    if (item.type === "topup" || item.type === "refund") return "credit";
+    if (item.type === "withdrawal") return "debit";
+    return "debit";
+  };
+
+  const transactionSubtitle = (item: Transaction) => {
+    if (item.method === "driver_wallet") return "Earnings wallet";
+    if (item.method === "stripe" || item.method === "card") return "Card payment";
+    if (item.method === "bank_transfer") return "Bank transfer";
+    if (item.method === "wallet") return "Wallet ledger";
+    return item.method || "";
   };
 
   const renderTransaction = ({ item }: { item: Transaction }) => {
-    const isPositive = item.type === "topup" || item.type === "refund";
-    const amountColor = isPositive ? "#3C8F7C" : "#F31717";
-    const amountPrefix = isPositive ? "+" : "-";
+    const entryType = resolveEntryType(item);
+    const isCredit = entryType === "credit";
+    const isNeutral = entryType === "neutral";
+    const amountColor = isNeutral ? "#8F92A1" : isCredit ? "#3C8F7C" : "#F31717";
+    const amountPrefix = isNeutral ? "" : isCredit ? "+" : "-";
 
     return (
       <View
@@ -282,11 +305,16 @@ const WalletScreen = () => {
             style={tw.style(
               `w-10 h-10 rounded-full items-center justify-center`,
               {
-                backgroundColor: isPositive ? "#3C8F7C20" : "#F3171720",
+                backgroundColor:
+                  entryType === "neutral"
+                    ? "#8F92A120"
+                    : isCredit
+                    ? "#3C8F7C20"
+                    : "#F3171720",
               }
             )}
           >
-            {getTransactionIcon(item.type, item.method)}
+            {getTransactionIcon(entryType, item.method)}
           </View>
           <View style={tw`ml-3 flex-1`}>
             <Text
@@ -315,13 +343,7 @@ const WalletScreen = () => {
                 fontFamily: "RobotoRegular",
               })}
             >
-              {item.method === "stripe" || item.method === "card"
-                ? "Card Payment"
-                : item.method === "bank_transfer"
-                ? "Bank Transfer"
-                : item.method === "wallet"
-                ? "Wallet"
-                : item.method}
+              {transactionSubtitle(item)}
               {item.status === "pending" && " • Pending"}
             </Text>
           </View>
@@ -333,7 +355,9 @@ const WalletScreen = () => {
               fontFamily: "RobotoBold",
             })}
           >
-            {amountPrefix}₦{item.amount.toLocaleString()}
+            {isNeutral
+              ? `₦${item.amount.toLocaleString()}`
+              : `${amountPrefix}₦${item.amount.toLocaleString()}`}
           </Text>
           {item.status === "pending" && (
             <View

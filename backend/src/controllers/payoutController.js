@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
 import PayoutRequest from '../models/PayoutRequest.js';
 import Driver from '../models/Driver.js';
+import Payment from '../models/Payment.js';
+import Transaction from '../models/Transaction.js';
+import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import { getOrCreateWallet, debitForPayout, releasePendingForDriver } from '../services/walletService.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
@@ -192,6 +195,201 @@ export const getMyWallet = asyncHandler(async (req, res) => {
       total_earned: wallet.totalEarned,
       total_withdrawn: wallet.totalWithdrawn,
       currency: wallet.currency,
+    },
+  });
+});
+
+function paymentRideIdString(payment) {
+  const r = payment?.ride;
+  if (!r) return null;
+  if (typeof r === 'object' && r._id) return r._id.toString();
+  return String(r);
+}
+
+function driverPaymentEntryType(payment) {
+  const rideId = paymentRideIdString(payment);
+  const amt = Number(payment.amount) || 0;
+  if (rideId && amt >= 0) return 'debit';
+  if (!rideId && amt > 0) return 'credit';
+  if (!rideId && amt < 0) return 'debit';
+  return 'neutral';
+}
+
+function driverPaymentDescription(payment) {
+  const rideId = paymentRideIdString(payment);
+  const amt = Number(payment.amount) || 0;
+  const meta = payment.metadata;
+  const metaType = typeof meta?.get === 'function' ? meta.get('type') : meta?.type;
+  if (metaType === 'withdrawal' || amt < 0) return 'Withdrawal request';
+  if (payment.paymentType === 'wallet_topup' || (!rideId && amt > 0)) return 'Wallet top-up';
+  if (rideId) return 'Ride payment';
+  return 'Payment';
+}
+
+function formatDriverPaymentRow(payment, userId) {
+  const ride_id = paymentRideIdString(payment);
+  const uid = payment.user?._id?.toString?.() || payment.user?.toString?.() || String(userId);
+  return {
+    payment_id: payment._id.toString(),
+    user_id: uid,
+    ride_id,
+    amount: Math.abs(Number(payment.amount) || 0),
+    currency: payment.currency || 'NGN',
+    method: payment.method || 'wallet',
+    status: payment.status,
+    transaction_id: payment.transactionId,
+    stripe_payment_intent_id: payment.stripePaymentIntentId,
+    refund_amount: payment.refundAmount,
+    created_at: payment.createdAt,
+    paid_at: payment.paidAt,
+    description: driverPaymentDescription(payment),
+    entry_type: driverPaymentEntryType(payment),
+    ledger_type: ride_id ? 'ridepayment' : payment.paymentType || 'payment',
+    ledger_source: 'payment',
+  };
+}
+
+function driverWalletTxnEntry(tx) {
+  const { type, amount } = tx;
+  const n = Number(amount) || 0;
+  if (type === 'commission') return { entry_type: 'neutral', abs: Math.abs(n) };
+  if (n >= 0) return { entry_type: 'credit', abs: Math.abs(n) };
+  return { entry_type: 'debit', abs: Math.abs(n) };
+}
+
+const DRIVER_WALLET_TX_DESCRIPTION = {
+  ride_earning: 'Ride earnings (pending clearance)',
+  commission: 'Platform fee (ride)',
+  withdrawal: 'Withdrawal (processed)',
+  refund: 'Earnings adjustment',
+  balance_release: 'Earnings released to wallet',
+  cancellation_compensation: 'Cancellation compensation',
+};
+
+function formatDriverWalletTxnRow(tx) {
+  const { entry_type, abs } = driverWalletTxnEntry(tx);
+  const rideId = tx.rideId ? tx.rideId.toString() : null;
+  return {
+    payment_id: `dwt_${tx.transactionId}`,
+    user_id: null,
+    ride_id: rideId,
+    amount: abs,
+    currency: tx.currency || 'NGN',
+    method: 'driver_wallet',
+    status: 'completed',
+    transaction_id: tx.transactionId,
+    stripe_payment_intent_id: null,
+    refund_amount: 0,
+    created_at: tx.createdAt,
+    paid_at: tx.createdAt,
+    description: DRIVER_WALLET_TX_DESCRIPTION[tx.type] || 'Wallet activity',
+    entry_type,
+    ledger_type: tx.type,
+    ledger_source: 'driver_wallet',
+    balance_before: tx.balanceBefore,
+    balance_after: tx.balanceAfter,
+  };
+}
+
+function formatDriverLegacyUwtRow(uwt, userId) {
+  const raw = Number(uwt.amount) || 0;
+  const entry_type = raw >= 0 ? 'credit' : 'debit';
+  const rideId = uwt.rideId ? uwt.rideId.toString() : null;
+  const label =
+    uwt.type === 'cancel_payout'
+      ? 'Cancellation compensation (legacy)'
+      : uwt.description || 'Ride earnings (legacy)';
+  return {
+    payment_id: `ledger_${uwt._id.toString()}`,
+    user_id: userId.toString(),
+    ride_id: rideId,
+    amount: Math.abs(raw),
+    currency: 'NGN',
+    method: 'wallet',
+    status: uwt.status || 'completed',
+    transaction_id: uwt.idempotencyKey,
+    stripe_payment_intent_id: null,
+    refund_amount: 0,
+    created_at: uwt.createdAt,
+    paid_at: uwt.createdAt,
+    description: label,
+    entry_type,
+    ledger_type: uwt.type,
+    ledger_source: 'user_wallet_legacy',
+  };
+}
+
+/**
+ * Driver wallet ledger + Paystack / withdrawal Payment rows — GET /api/driver/wallet/transactions
+ */
+export const getDriverWalletTransactions = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const driver = await Driver.findOne({ user: userId });
+  if (!driver) throw new NotFoundError('Driver profile');
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const page = parseInt(req.query.page, 10) || 1;
+  const skip = (page - 1) * limit;
+  const FETCH_CAP = 500;
+
+  const [walletTxns, legacyUwts, paymentDocs] = await Promise.all([
+    Transaction.find({ driverId: driver._id }).sort({ createdAt: -1 }).limit(FETCH_CAP).lean(),
+    UserWalletTransaction.find({
+      userId,
+      type: { $in: ['fare_credit', 'cancel_payout'] },
+    })
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean(),
+    Payment.find({ user: userId })
+      .sort({ createdAt: -1 })
+      .limit(FETCH_CAP)
+      .lean(),
+  ]);
+
+  const rideIdsWithRideEarning = new Set(
+    walletTxns.filter((t) => t.type === 'ride_earning' && t.rideId).map((t) => t.rideId.toString())
+  );
+  const rideIdsWithCancelComp = new Set(
+    walletTxns
+      .filter((t) => t.type === 'cancellation_compensation' && t.rideId)
+      .map((t) => t.rideId.toString())
+  );
+
+  const rows = [];
+
+  for (const t of walletTxns) {
+    rows.push(formatDriverWalletTxnRow(t));
+  }
+
+  for (const u of legacyUwts) {
+    if (u.type === 'fare_credit' && u.rideId && rideIdsWithRideEarning.has(u.rideId.toString())) {
+      continue;
+    }
+    if (u.type === 'cancel_payout' && u.rideId && rideIdsWithCancelComp.has(u.rideId.toString())) {
+      continue;
+    }
+    rows.push(formatDriverLegacyUwtRow(u, userId));
+  }
+
+  for (const p of paymentDocs) {
+    rows.push(formatDriverPaymentRow(p, userId));
+  }
+
+  rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  const paginated = rows.slice(skip, skip + limit);
+
+  res.json({
+    status: 'success',
+    data: {
+      transactions: paginated,
+      pagination: {
+        page,
+        limit,
+        total: rows.length,
+        pages: Math.ceil(rows.length / limit) || 0,
+      },
     },
   });
 });

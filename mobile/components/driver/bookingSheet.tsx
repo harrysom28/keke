@@ -30,7 +30,7 @@ import { showMessage } from "react-native-flash-message";
 import { getErrorMessage } from "@/utils/errorHandler";
 import tw from "@/lib/tailwind";
 import { useSelector } from "react-redux";
-import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
 
 type SheetBookingStage = "scheduled" | "searching" | "confirmed" | "ongoing" | "finished";
 
@@ -687,7 +687,7 @@ export const DriverBookingSheet = ({
               style={tw.style(
                 `flex-col gap-y-4`,
                 hasAssignedDriver && `mt-12`,
-                { paddingBottom: Math.max(insets.bottom + 8, 14) }
+                { paddingBottom: sheetFooterBottomPadding(insets.bottom) }
               )}
             >
               {/* Accept Ride button - only for drivers viewing unaccepted bookings */}

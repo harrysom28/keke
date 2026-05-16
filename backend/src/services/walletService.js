@@ -328,9 +328,68 @@ async function debitRefund(driverId, amount, rideId, reason, session = null) {
   return { wallet: walletRefreshed, transactionId: txnId };
 }
 
+/**
+ * Credit driver available balance when rider cancels (after accept / after arrival).
+ * Goes to DriverWallet (what the driver app displays), not UserWallet.
+ * Idempotent per ride + driver via Transaction row.
+ */
+async function creditCancellationCompensation(driverId, amount, rideId, session = null) {
+  if (!driverId || amount <= 0) return null;
+  const opts = session ? { session } : {};
+
+  const dup = await Transaction.findOne({
+    rideId,
+    driverId,
+    type: 'cancellation_compensation',
+  })
+    .session(session || null)
+    .lean();
+  if (dup) return { duplicate: true, transactionId: dup.transactionId };
+
+  let wallet = await DriverWallet.findOne({ driverId }).session(session || null);
+  if (!wallet) throw new Error('DriverWallet not found');
+
+  const balanceBefore = wallet.availableBalance;
+  const balanceAfter = balanceBefore + amount;
+
+  wallet = await DriverWallet.findOneAndUpdate(
+    { driverId },
+    {
+      $inc: {
+        availableBalance: amount,
+        totalEarned: amount,
+        todayEarnings: amount,
+      },
+    },
+    { new: true, ...opts }
+  );
+  if (!wallet) throw new Error('DriverWallet credit failed');
+
+  const txnId = generateTransactionId('CAN');
+  await Transaction.create(
+    [
+      {
+        transactionId: txnId,
+        rideId,
+        driverId,
+        type: 'cancellation_compensation',
+        amount,
+        currency: wallet.currency,
+        balanceBefore,
+        balanceAfter,
+        metadata: { source: 'rider_cancellation' },
+      },
+    ],
+    opts
+  );
+
+  return { wallet, transactionId: txnId };
+}
+
 export {
   getOrCreateWallet,
   creditRideEarning,
+  creditCancellationCompensation,
   releasePendingForDriver,
   releaseAllPendingBalances,
   debitForPayout,

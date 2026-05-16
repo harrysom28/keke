@@ -29,7 +29,7 @@ import { geocodeAddress, resolvePickupLabel, reverseGeocode } from "@/utils/maps
 import tw from "@/lib/tailwind";
 import { useDispatch, useSelector } from "react-redux";
 import { useFocusEffect } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
 import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
@@ -120,7 +120,7 @@ const vehicleMatchesScheduleFilter = (vehicle: any) => {
 
 const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props) => {
   const { width: windowWidth } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
+  const insets = useCombinedSafeInsets();
   const dispatch = useDispatch();
   const { apiConfig } = useContext(AppContext);
   const { rideUtils } = useSelector(AppDetailsState);
@@ -773,7 +773,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
           <ScrollView
             style={{ flex: 1 }}
             contentContainerStyle={{
-              paddingBottom: Math.max(insets.bottom + 12, 20),
+              paddingBottom: sheetFooterBottomPadding(insets.bottom),
             }}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
@@ -849,7 +849,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                   onRequestClose={() => setShowTimePicker(false)}
                 >
                   <Pressable
-                    style={[tw`flex-1 justify-end bg-black/50`, { paddingBottom: Math.max(insets.bottom, 8) }]}
+                    style={[tw`flex-1 justify-end bg-black/50`, { paddingBottom: Math.max(insets.bottom, 16) }]}
                     onPress={() => setShowTimePicker(false)}
                   >
                     <Pressable
@@ -1241,7 +1241,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
               tw`px-0 bg-white`,
               {
                 paddingTop: 6,
-                paddingBottom: Math.max(insets.bottom + 6, 12),
+                paddingBottom: sheetFooterBottomPadding(insets.bottom),
                 borderTopWidth: 1,
                 borderTopColor: '#F0F0F0',
               },

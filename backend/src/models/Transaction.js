@@ -19,7 +19,14 @@ const transactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['ride_earning', 'commission', 'withdrawal', 'refund', 'balance_release'],
+      enum: [
+        'ride_earning',
+        'commission',
+        'withdrawal',
+        'refund',
+        'balance_release',
+        'cancellation_compensation',
+      ],
       required: true,
     },
     amount: {

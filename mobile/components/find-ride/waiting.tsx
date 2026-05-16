@@ -7,8 +7,6 @@ import {
   TouchableOpacity,
   View,
   StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
   Alert,
   Animated as RNAnimated,
@@ -22,7 +20,7 @@ import { TouchableAction } from "@/components/ui/TouchableAction";
 import { TRide } from "@/types";
 import tw from "@/lib/tailwind";
 import { showMessage } from "react-native-flash-message";
-import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import apiClient from "@/utils/apiClient";
 import {
   getArrivingByLabel,
@@ -159,7 +157,7 @@ export const WaitingView = ({
   onTripResolved,
   onDismissTripUI,
 }: Props) => {
-  const insets = useCombinedSafeInsets();
+  const insets = useSafeAreaInsets();
   const data = ride as TRide;
 
   const rideId = useMemo(() => {
@@ -455,27 +453,18 @@ export const WaitingView = ({
     [liveRideState, data]
   );
 
-  const hasStickyFooter =
-    isAccepted || isSearchingState || (!isAccepted && !isSearchingState);
-  const footerPad = { paddingBottom: Math.max(insets.bottom + 8, 12) };
+  const footerBottomPad = insets.bottom + 12;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <View style={styles.wrapper}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.keyboardContainer}
-      >
+      <View style={styles.sheetColumn}>
         <ScrollView
-          style={styles.scrollContainer}
-          contentContainerStyle={[
-            styles.container,
-            hasStickyFooter && styles.containerWithFooter,
-          ]}
+          style={styles.scrollArea}
+          contentContainerStyle={styles.scrollContent}
           scrollEnabled={true}
           bounces={true}
-          showsVerticalScrollIndicator={true}
-          contentInsetAdjustmentBehavior="automatic"
+          showsVerticalScrollIndicator={false}
           nestedScrollEnabled={true}
           keyboardShouldPersistTaps="always"
         >
@@ -993,8 +982,9 @@ export const WaitingView = ({
         </ScrollView>
 
         {isAccepted ? (
-          <View style={[styles.actionFooter, footerPad]} collapsable={false}>
+          <View style={[styles.actionFooter, { paddingBottom: footerBottomPad }]} collapsable={false}>
             <RiderActionButtons
+              compact
               state={liveRideState}
               onChat={() => {
                 try {
@@ -1042,7 +1032,7 @@ export const WaitingView = ({
             />
           </View>
         ) : isSearchingState ? (
-          <View style={[styles.actionFooter, footerPad]} collapsable={false}>
+          <View style={[styles.actionFooter, { paddingBottom: footerBottomPad }]} collapsable={false}>
             <View style={styles.searchActions}>
               <TouchableAction
                 label="Cancel ride"
@@ -1060,7 +1050,7 @@ export const WaitingView = ({
             </View>
           </View>
         ) : !isAccepted && !isSearchingState ? (
-          <View style={[styles.actionFooter, footerPad]} collapsable={false}>
+          <View style={[styles.actionFooter, { paddingBottom: footerBottomPad }]} collapsable={false}>
             <View style={styles.actionButtons}>
               <TouchableOpacity
                 onPress={onRequestNewDriver ?? action}
@@ -1106,7 +1096,7 @@ export const WaitingView = ({
             </View>
           </View>
         ) : null}
-      </KeyboardAvoidingView>
+      </View>
     </View>
   );
 };
@@ -1115,34 +1105,31 @@ const styles = StyleSheet.create({
   wrapper: {
     width: "100%",
     backgroundColor: "#fff",
-    flex: 1,
     alignSelf: "stretch",
   },
-  keyboardContainer: {
+  sheetColumn: {
     width: "100%",
-    flex: 1,
+    flexDirection: "column",
   },
-  scrollContainer: {
+  scrollArea: {
     width: "100%",
-    flex: 1,
+    flexGrow: 0,
+    flexShrink: 1,
   },
-  container: {
-    flexGrow: 1,
+  scrollContent: {
+    flexGrow: 0,
     paddingHorizontal: 16,
     paddingTop: 8,
-    // Trip in progress: ensure fare card/action area isn't clipped on small screens.
-    paddingBottom: 72,
-    width: "100%",
-  },
-  containerWithFooter: {
     paddingBottom: 16,
+    width: "100%",
   },
   actionFooter: {
     width: "100%",
     backgroundColor: "#fff",
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#E5E7EB",
-    paddingTop: 4,
+    paddingTop: 8,
+    flexShrink: 0,
     zIndex: 20,
     elevation: 12,
   },

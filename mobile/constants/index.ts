@@ -154,6 +154,7 @@ export const DRIVER_WITHDRAWALS = `${SERVER_URL}driver/withdrawals`;
 export const DRIVER_CHALLENGES = `${SERVER_URL}driver/challenges`;
 export const DRIVER_AVAILABILITY = `${SERVER_URL}driver/availability`;
 export const DRIVER_PENDING_RIDE = `${SERVER_URL}driver/rides/pending`;
+export const DRIVER_CURRENT_RIDE_OFFER = `${SERVER_URL}driver/rides/current-offer`;
 export const DRIVER_ACCEPT_RIDE = `${SERVER_URL}driver/rides/accept`;
 export const DRIVER_START_RIDE = `${SERVER_URL}driver/rides/start`;
 export const DRIVER_MARK_PICKUP_ARRIVED = `${SERVER_URL}driver/rides/arrived`;

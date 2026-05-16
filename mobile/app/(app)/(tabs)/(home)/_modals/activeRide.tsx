@@ -1,4 +1,4 @@
-import { BackHandler, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { BackHandler, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { AntDesign } from "@expo/vector-icons";
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +24,7 @@ import { AppContext } from "@/app/context";
 import { isRiderMatchedOrBeyond } from "@/utils/activeRidePayload";
 import { pusherManager } from "@/utils/pusherManager";
 import { isValidMongoRideId, resolveRideId } from "@/utils/resolveRideId";
+import { useDevvieSheetHeight } from "@/hooks/useDevvieSheetHeight";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -47,12 +48,9 @@ const ActiveRideSheet = ({
 }: Props) => {
   const dispatch = useDispatch();
   const { pusherReady } = useContext(AppContext);
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const { sheetHeight, maxBodyHeight, onBodyLayout } = useDevvieSheetHeight();
   const [modal, setModal] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
-  /** Measured content-derived height; null until layout or child reports a stable value */
-  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
-  const lastAppliedSheetHeightRef = useRef<number | null>(null);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastChatKickRef = useRef(0);
   const blankAutoClosedRef = useRef(false);
@@ -263,117 +261,6 @@ const ActiveRideSheet = ({
       (temp as any)?._id;
     return currentView?.screen || (rideId ? "WAITING" : "");
   }, [currentView?.screen, currentView?.data?.waiting, temp]);
-
-  const estimatedSheetHeight = useMemo(() => {
-    const rd = rideDataForWaiting as any;
-    let h = 120;
-    const hasDriver =
-      rd?.driver && typeof rd.driver === "object" && Object.keys(rd.driver).length > 0;
-    const rawStatus = String(rd?.status ?? "").toLowerCase();
-    const tripLike =
-      !!rd?.is_ride_started ||
-      !!rd?.isRideStarted ||
-      !!rd?.is_started ||
-      rawStatus.includes("in-progress") ||
-      rawStatus.includes("in_progress") ||
-      rawStatus === "started";
-
-    switch (resolvedScreenForLayout) {
-      case "WAITING":
-        h += 520;
-        if (hasDriver) h += 140;
-        if (riderMatchedOrBeyond) {
-          h += 320;
-          if (tripLike) h += 240;
-        }
-        if (showStaleRideWarning) h += 72;
-        break;
-      case "SEARCH":
-        h += 300;
-        break;
-      case "DRIVERS":
-        h += 420;
-        break;
-      case "DRIVER":
-        h += 280;
-        break;
-      case "SUMMARY":
-        h += 520;
-        break;
-      case "REVIEW":
-        h += 340;
-        break;
-      default:
-        h += resolvedScreenForLayout ? 360 : 200;
-    }
-    return h;
-  }, [
-    resolvedScreenForLayout,
-    rideDataForWaiting,
-    showStaleRideWarning,
-    riderMatchedOrBeyond,
-  ]);
-
-  const sheetHeight = useMemo(() => {
-    const rd = rideDataForWaiting as any;
-    const rawStatus = String(rd?.status ?? "").toLowerCase();
-    const tripLike =
-      !!rd?.is_ride_started ||
-      !!rd?.isRideStarted ||
-      !!rd?.is_started ||
-      rawStatus.includes("in-progress") ||
-      rawStatus.includes("in_progress") ||
-      rawStatus === "started";
-    const minH =
-      resolvedScreenForLayout === "WAITING" && riderMatchedOrBeyond
-        ? Math.min(screenHeight * 0.52, screenHeight * 0.9)
-        : resolvedScreenForLayout === "WAITING"
-        ? screenHeight * 0.72
-        : screenHeight * 0.3;
-    const maxH = screenHeight * 0.92;
-    const target = measuredHeight ?? estimatedSheetHeight;
-    return Math.max(minH, Math.min(target, maxH));
-  }, [
-    screenHeight,
-    measuredHeight,
-    estimatedSheetHeight,
-    resolvedScreenForLayout,
-    rideDataForWaiting,
-    riderMatchedOrBeyond,
-  ]);
-
-  const applySheetHeight = useCallback(
-    (value: number) => {
-      if (!value || !isFinite(value)) return;
-      const capped = Math.min(value, screenHeight * 0.85);
-      const last = lastAppliedSheetHeightRef.current;
-      if (last != null && Math.abs(capped - last) <= 30) return;
-      lastAppliedSheetHeightRef.current = capped;
-      setMeasuredHeight(capped);
-    },
-    [screenHeight]
-  );
-
-  const handleContentLayout = useCallback(
-    (event: any) => {
-      const measured = event?.nativeEvent?.layout?.height;
-      if (!measured || measured <= 50) return;
-      // IMPORTANT: `measured` here is the *container* height (already bounded by `sheetHeight`).
-      // Adding padding causes a feedback loop where the sheet keeps expanding and "bouncing".
-      applySheetHeight(measured);
-    },
-    [applySheetHeight]
-  );
-
-  // If the ride UI grows (e.g. trip started) but we previously locked a short measured height, drop it
-  // so `estimatedSheetHeight` can drive a taller sheet again.
-  useEffect(() => {
-    if (measuredHeight == null) return;
-    if (estimatedSheetHeight > measuredHeight + 120) {
-      lastAppliedSheetHeightRef.current = null;
-      setMeasuredHeight(null);
-    }
-  }, [estimatedSheetHeight, measuredHeight]);
 
   useEffect(() => {
     if (!chatOpenSignal || chatOpenSignal === lastChatKickRef.current) return;
@@ -666,11 +553,6 @@ const ActiveRideSheet = ({
     reassignDriver("Requested new driver", loading);
   };
 
-  useEffect(() => {
-    lastAppliedSheetHeightRef.current = null;
-    setMeasuredHeight(null);
-  }, [currentView?.screen, temp?.ride_id]);
-
   useFocusEffect(
     useCallback(() => {
       const backAction = () => {
@@ -801,7 +683,6 @@ const ActiveRideSheet = ({
             }
             reassign={(item, loading) => ReassignDriver(item, loading)}
             isActive
-            onHeightChange={applySheetHeight}
             onChangeLocation={() =>
               setCurrentView((prev) => ({ ...prev, screen: "SEARCH" }))
             }
@@ -894,7 +775,6 @@ const ActiveRideSheet = ({
     waitingSubtitleOverride,
     retryNow,
     cancelDriverRequestTimers,
-    applySheetHeight,
   ]);
 
   useEffect(() => {
@@ -1043,26 +923,13 @@ const ActiveRideSheet = ({
         }}
       />
       <View
-        onLayout={handleContentLayout}
-        // Match sheet height so nested ScrollViews get a bounded parent (required for scrolling).
+        onLayout={onBodyLayout}
         style={{
+          maxHeight: maxBodyHeight,
           width: "100%",
-          minHeight: 220,
-          height: Math.max(220, Math.min(sheetHeight, screenHeight * 0.92)),
-          maxHeight: Math.min(sheetHeight, screenHeight * 0.92),
+          flexDirection: "column",
         }}
       >
-        {showStaleRideWarning ? (
-          <View
-            style={tw`mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5`}
-            accessibilityRole="alert"
-          >
-            <Text style={tw`text-sm leading-5 text-amber-950`}>
-              This ride may be experiencing an issue. You can cancel or contact support.
-            </Text>
-          </View>
-        ) : null}
-        {/* X Button at top right edge of modal */}
         <TouchableOpacity
           onPress={handleBack}
           style={tw.style(`absolute top-0 right-0 z-50`, {
@@ -1080,13 +947,12 @@ const ActiveRideSheet = ({
         </TouchableOpacity>
         {(() => {
           const w = currentView?.data?.waiting as any;
-          const rideId =
-            w?.ride_id || w?.rideId || (temp as any)?.ride_id || (temp as any)?.rideId || (temp as any)?._id || w?._id;
+          const screen = currentView?.screen || (w?.ride_id || w?._id ? "WAITING" : "");
           const hasRidePayload =
             (w && Object.keys(w).length > 0) || (temp && Object.keys(temp as any).length > 0);
           const view = RenderView();
+          const useOwnScrollLayout = screen === "WAITING";
 
-          // If something goes wrong and we can't render the ride UI, never trap the user on a blank sheet.
           if (!view) {
             return (
               <View style={tw`flex-1 items-center justify-center px-4 pt-10`}>
@@ -1140,7 +1006,44 @@ const ActiveRideSheet = ({
             );
           }
 
-          return view;
+          if (useOwnScrollLayout) {
+            return (
+              <>
+                {showStaleRideWarning ? (
+                  <View
+                    style={tw`mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5`}
+                    accessibilityRole="alert"
+                  >
+                    <Text style={tw`text-sm leading-5 text-amber-950`}>
+                      This ride may be experiencing an issue. You can cancel or contact support.
+                    </Text>
+                  </View>
+                ) : null}
+                {view}
+              </>
+            );
+          }
+
+          return (
+            <ScrollView
+              style={{ flexGrow: 0, flexShrink: 1 }}
+              contentContainerStyle={{ paddingTop: 8, paddingBottom: 24, flexGrow: 0 }}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="always"
+            >
+              {showStaleRideWarning ? (
+                <View
+                  style={tw`mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5`}
+                  accessibilityRole="alert"
+                >
+                  <Text style={tw`text-sm leading-5 text-amber-950`}>
+                    This ride may be experiencing an issue. You can cancel or contact support.
+                  </Text>
+                </View>
+              ) : null}
+              {view}
+            </ScrollView>
+          );
         })()}
       </View>
     </BottomSheet>

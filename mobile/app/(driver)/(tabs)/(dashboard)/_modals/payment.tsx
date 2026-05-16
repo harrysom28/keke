@@ -17,6 +17,7 @@ import { router, useFocusEffect } from "expo-router";
 import { MapArrowSvg } from "@/svg";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
+import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
 
 function ConfirmPayment({
   bottomSheetRef,
@@ -79,6 +80,8 @@ interface Props {
 const Payment = ({ bottomSheetRef, display }: Props) => {
   const [height, setHeight] = useState<string>("60%");
   const isFocused = useIsFocused();
+  const insets = useCombinedSafeInsets();
+  const footerPad = sheetFooterBottomPadding(insets.bottom);
 
   const handleBack = () => {
     bottomSheetRef?.current?.close();
@@ -124,7 +127,9 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
       {display === "payment" ? (
-        <ConfirmPayment bottomSheetRef={bottomSheetRef} />
+        <View style={{ paddingBottom: footerPad }}>
+          <ConfirmPayment bottomSheetRef={bottomSheetRef} />
+        </View>
       ) : (
         <View style={{ flex: 1 }}>
         <ScrollView
@@ -206,7 +211,10 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
           </View>
         </ScrollView>
         <View
-          style={tw`border-t border-[#F0F0F0] pt-3 flex-col gap-y-4`}
+          style={[
+            tw`border-t border-[#F0F0F0] pt-3 flex-col gap-y-4`,
+            { paddingBottom: footerPad },
+          ]}
           collapsable={false}
         >
           <TouchableOpacity

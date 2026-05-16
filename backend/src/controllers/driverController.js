@@ -1391,6 +1391,61 @@ export const getPendingRides = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Get this driver's active pending offer (Bolt-style sequential dispatch).
+ * GET /api/driver/rides/current-offer
+ */
+export const getCurrentRideOffer = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
+  const driver = await Driver.findOne({ user: userId });
+  if (!driver) {
+    return res.json({ status: 'success', data: { ride: null } });
+  }
+
+  const activeRide = await Ride.findActiveRideForDriver(driver._id);
+  if (activeRide) {
+    return res.json({ status: 'success', data: { ride: null } });
+  }
+
+  const offer = await RideOffer.findOne({
+    driver_id: driver._id,
+    status: 'pending',
+    expires_at: { $gt: new Date() },
+  }).sort({ created_at: -1 });
+
+  if (!offer) {
+    return res.json({ status: 'success', data: { ride: null } });
+  }
+
+  const ride = await Ride.findById(offer.ride_id)
+    .populate('rider', 'name phone profileImage rating')
+    .populate('vehicleType');
+
+  if (!ride || ride.driver || !['searching', 'requested'].includes(ride.status)) {
+    return res.json({ status: 'success', data: { ride: null } });
+  }
+
+  const expiresSec = Math.max(
+    1,
+    Math.ceil((offer.expires_at.getTime() - Date.now()) / 1000)
+  );
+
+  return res.json({
+    status: 'success',
+    data: {
+      ride: {
+        ...formatRideForDriver(ride),
+        offer_id: offer._id.toString(),
+        accepted_by_driver: false,
+        is_ride_started: false,
+        drop_off_completed: false,
+        offer_expires_in: expiresSec,
+      },
+    },
+  });
+});
+
+/**
  * ACK ride offer received (client confirms socket/push delivery) — POST /api/driver/rides/ack-request
  */
 export const ackRideOffer = asyncHandler(async (req, res) => {

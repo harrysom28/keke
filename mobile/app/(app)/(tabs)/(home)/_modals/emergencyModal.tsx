@@ -19,6 +19,7 @@ import { AntDesign } from "@expo/vector-icons";
 import { WINDOW_WIDTH } from "@/constants/Metrics";
 import { router } from "expo-router";
 import tw from "@/lib/tailwind";
+import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -30,6 +31,8 @@ const EMERGENCY_ACTION_HIT_SLOP = { top: 15, bottom: 15, left: 15, right: 15 } a
 const EmergencyModal = ({ bottomSheetRef }: Props) => {
   const [show, setShow] = useState(false);
   const screenHeight = Dimensions.get("window").height;
+  const insets = useCombinedSafeInsets();
+  const sheetBottomPad = sheetFooterBottomPadding(insets.bottom);
   const sheetHeight = useMemo(
     () => Math.max(screenHeight * 0.3, Math.min(screenHeight * 0.5, screenHeight * 0.9)),
     [screenHeight]
@@ -80,6 +83,7 @@ const EmergencyModal = ({ bottomSheetRef }: Props) => {
           style={[
             tw`flex-col items-center gap-y-4 w-full`,
             Platform.OS === "android" ? { zIndex: 10, elevation: 12 } : null,
+            { paddingBottom: sheetBottomPad },
           ]}
         >
           <Text
