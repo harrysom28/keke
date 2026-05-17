@@ -6,7 +6,7 @@ import logger from '../utils/logger.js';
 const PENDING_HOURS = Number(process.env.WALLET_PENDING_HOURS) || 24;
 
 function generateTransactionId(prefix = 'TXN') {
-  return `${prefix}-${Date.now()}-${mongoose.Types.ObjectId().toString().slice(-8)}`;
+  return `${prefix}-${Date.now()}-${new mongoose.Types.ObjectId().toString().slice(-8)}`;
 }
 
 const utcDayKey = () => new Date().toISOString().slice(0, 10);
