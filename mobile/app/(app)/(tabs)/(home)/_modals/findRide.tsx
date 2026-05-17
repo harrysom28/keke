@@ -184,7 +184,9 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
 
   const createRide = async (
     loading: React.Dispatch<React.SetStateAction<boolean>>,
-    payment_type = ""
+    payment_type = "",
+    /** Pass explicitly when booking from driver picker — Redux may not have flushed yet. */
+    preferredDriverId?: string
   ) => {
     loading(true);
     
@@ -271,6 +273,11 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         dropoff: { lat: dropoffLat, lng: dropoffLng, address: dropoffAddress },
       });
 
+      const driverIdForRequest =
+        (typeof preferredDriverId === 'string' && preferredDriverId.trim()) ||
+        (typeof rideData?.driver_id === 'string' && String(rideData.driver_id).trim()) ||
+        '';
+
       const requestData: any = {
         pickupLocation: {
           lat: pickupLat,
@@ -287,7 +294,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         vehicleTypeId: rideData?.vehicle_type_id || '',
         paymentMethod: paymentMethod,
         promoCode: rideData?.promo_code || null,
-        ...(rideData?.driver_id ? { driverId: rideData.driver_id } : {}),
+        ...(driverIdForRequest ? { driverId: driverIdForRequest } : {}),
       };
 
       // Add scheduledAt if provided
@@ -300,8 +307,8 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       console.log('📤 Creating ride:', requestData);
 
       console.log(
-        'Submitting ride request with driver_id:',
-        rideData?.driver_id || 'none - will broadcast'
+        'Submitting ride request with driverId:',
+        driverIdForRequest || 'none - will broadcast to nearby drivers'
       );
 
       // Use apiClient instead of axios for automatic token refresh
@@ -510,7 +517,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
             request={(driverId: string, loading: React.Dispatch<React.SetStateAction<boolean>>) => {
               console.log('🚗 Requesting ride with driver:', driverId);
               dispatch(setRideData({ driver_id: driverId }));
-              createRide(loading);
+              createRide(loading, '', driverId);
             }}
             onChangeLocation={() => setStep(1)}
             onHeightChange={(measuredHeight) => {

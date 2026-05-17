@@ -4,7 +4,7 @@ import logger from '../utils/logger.js';
 import { getSocketService } from './socketService.js';
 
 /** Normalize VehicleType ref whether stored as ObjectId or populated document (same as findNearbyDrivers filter). */
-function getVehicleTypeId(ref) {
+export function getVehicleTypeId(ref) {
   if (ref == null) return null;
   if (typeof ref === 'object' && ref._id != null) return ref._id.toString();
   return ref.toString();

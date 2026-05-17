@@ -1358,23 +1358,36 @@ export const getPendingRides = asyncHandler(async (req, res) => {
 
   const skip = (page - 1) * limit;
 
-  // Find rides that match driver's vehicle type and are not assigned
-  const rides = await Ride.find({
-    vehicleType: driver.vehicleDetails.vehicleType,
-    status: { $in: ['searching', 'requested'] },
-    driver: null,
+  // Only rides this driver has an active offer for (Bolt-style sequential dispatch).
+  const now = new Date();
+  const pendingOffers = await RideOffer.find({
+    driver_id: driver._id,
+    status: 'pending',
+    expires_at: { $gt: now },
   })
-    .populate('rider', 'name phone profileImage rating')
-    .populate('vehicleType')
-    .sort({ createdAt: -1 })
+    .select('ride_id')
+    .sort({ created_at: -1 })
     .skip(skip)
-    .limit(parseInt(limit));
+    .limit(parseInt(limit))
+    .lean();
 
-  const total = await Ride.countDocuments({
-    vehicleType: driver.vehicleDetails.vehicleType,
-    status: { $in: ['searching', 'requested'] },
-    driver: null,
+  const offerRideIds = pendingOffers.map((o) => o.ride_id).filter(Boolean);
+  const total = await RideOffer.countDocuments({
+    driver_id: driver._id,
+    status: 'pending',
+    expires_at: { $gt: now },
   });
+
+  const rides =
+    offerRideIds.length === 0
+      ? []
+      : await Ride.find({
+          _id: { $in: offerRideIds },
+          status: { $in: ['searching', 'requested'] },
+          driver: null,
+        })
+          .populate('rider', 'name phone profileImage rating')
+          .populate('vehicleType');
 
   res.json({
     status: 'success',

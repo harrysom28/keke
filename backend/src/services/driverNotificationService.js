@@ -179,7 +179,12 @@ export async function sendNoDriverFoundOnce(rideId) {
  * - After 60s, check acceptance once; if still unassigned, notify rider once.
  */
 export async function dispatchRide(ride, matchedDrivers, options = {}) {
-  const maxOffers = Number(options.maxOffers || DEFAULT_MAX_OFFERS) || DEFAULT_MAX_OFFERS;
+  const preferredExclusive =
+    options.maxOffers === 1 ||
+    Boolean(ride?.preferredDriver && Number(ride?.attempts || 0) <= 1);
+  const maxOffers = preferredExclusive
+    ? 1
+    : Number(options.maxOffers || DEFAULT_MAX_OFFERS) || DEFAULT_MAX_OFFERS;
   const now = Date.now();
   const expiresAt = new Date(now + OFFER_WINDOW_MS);
 

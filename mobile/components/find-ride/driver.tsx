@@ -49,16 +49,6 @@ const ListItem = memo(({ item, onPress, onClick, onReassign, isActive }: LProps)
   // Use driver's own vehicle type for the image (not the selected vehicle type)
   const driverVehicleType = itemData?.vehicle_type_name || itemData?.vehicle_type?.name || itemData?.vehicleDetails?.vehicleType?.name || selectedVehicle?.vehicle_type_name;
   const driverVehicleId = itemData?.vehicle_type_id || itemData?.vehicle_type?.id || itemData?.vehicle_type || itemData?.vehicleDetails?.vehicleType?._id || selectedVehicle?.vehicle_type_id;
-  const savePoint = () => {
-    const driverId = itemData?.driver_id;
-    dispatch(setRideData({ driver_id: driverId }));
-    dispatch(setRideUtils({ driver: item }));
-    if (onClick && driverId) {
-      onClick(driverId, setLoading);
-    }
-  };
-
-  // Ensure onClick is defined (fallback to savePoint if not)
   const handleRequestRide = () => {
     // Validate that destination exists before allowing ride request
     const rideData = ride?.data as any;
@@ -75,10 +65,11 @@ const ListItem = memo(({ item, onPress, onClick, onReassign, isActive }: LProps)
     }
     
     const driverId = itemData?.driver_id;
-    if (onClick && driverId) {
+    if (!driverId) return;
+    dispatch(setRideData({ driver_id: driverId }));
+    dispatch(setRideUtils({ driver: item }));
+    if (onClick) {
       onClick(driverId, setLoading);
-    } else {
-      savePoint();
     }
   };
 

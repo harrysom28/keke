@@ -8,7 +8,7 @@ import { calculateDistance, calculateDuration, calculateFare } from '../utils/ge
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
-import rideMatchingService from '../services/rideMatchingService.js';
+import rideMatchingService, { getVehicleTypeId } from '../services/rideMatchingService.js';
 import surgePricingService from '../services/surgePricingService.js';
 import {
   dispatchRide,
@@ -50,11 +50,13 @@ export const requestRide = asyncHandler(async (req, res) => {
     promoCode,
     scheduledAt,
     driverId: preferredDriverIdRaw,
+    driver_id: preferredDriverIdSnake,
   } = req.body;
   const riderId = req.user._id;
+  const preferredDriverIdRawResolved = preferredDriverIdRaw ?? preferredDriverIdSnake;
   const preferredDriverId =
-    typeof preferredDriverIdRaw === 'string' && preferredDriverIdRaw.trim()
-      ? preferredDriverIdRaw.trim()
+    typeof preferredDriverIdRawResolved === 'string' && preferredDriverIdRawResolved.trim()
+      ? preferredDriverIdRawResolved.trim()
       : null;
 
   // Log received location data for debugging
@@ -74,6 +76,7 @@ export const requestRide = asyncHandler(async (req, res) => {
       type: typeof dropoffLocation?.lat,
     },
     vehicleTypeId,
+    preferredDriverId: preferredDriverId || null,
   });
 
   // Validate and normalize location data
@@ -255,50 +258,67 @@ export const requestRide = asyncHandler(async (req, res) => {
   let matchedDrivers = [];
   let usedPreferredDriver = false;
 
+  const abortRideAfterHold = async (message, statusCode = 400) => {
+    try {
+      if (isWalletPayment) {
+        await processCancellation(ride._id, riderId, null, totalFare, 'beforeAccept');
+      }
+    } catch (cancelErr) {
+      logger.error(
+        `requestRide: escrow release failed after preferred-driver abort for ride ${ride._id}: ${cancelErr.message}`
+      );
+    }
+    await Ride.deleteOne({ _id: ride._id });
+    throw new ValidationError(message);
+  };
+
   if (preferredDriverId) {
     try {
-      const preferred = await Driver.findById(preferredDriverId).populate(
-        'user',
-        'name deviceToken fcm_token role'
-      );
+      const preferred = await Driver.findById(preferredDriverId)
+        .populate('user', 'name deviceToken fcm_token role')
+        .populate('vehicleDetails.vehicleType');
 
-      const rideVehicleTypeId =
-        ride.vehicleType?._id?.toString() || ride.vehicleType?.toString();
-      const preferredVehicleTypeId =
-        preferred?.vehicleDetails?.vehicleType?._id?.toString() ||
-        preferred?.vehicleDetails?.vehicleType?.toString();
+      if (!preferred) {
+        await abortRideAfterHold('Selected driver was not found. Please choose another driver.');
+      }
 
+      const rideVehicleTypeId = getVehicleTypeId(ride.vehicleType);
+      const preferredVehicleTypeId = getVehicleTypeId(preferred.vehicleDetails?.vehicleType);
       const sameVehicle =
-        !!rideVehicleTypeId &&
-        !!preferredVehicleTypeId &&
+        !rideVehicleTypeId ||
+        !preferredVehicleTypeId ||
         preferredVehicleTypeId === rideVehicleTypeId;
 
-      if (
-        preferred &&
-        preferred.isAvailable &&
-        preferred.isOnline &&
-        sameVehicle &&
-        String(preferred.user?.role || '') === 'driver'
-      ) {
-        // dispatchRide expects [{ driver, score, distance }] — score/distance
-        // are unused for single-target dispatch.
-        matchedDrivers = [{ driver: preferred, score: 100, distance: 0 }];
-        usedPreferredDriver = true;
-      } else {
-        logger.info(
-          `requestRide: preferred driver ${preferredDriverId} unavailable for ride ${ride._id} ` +
-            `(found=${!!preferred} online=${preferred?.isOnline} avail=${preferred?.isAvailable} ` +
-            `vehicleMatch=${sameVehicle}) — falling back to broadcast`
+      if (!sameVehicle) {
+        await abortRideAfterHold(
+          'Selected driver cannot fulfill this vehicle type. Please choose another driver.'
         );
       }
+
+      if (String(preferred.user?.role || '') !== 'driver') {
+        await abortRideAfterHold('Selected driver is not available. Please choose another driver.');
+      }
+
+      if (!preferred.isOnline || !preferred.isAvailable) {
+        await abortRideAfterHold(
+          'The driver you selected is not available right now. Please choose another driver.'
+        );
+      }
+
+      // Rider picked this driver in the UI — offer ONLY to them in round 1 (no broadcast).
+      matchedDrivers = [{ driver: preferred, score: 100, distance: 0 }];
+      usedPreferredDriver = true;
+      logger.info(
+        `requestRide: exclusive offer to preferred driver ${preferredDriverId} for ride ${ride._id}`
+      );
     } catch (err) {
+      if (err instanceof ValidationError) throw err;
       logger.warn(
         `requestRide: failed to resolve preferred driver ${preferredDriverId} for ride ${ride._id}: ${err.message}`
       );
+      await abortRideAfterHold('Could not request the selected driver. Please try again.');
     }
-  }
-
-  if (matchedDrivers.length === 0) {
+  } else {
     matchedDrivers = await rideMatchingService.findAndMatchDrivers(
       ride,
       RIDER_MATCH_SEARCH_RADIUS_KM,
@@ -321,7 +341,7 @@ export const requestRide = asyncHandler(async (req, res) => {
       setImmediate(() => {
         (async () => {
           try {
-            await dispatchRide(ride, matchedDrivers);
+            await dispatchRide(ride, matchedDrivers, usedPreferredDriver ? { maxOffers: 1 } : {});
           } catch (err) {
             logger.error(`dispatchRide error for ride ${ride._id}: ${err.message}`);
           }
