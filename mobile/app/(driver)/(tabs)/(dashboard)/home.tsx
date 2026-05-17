@@ -625,12 +625,17 @@ const Home = () => {
     if (subType === "ride_requested") {
       dispatch(setAppData({ driverPendingRideOffer: true }));
       router.push("/(driver)/(tabs)/(dashboard)/home-map");
+      return;
     }
     if (subType === "fare_received" || subType === "ride_completed") {
       fetchDriverDashboard();
       getCurrentUserRef.current?.();
     }
-    if (DRIVER_ALERT_SUBTYPES.includes(subType)) {
+    const silentDriverKeys = new Set(["ride_requested"]);
+    if (
+      DRIVER_ALERT_SUBTYPES.includes(subType) &&
+      !silentDriverKeys.has(subType)
+    ) {
       safeShowMessage({ message: notificationEvent.body, type: "info" });
       Vibration.vibrate(300);
     }

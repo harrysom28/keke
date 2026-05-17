@@ -6,8 +6,6 @@ import { useDispatch, useSelector } from "react-redux";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { setAppData } from "@/store/AppSlice";
 import { AuthState } from "@/store/AuthSlice";
-import { safeShowMessage } from "@/utils/safeShowMessage";
-
 /**
  * Single subscription to `private-driver-{id}` for the whole driver area (tabs + stack).
  * Keeps ride offers and online-time updates when no single tab is focused.
@@ -67,11 +65,6 @@ function DriverPrivateChannelSubscription() {
         })
       );
       Vibration.vibrate([0, 400, 200, 400]);
-      safeShowMessage({
-        type: "info",
-        message: "New ride request — opening map to respond.",
-        duration: 5000,
-      });
       router.push("/(driver)/(tabs)/(dashboard)/home-map");
     },
   });

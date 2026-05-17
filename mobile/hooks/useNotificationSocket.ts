@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
 import { io, type Socket } from "socket.io-client";
 import { getApiUrlWithOverride } from "@/utils/apiUrlOverride";
-import AppStore from "@/store";
-import { addIncomingNotification, setLatestNotification } from "@/store/AppSlice";
+import notificationManager, {
+  type NotificationPayload,
+} from "@/services/notificationManager";
 
 /**
  * Listens for server Socket.io `NEW_NOTIFICATION` on the authenticated user room.
@@ -32,9 +33,9 @@ export function useNotificationSocket(
       socket.emit("authenticate", { token: accessToken });
     });
 
-    socket.on("NEW_NOTIFICATION", (payload: Record<string, unknown>) => {
-      if (!payload || typeof payload !== "object") return;
-      const p = payload as {
+    socket.on("NEW_NOTIFICATION", (raw: Record<string, unknown>) => {
+      if (!raw || typeof raw !== "object") return;
+      const p = raw as {
         id?: string;
         notification_id?: string;
         title?: string;
@@ -53,44 +54,44 @@ export function useNotificationSocket(
       const nid = String(p.notification_id || p.id || "");
       if (!nid) return;
 
-      AppStore.dispatch(
-        addIncomingNotification({
-          id: p.id,
-          notification_id: nid,
-          title: p.title || "",
-          message: p.message || "",
-          type: p.event_key || p.type || "general",
-          priority: p.priority,
-          screen: p.screen,
-          action_type: p.action_type,
-          action_payload: p.action_payload,
-          ride_id: p.ride_id ?? undefined,
-          duration_ms: p.duration_ms,
-          image_url: p.image_url ?? null,
-          delivered_at: p.delivered_at,
-          event_key: p.event_key,
-          created_at: p.delivered_at || new Date().toISOString(),
-          related_ride_id: p.ride_id ? String(p.ride_id) : null,
-        })
-      );
-      AppStore.dispatch(
-        setLatestNotification({
-          id: p.id,
-          notification_id: nid,
-          title: p.title || "",
-          message: p.message || "",
-          type: p.event_key || p.type || "general",
-          priority: p.priority,
-          screen: p.screen,
-          action_type: p.action_type,
-          action_payload: p.action_payload,
-          ride_id: p.ride_id ?? null,
-          duration_ms: p.duration_ms,
-          image_url: p.image_url ?? null,
-          delivered_at: p.delivered_at,
-          event_key: p.event_key,
-        })
-      );
+      const mapped: NotificationPayload = {
+        id: String(p.id || nid),
+        notification_id: nid,
+        title: String(p.title || ""),
+        message: String(p.message || ""),
+        type:
+          p.type === "push" ||
+          p.type === "alert" ||
+          p.type === "banner" ||
+          p.type === "inbox"
+            ? p.type
+            : "push",
+        priority:
+          p.priority === "critical" ||
+          p.priority === "high" ||
+          p.priority === "normal" ||
+          p.priority === "low"
+            ? p.priority
+            : "normal",
+        screen: p.screen ? String(p.screen) : undefined,
+        action_type:
+          p.action_type === "navigate" ||
+          p.action_type === "open_url" ||
+          p.action_type === "call_api"
+            ? p.action_type
+            : "none",
+        action_payload: p.action_payload,
+        ride_id: p.ride_id ? String(p.ride_id) : undefined,
+        duration_ms:
+          p.duration_ms != null ? Number(p.duration_ms) : undefined,
+        image_url: p.image_url ? String(p.image_url) : undefined,
+        delivered_at: p.delivered_at
+          ? String(p.delivered_at)
+          : new Date().toISOString(),
+        event_key: p.event_key ? String(p.event_key) : undefined,
+      };
+
+      notificationManager.handle(mapped);
     });
 
     socketRef.current = socket;

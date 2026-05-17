@@ -1,54 +1,30 @@
-import { AntDesign } from "@expo/vector-icons";
-import React from "react";
-import { Text, TouchableOpacity, View } from "react-native";
+import { Image, Text, TouchableOpacity, View } from "react-native";
 
 import tw from "@/lib/tailwind";
+import { mapRideToSummary, type RideSummaryModel } from "@/utils/rideSummaryModel";
 
 export interface RideSummaryProps {
-  ride: {
-    pickup_name?: string;
-    dropoff_name?: string;
-    fare?: number | string;
-    cost?: string;
-    distance?: string | { text: string };
-    duration?: string | { text: string };
-    payment_type?: string;
-    driver?: { driver_name?: string; driver_image?: string; rating?: number };
-    fareBreakdown?: { baseFare?: number; serviceCharge?: number; total?: number };
-  };
+  ride: Record<string, unknown> | null | undefined;
   onContinue: () => void;
   onDone: () => void;
 }
 
-export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) => {
-  const fare = ride?.fare ?? ride?.cost ?? "0";
-  const distance =
-    typeof ride?.distance === "object" ? ride.distance.text : ride?.distance;
-  const duration =
-    typeof ride?.duration === "object" ? ride.duration.text : ride?.duration;
-  const paymentMethod = (ride?.payment_type ?? "wallet").toLowerCase();
-  const paymentLabel =
-    paymentMethod === "cash"
-      ? "Cash"
-      : paymentMethod === "wallet"
-        ? "Wallet"
-        : paymentMethod === "card"
-          ? "Card"
-          : paymentMethod;
+const TRIP_COMPLETE_IMAGE = require("@images/check.png");
 
-  const fareNum = Number(fare);
-  const baseFare = ride?.fareBreakdown?.baseFare ?? (Number.isFinite(fareNum) ? fareNum : 0);
-  const serviceCharge = ride?.fareBreakdown?.serviceCharge ?? 100;
-  const total = ride?.fareBreakdown?.total ?? baseFare + serviceCharge;
-  const fareDisplay = Number.isFinite(fareNum) ? fareNum.toLocaleString() : String(fare);
+export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) => {
+  const model: RideSummaryModel = mapRideToSummary(ride);
 
   return (
     <View style={tw`flex-col gap-y-4 pb-6`}>
       <View style={tw`items-center py-4`}>
         <View
-          style={tw`w-16 h-16 rounded-full bg-base-green items-center justify-center mb-3`}
+          style={tw`w-20 h-20 rounded-full bg-base-green items-center justify-center mb-3 overflow-hidden`}
         >
-          <AntDesign name="checkcircle" size={36} color="white" />
+          <Image
+            source={TRIP_COMPLETE_IMAGE}
+            resizeMode="contain"
+            style={{ width: 52, height: 52 }}
+          />
         </View>
         <Text style={tw.style(`text-2xl text-black`, { fontFamily: "RobotoBold" })}>
           Ride Complete
@@ -58,50 +34,74 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
             fontFamily: "RobotoRegular",
           })}
         >
-          {ride?.driver?.driver_name ?? "Your driver"} dropped you off
+          {model.driver_name
+            ? `${model.driver_name} dropped you off`
+            : "Your driver dropped you off"}
         </Text>
       </View>
 
       <View style={tw`bg-base-green rounded-2xl p-5 items-center`}>
         <Text
-          style={tw.style(`text-white text-sm mb-1`, { fontFamily: "RobotoRegular" })}
+          style={tw.style(`text-white text-sm mb-1 opacity-90`, {
+            fontFamily: "RobotoRegular",
+          })}
         >
-          Total fare
+          Total paid
         </Text>
         <Text style={tw.style(`text-white text-5xl`, { fontFamily: "RobotoBold" })}>
-          ₦{fareDisplay}
+          ₦{model.fareDisplay}
         </Text>
-        <View style={{ marginTop: 8 }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-            <Text style={{ color: "#666", fontSize: 13 }}>Ride fare</Text>
-            <Text style={{ fontSize: 13 }}>₦{baseFare.toLocaleString()}</Text>
+        <View style={{ marginTop: 12, width: "100%" }}>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              marginBottom: 6,
+            }}
+          >
+            <Text style={{ color: "rgba(255,255,255,0.85)", fontSize: 13 }}>Ride fare</Text>
+            <Text style={{ color: "#fff", fontSize: 13 }}>
+              ₦{model.baseFare.toLocaleString()}
+            </Text>
           </View>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-            <Text style={{ color: "#666", fontSize: 13 }}>Service charge</Text>
-            <Text style={{ fontSize: 13 }}>₦{serviceCharge.toLocaleString()}</Text>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              marginBottom: 6,
+            }}
+          >
+            <Text style={{ color: "rgba(255,255,255,0.85)", fontSize: 13 }}>
+              Service charge
+            </Text>
+            <Text style={{ color: "#fff", fontSize: 13 }}>
+              ₦{model.serviceCharge.toLocaleString()}
+            </Text>
           </View>
           <View
             style={{
               flexDirection: "row",
               justifyContent: "space-between",
               borderTopWidth: 1,
-              borderTopColor: "#E5E7EB",
-              paddingTop: 6,
+              borderTopColor: "rgba(255,255,255,0.35)",
+              paddingTop: 8,
               marginTop: 4,
             }}
           >
-            <Text style={{ fontWeight: "700", fontSize: 14 }}>Total charged</Text>
-            <Text style={{ fontWeight: "700", fontSize: 14, color: "#3C8F7C" }}>
-              ₦{total.toLocaleString()}
+            <Text style={{ fontWeight: "700", fontSize: 14, color: "#fff" }}>
+              Total charged
+            </Text>
+            <Text style={{ fontWeight: "700", fontSize: 14, color: "#fff" }}>
+              ₦{model.total.toLocaleString()}
             </Text>
           </View>
         </View>
         <Text
-          style={tw.style(`text-white text-sm mt-2 opacity-80`, {
+          style={tw.style(`text-white text-sm mt-3 opacity-90`, {
             fontFamily: "RobotoMedium",
           })}
         >
-          Paid via {paymentLabel}
+          Paid via {model.paymentLabel}
         </Text>
       </View>
 
@@ -116,9 +116,9 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
             </Text>
             <Text
               style={tw.style(`text-sm text-black`, { fontFamily: "RobotoMedium" })}
-              numberOfLines={2}
+              numberOfLines={3}
             >
-              {ride?.pickup_name ?? "Pickup location"}
+              {model.pickup_name}
             </Text>
           </View>
         </View>
@@ -133,19 +133,19 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
             </Text>
             <Text
               style={tw.style(`text-sm text-black`, { fontFamily: "RobotoMedium" })}
-              numberOfLines={2}
+              numberOfLines={3}
             >
-              {ride?.dropoff_name ?? "Dropoff location"}
+              {model.dropoff_name}
             </Text>
           </View>
         </View>
       </View>
 
       <View style={tw`flex-row justify-around`}>
-        {distance ? (
+        {model.distance ? (
           <View style={tw`items-center`}>
             <Text style={tw.style(`text-lg text-black`, { fontFamily: "RobotoBold" })}>
-              {distance}
+              {model.distance}
             </Text>
             <Text
               style={tw.style(`text-xs text-[#8F92A1]`, { fontFamily: "RobotoRegular" })}
@@ -154,10 +154,10 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
             </Text>
           </View>
         ) : null}
-        {duration ? (
+        {model.duration ? (
           <View style={tw`items-center`}>
             <Text style={tw.style(`text-lg text-black`, { fontFamily: "RobotoBold" })}>
-              {duration}
+              {model.duration}
             </Text>
             <Text
               style={tw.style(`text-xs text-[#8F92A1]`, { fontFamily: "RobotoRegular" })}
@@ -168,7 +168,7 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
         ) : null}
         <View style={tw`items-center`}>
           <Text style={tw.style(`text-lg text-black`, { fontFamily: "RobotoBold" })}>
-            {paymentLabel}
+            {model.paymentLabel}
           </Text>
           <Text
             style={tw.style(`text-xs text-[#8F92A1]`, { fontFamily: "RobotoRegular" })}

@@ -455,17 +455,29 @@ export default function HomeScreen() {
         ...tempRef.current,
         ...snapshot,
         status: "completed",
-      } as TRide;
+      } as TRide & Record<string, unknown>;
       const rawCost =
         (merged as { cost?: unknown }).cost ??
         (snapshot as { fare?: { totalFare?: number } } | undefined)?.fare
-          ?.totalFare;
+          ?.totalFare ??
+        (snapshot as { fare_breakdown?: { ride_fare?: number } })?.fare_breakdown
+          ?.ride_fare;
       if (rawCost != null && rawCost !== "") {
-        (merged as { cost?: string }).cost = String(
+        merged.cost = String(
           typeof rawCost === "number" ? Math.round(rawCost) : rawCost
         );
       }
-      setTemp(merged);
+      const fb = (snapshot as { fare_breakdown?: { ride_fare?: number; service_charge?: number; total_paid?: number } })
+        .fare_breakdown;
+      if (fb && typeof fb === "object") {
+        merged.fare_breakdown = fb;
+        merged.fareBreakdown = {
+          baseFare: Number(fb.ride_fare) || 0,
+          serviceCharge: Number(fb.service_charge) || 0,
+          total: Number(fb.total_paid) || 0,
+        };
+      }
+      setTemp(merged as TRide);
       setRide({
         screen: "SUMMARY",
         data: { waiting: merged as unknown as IARide["data"]["waiting"] },
@@ -3183,11 +3195,15 @@ export default function HomeScreen() {
           <ActiveRideSheet
             key={trigger}
             temp={temp}
+            setTemp={setTemp}
             currentView={ride}
             setCurrentView={setRide}
             bottomSheetRef={activeRideSheetRef}
             getActiveRide={getActiveRide}
             clearMap={clearRideState}
+            onTripCompleted={(snapshot) => {
+              openPostRideSummary(snapshot as Partial<TRide> & Record<string, unknown>);
+            }}
             chatOpenSignal={chatOpenKick}
           />
         ) : null}

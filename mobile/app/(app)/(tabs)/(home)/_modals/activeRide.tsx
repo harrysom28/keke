@@ -32,7 +32,10 @@ interface Props {
   setCurrentView: React.Dispatch<React.SetStateAction<IARide>>;
   getActiveRide: () => void;
   temp: TRide;
+  setTemp?: React.Dispatch<React.SetStateAction<TRide>>;
   clearMap?: (opts?: { navigateHome?: boolean }) => void;
+  /** Persist completed-ride snapshot for summary (must run before any state wipe). */
+  onTripCompleted?: (snapshot: Record<string, unknown>) => void;
   /** Increment (e.g. from notification deep link) to open the driver chat modal. */
   chatOpenSignal?: number;
 }
@@ -43,7 +46,9 @@ const ActiveRideSheet = ({
   setCurrentView,
   getActiveRide,
   temp,
+  setTemp,
   clearMap,
+  onTripCompleted,
   chatOpenSignal = 0,
 }: Props) => {
   const dispatch = useDispatch();
@@ -51,6 +56,7 @@ const ActiveRideSheet = ({
   const { sheetHeight, maxBodyHeight, onBodyLayout } = useDevvieSheetHeight();
   const [modal, setModal] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
+  const [summaryRide, setSummaryRide] = useState<Record<string, unknown> | null>(null);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastChatKickRef = useRef(0);
   const blankAutoClosedRef = useRef(false);
@@ -59,43 +65,6 @@ const ActiveRideSheet = ({
   const tripPollDelayMsRef = useRef<number>(5 * 60 * 1000);
   /** Filled after `useDriverRequestTimeout` — avoids TDZ and unstable Pusher effect deps. */
   const cancelDriverRequestTimersRef = useRef<() => void>(() => {});
-
-  const handleTripResolved = useCallback(
-    (rideId: string) => {
-      try {
-        cancelDriverRequestTimersRef.current();
-      } catch {
-        // ignore
-      }
-      try {
-        clearMap?.();
-      } catch {
-        // ignore
-      }
-      // Show receipt/summary screen instead of immediately navigating away
-      try {
-        setCurrentView((prev) => ({
-          ...prev,
-          screen: "SUMMARY",
-          data: {
-            ...((prev?.data) as any),
-            rideId,
-          } as any,
-        }));
-      } catch {
-        // ignore
-      }
-      // Dispatch ride state clear after a short delay so SUMMARY has data
-      setTimeout(() => {
-        try {
-          dispatch(clearRideState());
-        } catch {
-          // ignore
-        }
-      }, 500);
-    },
-    [bottomSheetRef, clearMap, dispatch, setCurrentView]
-  );
 
   const handleDismissTripUI = useCallback(() => {
     try {
@@ -140,10 +109,136 @@ const ActiveRideSheet = ({
     return String(rd?.ride_id || rd?._id || "").trim();
   }, [rideDataForWaiting]);
 
+  const handleTripResolved = useCallback(
+    (rideId: string) => {
+      try {
+        cancelDriverRequestTimersRef.current();
+      } catch {
+        // ignore
+      }
+
+      const snapshot: Record<string, unknown> = {
+        ...((rideDataForWaiting as Record<string, unknown>) || {}),
+        ...((temp as Record<string, unknown>) || {}),
+        ride_id: rideId || (temp as { ride_id?: string })?.ride_id,
+        status: "completed",
+      };
+
+      setSummaryRide(snapshot);
+      setTemp?.(snapshot as TRide);
+
+      if (onTripCompleted) {
+        onTripCompleted(snapshot);
+        return;
+      }
+
+      try {
+        setCurrentView((prev) => ({
+          ...prev,
+          screen: "SUMMARY",
+          data: {
+            ...((prev?.data) as object),
+            waiting: snapshot as IARide["data"]["waiting"],
+          } as IARide["data"],
+        }));
+      } catch {
+        // ignore
+      }
+
+      setTimeout(() => {
+        try {
+          bottomSheetRef?.current?.open();
+        } catch {
+          // ignore
+        }
+      }, 150);
+    },
+    [
+      bottomSheetRef,
+      onTripCompleted,
+      rideDataForWaiting,
+      setCurrentView,
+      setTemp,
+      temp,
+    ]
+  );
+
   const riderMatchedOrBeyond = useMemo(
     () => isRiderMatchedOrBeyond(rideDataForWaiting as Record<string, unknown>),
     [rideDataForWaiting]
   );
+
+  const summaryPayload = useMemo(() => {
+    const waiting = currentView?.data?.waiting as Record<string, unknown> | undefined;
+    return {
+      ...(summaryRide || {}),
+      ...(temp as Record<string, unknown>),
+      ...(waiting && Object.keys(waiting).length > 0 ? waiting : {}),
+    };
+  }, [currentView?.data?.waiting, summaryRide, temp]);
+
+  const summaryRideId = useMemo(() => {
+    const id =
+      summaryPayload?.ride_id ??
+      (summaryPayload as { _id?: string })?._id;
+    return id != null ? String(id).trim() : "";
+  }, [summaryPayload]);
+
+  useEffect(() => {
+    if (currentView?.screen !== "SUMMARY" || !summaryRideId) return;
+
+    const baseFare = Number(summaryPayload?.cost ?? 0);
+    const fb = summaryPayload?.fare_breakdown as
+      | { total_paid?: number; service_charge?: number }
+      | undefined;
+    const hasFare =
+      baseFare > 0 ||
+      Number(fb?.total_paid) > 0 ||
+      Number(fb?.service_charge) > 0 ||
+      Number((summaryPayload?.fareBreakdown as { total?: number })?.total) > 0;
+
+    if (hasFare) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiClient.get(`rides/${summaryRideId}`);
+        const detail =
+          res?.data?.data?.ride ?? res?.data?.ride ?? res?.data?.data ?? null;
+        if (!detail || typeof detail !== "object" || cancelled) return;
+
+        const fb = (detail as { fare_breakdown?: Record<string, unknown> })
+          .fare_breakdown;
+        const merged: Record<string, unknown> = {
+          ...summaryPayload,
+          ...detail,
+          ride_id: summaryRideId,
+          status: "completed",
+          origin: (detail as { origin?: unknown }).origin ?? summaryPayload.origin,
+          destination:
+            (detail as { destination?: unknown }).destination ??
+            summaryPayload.destination,
+        };
+        if (fb && typeof fb === "object") {
+          merged.fare_breakdown = fb;
+          merged.cost = String(fb.ride_fare ?? merged.cost ?? "");
+          merged.fareBreakdown = {
+            baseFare: Number(fb.ride_fare) || 0,
+            serviceCharge: Number(fb.service_charge) || 0,
+            total: Number(fb.total_paid) || 0,
+          };
+        }
+        setSummaryRide(merged);
+        setTemp?.(merged as TRide);
+      } catch {
+        // keep local snapshot
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentView?.screen, summaryRideId, summaryPayload, setTemp]);
 
   const handleTripResolvedRef = useRef(handleTripResolved);
   handleTripResolvedRef.current = handleTripResolved;
@@ -655,7 +750,7 @@ const ActiveRideSheet = ({
       case "SUMMARY":
         return (
           <RideSummaryView
-            ride={temp as any}
+            ride={summaryPayload}
             onContinue={() =>
               setCurrentView((prev) => ({ ...prev, screen: "REVIEW" }))
             }

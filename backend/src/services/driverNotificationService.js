@@ -84,6 +84,8 @@ async function pushOfferToDriver(driver, ridePayload, rideId) {
           action_payload: { screen: 'DriverHome', rideId: ridePayload.ride_id },
           // Ride offers are inherently time-sensitive; retries can spam drivers when push is misconfigured.
           disable_retry: true,
+          // Realtime offer UI uses private-driver ride-request + socket; skip duplicate inbox/pusher/socket here.
+          skip_realtime: true,
           data: {
             subType: 'ride_requested',
             rideId: ridePayload.ride_id,

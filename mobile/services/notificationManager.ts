@@ -37,6 +37,22 @@ let inboxHandler: NotificationHandler | null = null;
 const RECENT_DEDUPE_WINDOW_MS = 55_000;
 const recentNotificationKeys = new Map<string, number>();
 
+/** Prefer semantic keys so FCM onMessage + Expo received listener dedupe the same push. */
+const buildStableNotificationKey = (payload: NotificationPayload): string => {
+  const semantic = [
+    payload.event_key || "",
+    payload.ride_id || "",
+    payload.title || "",
+    payload.message || "",
+  ]
+    .map((v) => String(v).trim())
+    .join("|");
+  if (semantic.replace(/\|/g, "").length > 0) {
+    return semantic;
+  }
+  return String(payload.notification_id || payload.id || "").trim();
+};
+
 let foregroundUnsubscribe: (() => void) | null = null;
 let backgroundOpenUnsubscribe: (() => void) | null = null;
 let firebaseInitialized = false;
@@ -124,16 +140,10 @@ export const registerInboxHandler = (handler: NotificationHandler): void => {
 
 export const handle = (payload: NotificationPayload): void => {
   try {
-    const stableKey =
-      String(payload.notification_id || payload.id || "").trim() ||
-      [
-        payload.event_key || "",
-        payload.ride_id || "",
-        payload.title || "",
-        payload.message || "",
-      ]
-        .map((v) => String(v).trim())
-        .join("|");
+    const stableKey = buildStableNotificationKey(payload);
+    if (!stableKey) {
+      return;
+    }
 
     const now = Date.now();
     // prune stale keys cheaply
@@ -150,6 +160,17 @@ export const handle = (payload: NotificationPayload): void => {
     recentNotificationKeys.set(stableKey, now);
   } catch {
     // Never block notification delivery due to dedupe errors.
+  }
+
+  // Driver ride offers: Pusher `ride-request` opens the offer sheet — skip alert/toast from FCM.
+  const role = AppStore.getState()?.Auth?.user?.profile?.role;
+  if (
+    role === "driver" &&
+    payload.event_key === "ride_requested" &&
+    AppStore.getState()?.App?.driverPendingRideOffer
+  ) {
+    inboxHandler?.(payload);
+    return;
   }
 
   if (payload.priority === "critical") {

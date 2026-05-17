@@ -189,6 +189,11 @@ const NotificationBootstrap = () => {
   useEffect(() => {
     const receivedSub = Notifications.addNotificationReceivedListener(
       (notification) => {
+        // Foreground remote pushes are already handled in initFirebaseListeners (messaging onMessage).
+        const trigger = notification.request.trigger as { type?: string } | null;
+        if (trigger?.type === "push") {
+          return;
+        }
         notificationManager.handle(
           notificationManager.mapExpoNotificationRequestToPayload(
             notification.request

@@ -684,9 +684,14 @@ const RETRY_DELAYS_MS = [10 * 1000]; // 10s (max 1 retry)
  * TASK 6: Retry failed push deliveries.
  * Retries only on network/server errors, not on invalid token (that is permanent).
  */
+const isRetryablePushFailure = (result) =>
+  Boolean(result && !result.success && !result.invalidToken);
+
 const sendPushWithRetry = async (deviceToken, title, body, data, userId, attempt = 0) => {
   const result = await sendPushNotification(deviceToken, title, body, data, userId);
-  if (result.success || result.invalidToken) return result;
+  if (result.success || result.invalidToken || !isRetryablePushFailure(result)) {
+    return result;
+  }
   if (attempt >= RETRY_DELAYS_MS.length) {
     logger.warn(`Push delivery failed after ${RETRY_DELAYS_MS.length} retries: ${title}`);
     return result;
@@ -903,6 +908,7 @@ export const dispatchToUser = async (
   fcmToken = '',
   options = {}
 ) => {
+  const skipRealtime = options?.skip_realtime === true || options?.skipRealtime === true;
   try {
     if (!notification || !userId) {
       return null;
@@ -931,20 +937,6 @@ export const dispatchToUser = async (
     ]);
 
     const realtimePayload = notificationToRealtimePayload(notification, userNotification);
-    try {
-      const pusherService = getPusherService();
-      pusherService?.emitNotification(userId, realtimePayload);
-    } catch (error) {
-      logger.error(`Failed to dispatch realtime notification: ${error.message}`);
-    }
-
-    try {
-      const { getSocketService } = await import('./socketService.js');
-      const socketSvc = getSocketService();
-      socketSvc?.emitNewNotification?.(userId, realtimePayload);
-    } catch (error) {
-      logger.debug(`Socket NEW_NOTIFICATION skip: ${error.message}`);
-    }
 
     const wantsPush = shouldSendPushForNotification(notification);
     if (wantsPush && (!fcmToken || !String(fcmToken).trim())) {
@@ -953,58 +945,69 @@ export const dispatchToUser = async (
       );
     }
 
-    if (wantsPush && typeof fcmToken === 'string' && fcmToken.trim()) {
-      const firebasePayload = {
-        notification: {
-          title: notification.title,
-          body: notification.message,
-        },
-        data: {
-          notification_id: String(notification._id),
-          type: String(notification.type),
-          screen: String(notification.screen || 'home'),
-          action_type: String(notification.action_type || 'none'),
-          action_payload: coerceActionPayloadString(notification.action_payload),
-          ride_id: String(notification.ride_id || ''),
-          subType: String(notification.event_key || 'general'),
-          event_key: String(notification.event_key || 'general'),
-          priority: String(notification.priority || 'normal'),
-        },
-        android: { priority: 'high' },
-        apns: {
-          payload: {
-            aps: {
-              sound: 'default',
-              badge: 1,
-            },
-          },
-        },
-      };
+    const pushData = {
+      notification_id: String(notification._id),
+      type: String(notification.type),
+      screen: String(notification.screen || 'home'),
+      action_type: String(notification.action_type || 'none'),
+      action_payload: coerceActionPayloadString(notification.action_payload),
+      ride_id: String(notification.ride_id || ''),
+      subType: String(notification.event_key || 'general'),
+      event_key: String(notification.event_key || 'general'),
+      priority: String(notification.priority || 'normal'),
+    };
 
-      try {
-        const disableRetry =
-          options?.disable_retry === true || options?.disableRetry === true;
-        if (disableRetry) {
-          await sendPushNotification(
-            fcmToken,
-            notification.title,
-            notification.message,
-            firebasePayload.data,
-            String(userId)
-          );
-        } else {
-          await sendPushWithRetry(
-            fcmToken,
-            notification.title,
-            notification.message,
-            firebasePayload.data,
-            String(userId)
-          );
-        }
-      } catch (error) {
-        logger.error(`Failed to dispatch push notification: ${error.message}`);
-      }
-    }
+    const disableRetry =
+      options?.disable_retry === true || options?.disableRetry === true;
+
+    const pushPromise =
+      wantsPush && typeof fcmToken === 'string' && fcmToken.trim()
+        ? (async () => {
+            try {
+              if (disableRetry) {
+                await sendPushNotification(
+                  fcmToken,
+                  notification.title,
+                  notification.message,
+                  pushData,
+                  String(userId)
+                );
+              } else {
+                await sendPushWithRetry(
+                  fcmToken,
+                  notification.title,
+                  notification.message,
+                  pushData,
+                  String(userId)
+                );
+              }
+            } catch (error) {
+              logger.error(`Failed to dispatch push notification: ${error.message}`);
+            }
+          })()
+        : Promise.resolve();
+
+    const realtimePromise = skipRealtime
+      ? Promise.resolve()
+      : (async () => {
+          try {
+            const pusherService = getPusherService();
+            pusherService?.emitNotification(userId, realtimePayload);
+          } catch (error) {
+            logger.error(`Failed to dispatch realtime notification: ${error.message}`);
+          }
+
+          try {
+            const { getSocketService } = await import('./socketService.js');
+            const socketSvc = getSocketService();
+            socketSvc?.emitNewNotification?.(userId, realtimePayload);
+          } catch (error) {
+            logger.debug(`Socket NEW_NOTIFICATION skip: ${error.message}`);
+          }
+        })();
+
+    // Push + Pusher/Socket in parallel so device delivery is not blocked behind websocket work.
+    await Promise.all([pushPromise, realtimePromise]);
 
     return userNotification;
   } catch (error) {
@@ -1021,9 +1024,16 @@ export const sendToUser = async (userId, userRole, notifPayload) => {
     }
 
     const normalizedRole = normalizeUserRole(userRole || user.role);
-    const { disable_retry, disableRetry, ...restPayload } = normalizeRidePushPayload(
-      notifPayload || {}
-    );
+    const normalizedPayload = normalizeRidePushPayload(notifPayload || {});
+    const {
+      disable_retry: disable_retry_opt,
+      disableRetry: disableRetry_opt,
+      skip_realtime: skip_realtime_opt,
+      skipRealtime: skipRealtime_opt,
+      ...restPayload
+    } = normalizedPayload;
+    const disable_retry = disable_retry_opt ?? disableRetry_opt;
+    const skip_realtime = skip_realtime_opt ?? skipRealtime_opt;
     const notification = await createNotification({
       ...restPayload,
       target_role: normalizedRole,
@@ -1032,7 +1042,8 @@ export const sendToUser = async (userId, userRole, notifPayload) => {
     });
 
     await dispatchToUser(notification, user._id, normalizedRole, getUserFcmToken(user), {
-      disable_retry: disable_retry ?? disableRetry,
+      disable_retry,
+      skip_realtime,
     });
     return notification;
   } catch (error) {
