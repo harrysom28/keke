@@ -3,6 +3,8 @@
  * Extracts string messages from various error formats to prevent React rendering errors
  */
 
+import { UserMessages } from "@/constants/userMessages";
+
 export interface ErrorLike {
   message?: string;
   error?: string | { message?: string; name?: string };
@@ -10,6 +12,8 @@ export interface ErrorLike {
     data?: {
       message?: string | object;
       error?: string | object | { message?: string; name?: string };
+      errors?: Record<string, string[] | string>;
+      code?: string;
     };
     status?: number;
   };
@@ -17,156 +21,184 @@ export interface ErrorLike {
   status?: number;
   isOperational?: boolean;
   name?: string;
+  code?: string;
+}
+
+/** Known API error codes → user-friendly copy (when message is generic). */
+const CODE_MESSAGES: Record<string, string> = {
+  INSUFFICIENT_BALANCE: "Insufficient wallet balance. Please top up to continue.",
+  TOO_FAR_FROM_PICKUP: "You're too far from the pickup point. Move closer and try again.",
+  OFFER_EXPIRED: "This ride offer has expired.",
+  OFFER_GONE: "This ride is no longer available.",
+};
+
+function firstValidationMessage(errors: Record<string, string[] | string> | undefined): string | null {
+  if (!errors || typeof errors !== "object") return null;
+  for (const key of Object.keys(errors)) {
+    const val = errors[key];
+    if (Array.isArray(val) && val.length > 0 && typeof val[0] === "string") {
+      return val[0];
+    }
+    if (typeof val === "string" && val.trim()) {
+      return val;
+    }
+  }
+  return null;
+}
+
+function extractFromResponseData(data: Record<string, unknown> | undefined): string | null {
+  if (!data || typeof data !== "object") return null;
+
+  const validationMsg = firstValidationMessage(
+    data.errors as Record<string, string[] | string> | undefined
+  );
+  if (validationMsg) return validationMsg;
+
+  const code = typeof data.code === "string" ? data.code : null;
+  const message = data.message;
+
+  if (typeof message === "string" && message.trim()) {
+    const trimmed = message.trim();
+    if (trimmed.toLowerCase() === "validation failed" && validationMsg) {
+      return validationMsg;
+    }
+    return trimmed;
+  }
+
+  if (message && typeof message === "object") {
+    const m = message as { message?: string; error?: string; name?: string };
+    if (m.message && typeof m.message === "string") return m.message;
+    if (m.error && typeof m.error === "string") return m.error;
+  }
+
+  if (typeof data.error === "string" && data.error.trim()) {
+    return data.error.trim();
+  }
+
+  if (data.error && typeof data.error === "object") {
+    const e = data.error as { message?: string; name?: string };
+    if (e.message && typeof e.message === "string") return e.message;
+  }
+
+  if (code && CODE_MESSAGES[code]) {
+    return CODE_MESSAGES[code];
+  }
+
+  return null;
 }
 
 /**
  * Extracts a string error message from various error formats
- * @param error - Error object, string, or any error-like object
- * @param fallback - Fallback message if no error message can be extracted
- * @returns A safe string error message
  */
-export const getErrorMessage = (error: any, fallback: string = 'An unexpected error occurred'): string => {
-  // Handle null/undefined
+export const getErrorMessage = (
+  error: unknown,
+  fallback: string = UserMessages.genericError
+): string => {
   if (!error) {
     return fallback;
   }
 
-  // If it's already a string, return it
-  if (typeof error === 'string') {
+  if (typeof error === "string") {
     return error.trim() || fallback;
   }
 
-  // Handle API response errors (Axios format)
-  if (error?.response?.data) {
-    const data = error.response.data;
-    
-    // Try message field first
-    if (data.message) {
-      if (typeof data.message === 'string') {
-        return data.message;
-      }
-      // If message is an object, try to extract from it
-      if (typeof data.message === 'object') {
-        return data.message.message || data.message.error || data.message.name || String(data.message) || fallback;
-      }
-    }
-    
-    // Try error field
-    if (data.error) {
-      if (typeof data.error === 'string') {
-        return data.error;
-      }
-      // If error is an object, try to extract from it
-      if (typeof data.error === 'object') {
-        return data.error.message || data.error.name || String(data.error) || fallback;
-      }
-    }
+  if (error && typeof error === "object" && "response" in error) {
+    const data = (error as ErrorLike).response?.data;
+    const fromData = extractFromResponseData(data as Record<string, unknown>);
+    if (fromData) return fromData;
   }
 
-  // Handle Error objects (keep after Axios response parsing so we don't swallow server messages)
   if (error instanceof Error) {
-    return error.message || fallback;
-  }
-
-  // Handle nested error objects
-  if (error?.error) {
-    if (typeof error.error === 'string') {
-      return error.error;
-    }
-    if (typeof error.error === 'object') {
-      return error.error.message || error.error.name || String(error.error) || fallback;
+    const msg = error.message?.trim();
+    if (msg && msg !== "An error occurred" && msg !== "Request failed with status code") {
+      return msg;
     }
   }
 
-  // Handle direct message property
-  if (error?.message) {
-    if (typeof error.message === 'string') {
-      return error.message;
+  const errObj = error as ErrorLike;
+
+  if (errObj?.error) {
+    if (typeof errObj.error === "string" && errObj.error.trim()) {
+      return errObj.error;
     }
-    // If message is an object, try to extract from it
-    if (typeof error.message === 'object') {
-      return error.message.message || error.message.error || error.message.name || String(error.message) || fallback;
+    if (typeof errObj.error === "object" && errObj.error.message) {
+      return errObj.error.message;
     }
   }
 
-  // Handle name property (for Error-like objects)
-  if (error?.name && typeof error.name === 'string') {
-    return error.name;
-  }
-
-  // Try to stringify the error as last resort
-  try {
-    const stringified = String(error);
-    if (stringified !== '[object Object]' && stringified !== '{}') {
-      return stringified;
+  if (errObj?.message) {
+    if (typeof errObj.message === "string" && errObj.message.trim()) {
+      return errObj.message;
     }
-  } catch {
-    // Ignore stringification errors
+    if (typeof errObj.message === "object") {
+      const m = errObj.message as { message?: string; error?: string };
+      if (m.message) return m.message;
+      if (m.error) return m.error;
+    }
   }
 
-  // Final fallback
+  if (errObj?.code && CODE_MESSAGES[errObj.code]) {
+    return CODE_MESSAGES[errObj.code];
+  }
+
   return fallback;
 };
 
-/**
- * Creates a safe error object that can be safely passed to React components
- * @param error - Any error-like object
- * @param fallback - Fallback message
- * @returns An Error object with a string message
- */
-export const createSafeError = (error: any, fallback: string = 'An unexpected error occurred'): Error => {
+export const getApiErrorCode = (error: unknown): string | null => {
+  const data = (error as ErrorLike)?.response?.data;
+  if (data?.code && typeof data.code === "string") return data.code;
+  return null;
+};
+
+export const createSafeError = (
+  error: unknown,
+  fallback: string = UserMessages.genericError
+): Error => {
   const message = getErrorMessage(error, fallback);
   const safeError = new Error(message);
-  
-  // Preserve status code if available
-  if (error?.response?.status) {
-    (safeError as any).status = error.response.status;
-  } else if (error?.status) {
-    (safeError as any).status = error.status;
-  } else if (error?.statusCode) {
-    (safeError as any).status = error.statusCode;
+
+  const err = error as ErrorLike;
+  if (err?.response?.status) {
+    (safeError as { status?: number }).status = err.response.status;
+  } else if (err?.status) {
+    (safeError as { status?: number }).status = err.status;
+  } else if (err?.statusCode) {
+    (safeError as { status?: number }).status = err.statusCode;
   }
-  
-  // Preserve isAuthError flag
-  if (error?.isAuthError) {
-    (safeError as any).isAuthError = true;
+
+  if ((error as { isAuthError?: boolean })?.isAuthError) {
+    (safeError as { isAuthError?: boolean }).isAuthError = true;
   }
-  
+
   return safeError;
 };
 
-/**
- * Checks if an error is an authentication error
- */
-export const isAuthError = (error: any): boolean => {
+export const isAuthError = (error: unknown): boolean => {
+  const err = error as ErrorLike & { isAuthError?: boolean };
   return (
-    error?.isAuthError === true ||
-    error?.response?.status === 401 ||
-    error?.status === 401 ||
-    error?.statusCode === 401
+    err?.isAuthError === true ||
+    err?.response?.status === 401 ||
+    err?.status === 401 ||
+    err?.statusCode === 401
   );
 };
 
-/**
- * Checks if an error is a network error
- */
-export const isNetworkError = (error: any): boolean => {
+export const isNetworkError = (error: unknown): boolean => {
+  const err = error as ErrorLike & { code?: string; message?: string };
   return (
-    !error?.response && // No response means network issue
-    (error?.message?.includes('Network') ||
-     error?.message?.includes('timeout') ||
-     error?.message?.includes('ECONNREFUSED') ||
-     error?.code === 'ECONNREFUSED' ||
-     error?.code === 'ETIMEDOUT')
+    !err?.response &&
+    (err?.message?.includes("Network") ||
+      err?.message?.includes("network") ||
+      err?.message?.includes("timeout") ||
+      err?.message?.includes("ECONNREFUSED") ||
+      err?.code === "ECONNREFUSED" ||
+      err?.code === "ETIMEDOUT" ||
+      err?.code === "ERR_NETWORK")
   );
 };
 
-/**
- * Convenience function to show error messages using react-native-flash-message
- * This ensures errors are always displayed as strings
- */
 export const showErrorMessage = (
-  error: any,
+  error: unknown,
   options?: {
     type?: "success" | "warning" | "danger" | "info";
     duration?: number;
@@ -174,12 +206,14 @@ export const showErrorMessage = (
   }
 ) => {
   const { showMessage } = require("react-native-flash-message");
-  const errorMessage = getErrorMessage(error, options?.fallback || 'An error occurred');
-  
+  const errorMessage = isNetworkError(error)
+    ? UserMessages.networkError
+    : getErrorMessage(error, options?.fallback ?? UserMessages.genericError);
+
   showMessage({
     type: options?.type || "danger",
     message: errorMessage,
-    duration: options?.duration || 3000,
+    duration: options?.duration || 4000,
   });
 };
 

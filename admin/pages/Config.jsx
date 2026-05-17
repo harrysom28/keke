@@ -26,7 +26,7 @@ function ConfigPage({ showToast, defaultTab }) {
   const [arrival, setArrival] = useState(null);
   const [walletLimits, setWalletLimits] = useState(null);
   const [feesSaving, setFeesSaving] = useState(false);
-  const [vtModal, setVtModal] = useState({ open: false, editing: null, name: '', display_name: '', description: '', base_fare: '', per_km_rate: '', per_minute_rate: '', capacity: '4', order: '0', is_active: true });
+  const [vtModal, setVtModal] = useState({ open: false, editing: null, name: '', display_name: '', description: '', base_fare: '', per_km_rate: '', per_minute_rate: '', minimum_fare: '', multiplier: '1', capacity: '4', order: '0', is_active: true });
   const [promoModal, setPromoModal] = useState({ open: false, editing: null, code: '', description: '', discount_type: 'percentage', discount_value: '', max_discount: '', min_amount: '0', max_uses: '', max_uses_per_user: '1', valid_from: '', valid_to: '', is_active: true });
 
   const loadVehicleTypes = () => Api.get('/api/admin/vehicle-types').then((res) => {
@@ -135,7 +135,7 @@ function ConfigPage({ showToast, defaultTab }) {
     }).finally(() => setPricingSaving(false));
   };
 
-  const openAddVt = () => setVtModal({ open: true, editing: null, name: '', display_name: '', description: '', base_fare: '', per_km_rate: '', per_minute_rate: '', capacity: '4', order: '0', is_active: true });
+  const openAddVt = () => setVtModal({ open: true, editing: null, name: '', display_name: '', description: '', base_fare: '', per_km_rate: '', per_minute_rate: '', minimum_fare: '', multiplier: '1', capacity: '4', order: '0', is_active: true });
   const openEditVt = (row) => setVtModal({
     open: true,
     editing: row.vehicle_id,
@@ -145,6 +145,8 @@ function ConfigPage({ showToast, defaultTab }) {
     base_fare: row.base_fare != null ? String(row.base_fare) : '',
     per_km_rate: row.per_km_rate != null ? String(row.per_km_rate) : '',
     per_minute_rate: row.per_minute_rate != null ? String(row.per_minute_rate) : '',
+    minimum_fare: row.minimum_fare != null ? String(row.minimum_fare) : '',
+    multiplier: row.multiplier != null ? String(row.multiplier) : '1',
     capacity: row.capacity != null ? String(row.capacity) : '4',
     order: row.order != null ? String(row.order) : '0',
     is_active: row.is_active !== false,
@@ -158,6 +160,8 @@ function ConfigPage({ showToast, defaultTab }) {
       baseFare: parseFloat(vtModal.base_fare),
       perKmRate: parseFloat(vtModal.per_km_rate),
       perMinuteRate: parseFloat(vtModal.per_minute_rate),
+      ...(vtModal.minimum_fare !== '' ? { minimumFare: parseFloat(vtModal.minimum_fare) } : {}),
+      ...(vtModal.multiplier !== '' ? { multiplier: parseFloat(vtModal.multiplier) } : {}),
       capacity: parseInt(vtModal.capacity, 10) || 4,
       order: parseInt(vtModal.order, 10) || 0,
       isActive: vtModal.is_active,
@@ -244,6 +248,8 @@ function ConfigPage({ showToast, defaultTab }) {
     { key: 'display_name', label: 'Display name' },
     { key: 'base_fare', label: 'Base fare', render: (v) => v != null ? Utils.formatCurrency(v) : '—' },
     { key: 'per_km_rate', label: 'Per km', render: (v) => v != null ? Utils.formatCurrency(v) : '—' },
+    { key: 'minimum_fare', label: 'Min fare', render: (v) => v != null ? Utils.formatCurrency(v) : '—' },
+    { key: 'multiplier', label: '× Mult' },
     { key: 'per_minute_rate', label: 'Per min', render: (v) => v != null ? Utils.formatCurrency(v) : '—' },
     { key: 'capacity', label: 'Capacity' },
     { key: 'is_active', label: 'Active', render: (v) => v ? 'Yes' : 'No' },
@@ -277,6 +283,9 @@ function ConfigPage({ showToast, defaultTab }) {
 
       {tab === 'vehicle-types' && (
         <>
+          <p className="text-sm text-gray-500 dark:text-gray-400 px-1">
+            Fares use each vehicle type&apos;s base, per km, minimum, and multiplier. Empty or legacy values fall back to <strong>Ride pricing</strong> defaults.
+          </p>
           <div className="flex justify-end min-w-0">
             <button type="button" onClick={openAddVt} className="shrink-0 whitespace-nowrap px-3 py-1.5 bg-blue-600 text-white rounded-lg">Add vehicle type</button>
           </div>
@@ -415,7 +424,7 @@ function ConfigPage({ showToast, defaultTab }) {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 max-w-lg">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">KEKE ride pricing (₦)</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-            <strong>Formula:</strong> Total Fare = Base Fare + (Distance × Per KM Rate). If the result is less than the minimum fare, the minimum fare is charged. These values apply globally to all ride calculations. Rider service charge is set under Fee settings.
+            <strong>Formula:</strong> Total Fare = Base Fare + (Distance × Per KM Rate). If the result is less than the minimum fare, the minimum fare is charged. These are <strong>default fallback</strong> values when a vehicle type has no rate set (see Vehicle types &amp; pricing). Rider service charge is under Fee settings.
           </p>
           {loading ? <C.Skeleton className="h-48 w-full" /> : pricing ? (
             <div className="space-y-4">

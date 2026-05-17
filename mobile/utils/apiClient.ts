@@ -6,6 +6,7 @@ import { getApiUrlWithOverride } from './apiUrlOverride';
 import AppStore from '@/store';
 import { updateRefreshToken, updateToken } from '@/store/AuthSlice';
 import { REFRESH_TOKEN } from '@/constants';
+import { getErrorMessage } from '@/utils/errorHandler';
 
 /**
  * Configured Axios instance for API requests
@@ -466,16 +467,9 @@ apiClient.interceptors.response.use(
       }
     }
 
-    // Transform error to ensure it always has a string message
-    // This prevents "Objects are not valid as a React child" errors
-    const safeErrorMessage = 
-      error?.response?.data?.message || 
-      error?.response?.data?.error?.message ||
-      error?.message || 
-      'An error occurred';
-    
-    // Create a new error with a safe string message
-    const safeError = new Error(typeof safeErrorMessage === 'string' ? safeErrorMessage : String(safeErrorMessage));
+    const safeErrorMessage = getErrorMessage(error);
+
+    const safeError = new Error(safeErrorMessage);
     
     // Preserve important error properties
     (safeError as any).response = error.response;

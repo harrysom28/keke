@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, StyleSheet, Text, View } from "react-native";
-import { AntDesign, Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 
 import type { RideState } from "./rideStates";
 
@@ -13,6 +13,16 @@ interface Props {
   arrivingBy?: string | null;
   reassurance?: string;
 }
+
+type IonIconName = React.ComponentProps<typeof Ionicons>["name"];
+
+const STATE_ICONS: Record<RideState, IonIconName> = {
+  heading_to_pickup: "navigate-outline",
+  arrived_pickup: "checkmark-circle-outline",
+  trip_started: "car-outline",
+  near_destination: "location-outline",
+  completed: "happy-outline",
+};
 
 export function RideStatusHeader({ state, title, subtitle, arrivingBy, reassurance }: Props) {
   const opacity = useRef(new Animated.Value(1)).current;
@@ -33,26 +43,13 @@ export function RideStatusHeader({ state, title, subtitle, arrivingBy, reassuran
     setShownSubtitle(nextSubtitle);
   }, [title, subtitle, shownTitle, shownSubtitle, opacity]);
 
-  const icon = useMemo(() => {
-    switch (state) {
-      case "heading_to_pickup":
-        return <Ionicons name="navigate-outline" size={18} color={BRAND_GREEN} />;
-      case "arrived_pickup":
-        return <AntDesign name="checkcircle" size={18} color={BRAND_GREEN} />;
-      case "trip_started":
-        return <AntDesign name="car" size={18} color={BRAND_GREEN} />;
-      case "near_destination":
-        return <AntDesign name="enviromento" size={18} color={BRAND_GREEN} />;
-      case "completed":
-        return <AntDesign name="smileo" size={18} color={BRAND_GREEN} />;
-    }
-  }, [state]);
+  const iconName = useMemo(() => STATE_ICONS[state] ?? "information-circle-outline", [state]);
 
   return (
     <View style={styles.container}>
       <View style={styles.pillRow}>
         <View style={styles.pill}>
-          {icon}
+          <Ionicons name={iconName} size={18} color={BRAND_GREEN} />
           <Text style={styles.pillText}>{shownTitle}</Text>
         </View>
         {arrivingBy ? (
@@ -133,4 +130,3 @@ const styles = StyleSheet.create({
     fontFamily: "RobotoRegular",
   },
 });
-

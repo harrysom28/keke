@@ -95,35 +95,26 @@ export const findNearbyDrivers = (drivers, lat, lon, radiusKm = 10) => {
 };
 
 /**
- * KEKE fare formula:
- * Total Fare = Base Fare + (Distance × Per KM Rate)
+ * KEKE fare formula (per vehicle type, from admin):
+ * Total Fare = (Base Fare + Distance × Per KM Rate) × vehicle multiplier
  * If Total Fare < Minimum Fare → Charge Minimum Fare
  *
  * @param {number} distanceKm - Distance in kilometers
- * @param {number} durationMinutes - Duration in minutes (kept for API compat; not used in KEKE formula)
- * @param {string|null} vehicleTypeId - Vehicle type ID (for future multipliers)
- * @param {object} [pricing] - Admin pricing settings. If provided, uses KEKE formula.
- *   { baseFare, perKmRate, minimumFare, currency }
+ * @param {number} durationMinutes - Duration in minutes (kept for API compat; not used in formula)
+ * @param {object} resolvedPricing - Output of resolveVehicleFarePricing()
+ *   { baseFare, perKmRate, minimumFare, currency, multiplier, vehicleTypeId?, vehicleTypeName? }
  */
-export const calculateFare = (distanceKm, durationMinutes, vehicleTypeId = null, pricing = null) => {
-  const baseFare = pricing?.baseFare ?? parseFloat(process.env.BASE_FARE || '500');
-  const perKmRate = pricing?.perKmRate ?? parseFloat(process.env.PER_KM_RATE || '150');
-  const minimumFare = pricing?.minimumFare ?? parseFloat(process.env.MINIMUM_FARE || '800');
-  const currency = pricing?.currency || 'NGN';
+export const calculateFare = (distanceKm, durationMinutes, resolvedPricing) => {
+  const pricing = resolvedPricing && typeof resolvedPricing === 'object' ? resolvedPricing : {};
+  const baseFare = Number(pricing.baseFare) || 0;
+  const perKmRate = Number(pricing.perKmRate) || 0;
+  const minimumFare = Number(pricing.minimumFare) || 0;
+  const currency = pricing.currency || 'NGN';
+  const multiplier = Number(pricing.multiplier) > 0 ? Number(pricing.multiplier) : 1;
 
-  // Vehicle type multipliers (optional future use)
-  const vehicleMultipliers = {
-    '1': 1.0,
-    '2': 1.2,
-    '3': 1.5,
-  };
-  const multiplier = vehicleMultipliers[vehicleTypeId] || 1.0;
-
-  // KEKE formula: Base + (Distance × Per KM)
   const distanceFare = distanceKm * perKmRate;
   let totalFare = (baseFare + distanceFare) * multiplier;
 
-  // Apply minimum fare floor
   if (totalFare < minimumFare) {
     totalFare = minimumFare;
   }
@@ -131,11 +122,13 @@ export const calculateFare = (distanceKm, durationMinutes, vehicleTypeId = null,
   return {
     baseFare,
     distanceFare: distanceKm * perKmRate,
-    timeFare: 0, // KEKE model doesn't use per-minute
+    timeFare: 0,
     totalFare: Math.round(totalFare),
     minimumFare,
     currency,
     multiplier,
+    vehicleTypeId: pricing.vehicleTypeId ?? null,
+    vehicleTypeName: pricing.vehicleTypeName ?? null,
     breakdown: {
       base: baseFare,
       distance: distanceKm,

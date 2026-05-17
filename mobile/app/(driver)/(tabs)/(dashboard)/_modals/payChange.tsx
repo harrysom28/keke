@@ -14,6 +14,7 @@ import { AntDesign } from "@expo/vector-icons";
 import { AppContext } from "@/app/context";
 import { PAY_CHANGE } from "@/constants";
 import axios from "axios";
+import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
@@ -76,30 +77,7 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
         // setData(data?.data);
       })
       .catch((err) => {
-        console.log(err?.response?.data);
-        const errorMessage = typeof err?.response?.data?.message === 'string' 
-          ? err.response.data.message 
-          : String(err.response.data.message || 'An error occurred');
-        if (errorMessage && errorMessage !== 'An error occurred') {
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else if (err?.response?.data?.error) {
-          const errorData = err.response.data.error;
-          const extractedErrorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          showMessage({
-            type: "danger",
-            message: extractedErrorMessage,
-          });
-        } else {
-          showMessage({
-            type: "danger",
-            message: "Something went wrong! Check your internet connection",
-          });
-        }
+        showErrorMessage(err, { fallback: "Could not record payment change. Please try again." });
       })
       .finally(() => setLoading(false));
   };

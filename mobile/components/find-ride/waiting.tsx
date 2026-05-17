@@ -19,6 +19,7 @@ import { TouchableAction } from "@/components/ui/TouchableAction";
 
 import { TRide } from "@/types";
 import tw from "@/lib/tailwind";
+import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import apiClient from "@/utils/apiClient";
@@ -218,13 +219,8 @@ export const WaitingView = ({
         message: fare != null ? `Ride ended. Fare: ₦${Number(fare).toLocaleString()}` : "Ride ended successfully.",
       });
       resolveTripAndNavigate(rideId);
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        err?.message ||
-        "Unable to end ride. Please try again.";
-      showMessage({ type: "danger", message: String(msg) });
+    } catch (err: unknown) {
+      showErrorMessage(err, { fallback: "Unable to end ride. Please try again." });
     } finally {
       setForceCompleting(false);
     }

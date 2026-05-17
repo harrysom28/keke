@@ -23,6 +23,7 @@ import { AppContext } from "@/app/context";
 import { useSelector } from "react-redux";
 import { AuthState } from "@/store/AuthSlice";
 import axios from "axios";
+import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import { INITIATE_WALLET_TOPUP } from "@/constants";
 import apiClient from "@/utils/apiClient";
@@ -141,10 +142,8 @@ const WalletScreen = () => {
         setWalletAvailableBalance(Number.isFinite(available) ? available : 0);
         setWalletHeldBalance(held);
         setWalletTotalBalance(safeTotal);
-      } catch (error: any) {
-        if (error?.response?.data?.message) {
-          showMessage({ type: "danger", message: String(error.response.data.message) });
-        }
+      } catch (error: unknown) {
+        showErrorMessage(error);
       } finally {
         setWalletSummaryLoading(false);
       }
@@ -180,21 +179,7 @@ const WalletScreen = () => {
   }, [topupModal, topupMethod, fetchWalletSummary, getCurrentUser]);
 
 
-  useEffect(() => {
-    if (initialBalanceRef.current != null && user?.profile?.balance !== undefined) {
-      const initial = parseFloat(initialBalanceRef.current) || 0;
-      const current = parseFloat(String(user.profile.balance)) || 0;
-      if (current > initial && initialBalanceRef.current !== String(user.profile.balance)) {
-        console.log("✅ Balance updated! Old:", initialBalanceRef.current, "New:", user.profile.balance);
-        showMessage({
-          type: "success",
-          message: `Payment successful! Balance updated to ₦${current.toLocaleString()}`,
-          duration: 4000,
-        });
-        initialBalanceRef.current = undefined;
-      }
-    }
-  }, [user?.profile?.balance]);
+  // Balance-increase toasts are handled in fetchWalletSummary to avoid duplicate success messages.
 
   const fetchTransactions = async () => {
     setLoading(true);

@@ -492,9 +492,17 @@ export default function HomeScreen() {
         destination: { latitude: 0, longitude: 0 },
       });
       setRouteKey((k) => k + 1);
-      activeRideSheetRef?.current?.close();
-      tripCompletedRef.current = true;
-      setTripCompleted(true);
+      tripCompletedRef.current = false;
+      setTripCompleted(false);
+
+      // Open the ride sheet directly on SUMMARY (do not gate behind TripCompletedModal).
+      setTimeout(() => {
+        try {
+          activeRideSheetRef?.current?.open();
+        } catch {
+          // ignore
+        }
+      }, 250);
 
       if (mapRef.current) {
         const lat = locationRef.current.latitude;
@@ -2346,8 +2354,8 @@ export default function HomeScreen() {
     }
 
     if (notificationEvent?.data?.sub_type === "private.completed_ride") {
-      tripCompletedRef.current = true;
-      setTripCompleted(true);
+      tripCompletedRef.current = false;
+      setTripCompleted(false);
       setPaymentReceipt(false);
       getActiveRide();
     }

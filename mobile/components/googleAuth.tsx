@@ -7,6 +7,7 @@ import axios from "axios";
 import { getUniqueId } from "react-native-device-info";
 import { requestUserNotificationPermission } from "@/utils/notifications";
 import { router } from "expo-router";
+import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { updateToken } from "@/store/AuthSlice";
@@ -63,16 +64,8 @@ const GoogleAuthButton = () => {
               message: err.response.data.message,
               type: "danger",
             });
-          } else if (err?.response?.status) {
-            showMessage({
-              type: "danger",
-              message: `Server error: ${err.response.status}`,
-            });
           } else {
-            showMessage({
-              type: "danger",
-              message: "Network error: Unable to reach server. Please check your connection.",
-            });
+            showErrorMessage(err);
           }
         })
         .finally(() => setLoading(false));

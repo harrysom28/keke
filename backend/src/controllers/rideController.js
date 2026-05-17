@@ -5,6 +5,7 @@ import VehicleType from '../models/VehicleType.js';
 import { getAdminSettings } from '../utils/adminSettingsCache.js';
 import User from '../models/User.js';
 import { calculateDistance, calculateDuration, calculateFare } from '../utils/geolocation.js';
+import { resolveVehicleFarePricing } from '../utils/pricingResolver.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
@@ -160,10 +161,8 @@ export const requestRide = asyncHandler(async (req, res) => {
 
   const durationMinutes = calculateDuration(distanceKm);
 
-  // Fetch admin pricing settings for KEKE fare formula (Redis-backed when available)
-  const pricing = settings?.pricing ? { ...settings.pricing } : null;
-
-  const fareBreakdown = calculateFare(distanceKm, durationMinutes, vehicleTypeId, pricing);
+  const resolvedPricing = resolveVehicleFarePricing(vehicleType, settings?.pricing);
+  const fareBreakdown = calculateFare(distanceKm, durationMinutes, resolvedPricing);
 
   const surgePricing = await surgePricingService.calculateSurgeMultiplier();
 
@@ -395,10 +394,17 @@ export const getFareEstimate = asyncHandler(async (req, res) => {
 
   const durationMinutes = calculateDuration(distanceKm);
 
-  const settings = await getAdminSettings();
-  const pricing = settings?.pricing ? { ...settings.pricing } : null;
+  const [vehicleType, settings] = await Promise.all([
+    VehicleType.findById(vehicleTypeId),
+    getAdminSettings(),
+  ]);
 
-  const fareBreakdown = calculateFare(distanceKm, durationMinutes, vehicleTypeId, pricing);
+  if (!vehicleType || !vehicleType.isActive) {
+    throw new NotFoundError('Vehicle type');
+  }
+
+  const resolvedPricing = resolveVehicleFarePricing(vehicleType, settings?.pricing);
+  const fareBreakdown = calculateFare(distanceKm, durationMinutes, resolvedPricing);
 
   const surgePricing = await surgePricingService.calculateSurgeMultiplier();
 
@@ -465,12 +471,10 @@ export const getFareEstimatePreview = asyncHandler(async (req, res) => {
       { name: { $regex: /keke/i } },
       { displayName: { $regex: /keke/i } },
     ],
-  })
-    .select('_id')
-    .lean();
+  }).lean();
 
   if (!vehicleType?._id) {
-    vehicleType = await VehicleType.findOne({ isActive: true }).select('_id').lean();
+    vehicleType = await VehicleType.findOne({ isActive: true }).sort({ order: 1 }).lean();
   }
 
   if (!vehicleType?._id) {
@@ -481,9 +485,8 @@ export const getFareEstimatePreview = asyncHandler(async (req, res) => {
   const estimatedMins = calculateDuration(distanceKm);
 
   const settings = await getAdminSettings();
-  const pricing = settings?.pricing ? { ...settings.pricing } : null;
-
-  const fareBreakdown = calculateFare(distanceKm, estimatedMins, vehicleType._id, pricing);
+  const resolvedPricing = resolveVehicleFarePricing(vehicleType, settings?.pricing);
+  const fareBreakdown = calculateFare(distanceKm, estimatedMins, resolvedPricing);
   const surgePricing = await surgePricingService.calculateSurgeMultiplier();
   const fareWithSurge = surgePricingService.applySurgePricing(
     fareBreakdown.totalFare,

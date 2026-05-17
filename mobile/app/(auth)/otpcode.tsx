@@ -25,6 +25,7 @@ import { OtpInput } from "react-native-otp-entry";
 import apiClient from "@/utils/apiClient";
 import { getUniqueId } from "react-native-device-info";
 import { requestUserNotificationPermission } from "@/utils/notifications";
+import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { formatPhoneForDisplay } from "@/utils/phoneFormat";
@@ -247,16 +248,8 @@ const OtpCode = () => {
             message: err.response.data.message,
             type: "danger",
           });
-        } else if (err?.response?.status) {
-          showMessage({
-            type: "danger",
-            message: `Server error: ${err.response.status}`,
-          });
         } else {
-          showMessage({
-            type: "danger",
-            message: "Network error: Unable to reach server. Please check your connection.",
-          });
+          showErrorMessage(err);
         }
       })
       .finally(() => setResend(false));

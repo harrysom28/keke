@@ -7,15 +7,16 @@ dotenv.config();
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/keke-ride-hailing';
 
-// Vehicle types: keke, bike, taxi
+// Vehicle types: keke, bike, taxi (NGN — used when admin sets per-type pricing)
 const vehicleTypes = [
   {
     name: 'keke',
     displayName: 'Keke',
     description: 'Affordable three-wheeled rides',
-    baseFare: 1.50,
-    perKmRate: 0.80,
-    perMinuteRate: 0.20,
+    baseFare: 500,
+    perKmRate: 150,
+    perMinuteRate: 0,
+    minimumFare: 800,
     multiplier: 1.0,
     capacity: 3,
     order: 1,
@@ -34,10 +35,11 @@ const vehicleTypes = [
     name: 'bike',
     displayName: 'Bike',
     description: 'Fast motorcycle rides',
-    baseFare: 1.00,
-    perKmRate: 0.50,
-    perMinuteRate: 0.15,
-    multiplier: 0.8,
+    baseFare: 400,
+    perKmRate: 120,
+    perMinuteRate: 0,
+    minimumFare: 650,
+    multiplier: 1.0,
     capacity: 2,
     order: 2,
     isActive: true,
@@ -61,9 +63,10 @@ const vehicleTypes = [
     name: 'taxi',
     displayName: 'Taxi',
     description: 'Comfortable car rides',
-    baseFare: 2.50,
-    perKmRate: 1.50,
-    perMinuteRate: 0.30,
+    baseFare: 700,
+    perKmRate: 200,
+    perMinuteRate: 0,
+    minimumFare: 1000,
     multiplier: 1.0,
     capacity: 4,
     order: 3,

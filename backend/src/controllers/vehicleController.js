@@ -272,6 +272,7 @@ const formatVehicleTypeResponse = (type) => {
     base_fare: type.baseFare,
     per_km_rate: type.perKmRate,
     per_minute_rate: type.perMinuteRate,
+    minimum_fare: type.minimumFare ?? null,
     multiplier: type.multiplier,
     capacity: type.capacity,
     is_active: type.isActive,

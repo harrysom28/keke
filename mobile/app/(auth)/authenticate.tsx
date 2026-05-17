@@ -13,6 +13,7 @@ import axios from "axios";
 import apiClient from "@/utils/apiClient";
 import { getUniqueId } from "react-native-device-info";
 import { requestUserNotificationPermission } from "@/utils/notifications";
+import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { verticalScale } from "@/constants/Metrics";
@@ -137,18 +138,15 @@ const Authenticate = () => {
               ? errorData
               : errorData?.message || errorData?.name || "An error occurred";
           showMessage({ type: "danger", message: msg });
-        } else if (err?.response?.status) {
-          showMessage({
-            type: "danger",
-            message: `Server error: ${err.response.status}`,
-          });
-        } else {
+        } else if (!err?.response) {
           const apiBase = getApiUrlWithOverride();
           const networkMessage = IS_PHYSICAL_DEVICE
-            ? "Cannot reach server. Set your computer's IP in mobile/utils/apiUrlOverride.ts, then reload."
-            : "Network error: Check that the backend is running (npm run dev in backend/).";
+            ? "Cannot reach Keke. Set your computer's IP in mobile/utils/apiUrlOverride.ts, then reload."
+            : "Cannot reach Keke. Check that the backend is running, then try again.";
           showMessage({ type: "danger", message: networkMessage });
           if (__DEV__) console.warn("API base:", apiBase);
+        } else {
+          showErrorMessage(err);
         }
       })
       .finally(() => setLoading(false));

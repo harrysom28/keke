@@ -13,7 +13,7 @@ import { Path, Svg } from "react-native-svg";
 import { memo, useCallback, useContext, useEffect, useRef, useState, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
-import { AntDesign } from "@expo/vector-icons";
+import { AntDesign, Ionicons } from "@expo/vector-icons";
 import { getVehicleImage } from "@/utils/vehicleImages";
 import { Image as RNImage } from "react-native";
 import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
@@ -219,11 +219,10 @@ const ListItem = memo(({ item, onPress, onClick, onReassign, isActive }: LProps)
               {itemData?.name || itemData?.driver_name || itemData?.user?.name || 'Driver'}
             </Text>
             <View style={tw`flex-row items-center gap-x-1.5 self-end mb-0.5`}>
-              <AntDesign
-                name={"star"}
+              <Ionicons
+                name="star"
                 size={14}
-                color={tw.color("base-green") || '#00C853'}
-                filled
+                color={tw.color("base-green") || "#00C853"}
               />
               <Text
                 style={tw.style(`text-sm text-[#F9F0FF]`, {

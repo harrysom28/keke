@@ -12,6 +12,7 @@ import AuthForm from "@/components/AuthForm";
 import GoogleAuthButton from "@/components/googleAuth";
 import PhoneInput from "@perttu/react-native-phone-number-input";
 import apiClient from "@/utils/apiClient";
+import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
@@ -68,13 +69,7 @@ const Login = () => {
         });
       })
       .catch((err) => {
-        if (err?.response?.data?.message) {
-          showMessage({ type: "danger", message: err.response.data.message });
-        } else if (err?.response?.status) {
-          showMessage({ type: "danger", message: `Server error: ${err.response.status}` });
-        } else {
-          showMessage({ type: "danger", message: "Network error: Unable to reach server." });
-        }
+        showErrorMessage(err);
       })
       .finally(() => setLoading(false));
   };

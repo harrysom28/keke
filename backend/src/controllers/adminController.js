@@ -1618,15 +1618,14 @@ export const adminForceCompleteRide = asyncHandler(async (req, res) => {
 
   const ride = await Ride.findById(rideId);
   if (!ride) {
-    return res.status(404).json({ success: false, error: 'Ride not found' });
+    throw new NotFoundError('Ride');
   }
 
   const COMPLETABLE_STATUSES = ['in-progress', 'issue_flagged', 'driver_offline'];
   if (!COMPLETABLE_STATUSES.includes(ride.status)) {
-    return res.status(400).json({
-      success: false,
-      error: `Cannot complete ride with status: ${ride.status}. Only in-progress or flagged rides can be admin-completed.`,
-    });
+    throw new ValidationError(
+      'Only in-progress or flagged rides can be completed from admin.'
+    );
   }
 
   ride.status = 'completed';
@@ -3095,6 +3094,8 @@ export const listVehicleTypes = asyncHandler(async (req, res) => {
         base_fare: type.baseFare,
         per_km_rate: type.perKmRate,
         per_minute_rate: type.perMinuteRate,
+        minimum_fare: type.minimumFare ?? null,
+        multiplier: type.multiplier ?? 1,
         capacity: type.capacity,
         is_active: type.isActive,
         order: type.order,
@@ -3116,6 +3117,8 @@ export const createVehicleType = asyncHandler(async (req, res) => {
     baseFare,
     perKmRate,
     perMinuteRate,
+    minimumFare,
+    multiplier,
     capacity,
     order,
     isActive,
@@ -3145,6 +3148,12 @@ export const createVehicleType = asyncHandler(async (req, res) => {
     baseFare: parseFloat(baseFare),
     perKmRate: parseFloat(perKmRate),
     perMinuteRate: parseFloat(perMinuteRate),
+    ...(minimumFare !== undefined && minimumFare !== null && minimumFare !== ''
+      ? { minimumFare: parseFloat(minimumFare) }
+      : {}),
+    ...(multiplier !== undefined && multiplier !== null && multiplier !== ''
+      ? { multiplier: parseFloat(multiplier) }
+      : {}),
     capacity: capacity || 4,
     order: order || 0,
     isActive: isActive !== undefined ? isActive : true,
@@ -3198,6 +3207,13 @@ export const updateVehicleType = asyncHandler(async (req, res) => {
   if (updateData.baseFare !== undefined) updateData.baseFare = parseFloat(updateData.baseFare);
   if (updateData.perKmRate !== undefined) updateData.perKmRate = parseFloat(updateData.perKmRate);
   if (updateData.perMinuteRate !== undefined) updateData.perMinuteRate = parseFloat(updateData.perMinuteRate);
+  if (updateData.minimumFare !== undefined) {
+    updateData.minimumFare =
+      updateData.minimumFare === null || updateData.minimumFare === ''
+        ? null
+        : parseFloat(updateData.minimumFare);
+  }
+  if (updateData.multiplier !== undefined) updateData.multiplier = parseFloat(updateData.multiplier);
   if (updateData.capacity !== undefined) updateData.capacity = parseInt(updateData.capacity);
   if (updateData.order !== undefined) updateData.order = parseInt(updateData.order);
 

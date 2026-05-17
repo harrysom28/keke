@@ -37,11 +37,19 @@ const serializeError = (err) => ({
  * Custom Error Classes
  */
 export class AppError extends Error {
-  constructor(message, statusCode) {
+  /**
+   * @param {string} message - User-facing message
+   * @param {number} statusCode
+   * @param {{ code?: string, data?: object, errors?: object }} [extras]
+   */
+  constructor(message, statusCode, extras = {}) {
     super(message);
     this.statusCode = statusCode;
     this.status = `${statusCode}`.startsWith('4') ? 'fail' : 'error';
     this.isOperational = true;
+    if (extras.code) this.code = extras.code;
+    if (extras.data && typeof extras.data === 'object') this.data = extras.data;
+    if (extras.errors && typeof extras.errors === 'object') this.errors = extras.errors;
 
     Error.captureStackTrace(this, this.constructor);
   }
@@ -49,11 +57,39 @@ export class AppError extends Error {
 
 export class ValidationError extends AppError {
   constructor(message, errors = {}) {
-    super(message, 400);
+    const hasFieldErrors = errors && typeof errors === 'object' && Object.keys(errors).length > 0;
+    const displayMessage =
+      hasFieldErrors && (!message || message === 'Validation failed')
+        ? firstValidationMessage(errors) || 'Please check your entries and try again.'
+        : message || 'Please check your entries and try again.';
+    super(displayMessage, 400, { errors });
     this.errors = errors;
     this.name = 'ValidationError';
   }
 }
+
+function firstValidationMessage(errors) {
+  for (const key of Object.keys(errors)) {
+    const val = errors[key];
+    if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'string') return val[0];
+    if (typeof val === 'string' && val.trim()) return val;
+  }
+  return null;
+}
+
+const DUPLICATE_FIELD_LABELS = {
+  email: 'Email',
+  phone: 'Phone number',
+  username: 'Username',
+  referralCode: 'Referral code',
+};
+
+const CAST_PATH_LABELS = {
+  rideId: 'Ride',
+  driverId: 'Driver',
+  vehicleTypeId: 'Vehicle type',
+  userId: 'User',
+};
 
 export class AuthenticationError extends AppError {
   constructor(message = 'Authentication failed') {
@@ -63,8 +99,8 @@ export class AuthenticationError extends AppError {
 }
 
 export class AuthorizationError extends AppError {
-  constructor(message = 'You do not have permission to perform this action') {
-    super(message, 403);
+  constructor(message = 'You do not have permission to perform this action', extras = {}) {
+    super(message, 403, extras);
     this.name = 'AuthorizationError';
   }
 }
@@ -85,8 +121,8 @@ export class NotFoundError extends AppError {
 }
 
 export class ConflictError extends AppError {
-  constructor(message = 'Resource already exists') {
-    super(message, 409);
+  constructor(message = 'Resource already exists', extras = {}) {
+    super(message, 409, extras);
     this.name = 'ConflictError';
   }
 }
@@ -104,18 +140,20 @@ export class RateLimitError extends AppError {
 export const errorHandler = (err, req, res, next) => {
   // Mongoose bad ObjectId
   if (err.name === 'CastError') {
+    const label = CAST_PATH_LABELS[err.path] || 'request';
     return res.status(400).json({
-      status: 'error',
-      message: `Invalid ${err.path}: ${err.value}`,
+      status: 'fail',
+      message: `Invalid ${label}. Please refresh and try again.`,
     });
   }
 
   // Mongoose duplicate key
   if (err.code === 11000) {
-    const field = Object.keys(err.keyValue || {})[0] || 'field';
+    const field = Object.keys(err.keyValue || {})[0] || '';
+    const label = DUPLICATE_FIELD_LABELS[field] || 'This value';
     return res.status(409).json({
-      status: 'error',
-      message: `${field} already exists`,
+      status: 'fail',
+      message: `${label} is already in use.`,
     });
   }
 
@@ -131,9 +169,12 @@ export const errorHandler = (err, req, res, next) => {
       }
       return e.message;
     });
+    const friendly = messages.map((m) =>
+      typeof m === 'string' ? m.replace(/^Path `[^`]+` /, '').replace(/\.$/, '') : m
+    );
     return res.status(400).json({
-      status: 'error',
-      message: messages[0], // send first message, not a joined blob
+      status: 'fail',
+      message: friendly[0] || 'Please check your entries and try again.',
     });
   }
 
@@ -155,7 +196,7 @@ export const errorHandler = (err, req, res, next) => {
       // Programming or other unknown error: don't leak error details
       logger.error('ERROR 💥', err);
       sendErrorProd(
-        new AppError('Something went wrong!', 500),
+        new AppError('We could not complete your request. Please try again.', 500),
         res
       );
     }
@@ -188,9 +229,11 @@ const sendErrorProd = (err, res) => {
     if (err.errors && Object.keys(err.errors).length > 0) {
       response.errors = err.errors;
     }
-    if (err.statusCode === 402 && err.code) {
+    if (err.code) {
       response.code = err.code;
-      if (err.data && Object.keys(err.data).length > 0) response.data = err.data;
+    }
+    if (err.data && typeof err.data === 'object' && Object.keys(err.data).length > 0) {
+      response.data = err.data;
     }
 
     res.status(err.statusCode).json(response);
@@ -199,7 +242,7 @@ const sendErrorProd = (err, res) => {
     logger.error('ERROR 💥', err);
     res.status(500).json({
       status: 'error',
-      message: 'Something went wrong!',
+      message: 'We could not complete your request. Please try again.',
     });
   }
 };

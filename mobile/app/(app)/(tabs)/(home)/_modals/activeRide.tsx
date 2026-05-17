@@ -16,6 +16,7 @@ import { SearchView } from "@/components/find-ride/search";
 import { TRide } from "@/types";
 import { WaitingView } from "@/components/find-ride/waiting";
 import apiClient from "@/utils/apiClient";
+import { getErrorMessage, showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useDispatch } from "react-redux";
@@ -129,6 +130,18 @@ const ActiveRideSheet = ({
 
       if (onTripCompleted) {
         onTripCompleted(snapshot);
+        try {
+          setCurrentView((prev) => ({
+            ...prev,
+            screen: "SUMMARY",
+            data: {
+              ...((prev?.data) as object),
+              waiting: snapshot as IARide["data"]["waiting"],
+            } as IARide["data"],
+          }));
+        } catch {
+          // ignore
+        }
         return;
       }
 
@@ -498,22 +511,9 @@ const ActiveRideSheet = ({
           },
         }));
         return true;
-      } catch (err: any) {
-        let errorMessage = "Failed to assign new driver. Please try again.";
-        if (err?.response?.data?.message) {
-          errorMessage =
-            typeof err.response.data.message === "string"
-              ? err.response.data.message
-              : err.response.data.message?.message || errorMessage;
-        } else if (err?.response?.data?.error) {
-          errorMessage =
-            typeof err.response.data.error === "string"
-              ? err.response.data.error
-              : err.response.data.error?.message || errorMessage;
-        }
-        showMessage({
-          type: "danger",
-          message: errorMessage,
+      } catch (err: unknown) {
+        showErrorMessage(err, {
+          fallback: "Failed to assign a new driver. Please try again.",
         });
         return false;
       } finally {
@@ -615,26 +615,17 @@ const ActiveRideSheet = ({
         await apiClient.post("booking/cancel-ride", { rideId, reason });
         executable();
         finishCancelRideUI();
-      } catch (err: any) {
-        const status = err?.response?.status ?? err?.status;
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number }; status?: number })?.response
+          ?.status ?? (err as { status?: number })?.status;
         if (status === 404) {
           executable();
           finishCancelRideUI();
           return;
         }
-        let errorMessage = "Could not cancel ride. Please try again.";
-        if (err?.response?.data?.message) {
-          errorMessage =
-            typeof err.response.data.message === "string"
-              ? err.response.data.message
-              : err.response.data.message?.message || errorMessage;
-        } else if (err?.response?.data?.error) {
-          errorMessage =
-            typeof err.response.data.error === "string"
-              ? err.response.data.error
-              : err.response.data.error?.message || errorMessage;
-        }
-        showError(errorMessage);
+        showError(
+          getErrorMessage(err, "Could not cancel ride. Please try again.")
+        );
       } finally {
         loading(false);
       }

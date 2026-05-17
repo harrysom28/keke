@@ -49,6 +49,12 @@ const vehicleTypeSchema = new mongoose.Schema(
       min: 0.5,
       max: 5.0,
     },
+    /** Optional floor fare for this vehicle type; falls back to global admin minimum when unset. */
+    minimumFare: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
     capacity: {
       type: Number,
       default: 4, // Number of passengers

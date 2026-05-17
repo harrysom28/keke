@@ -451,10 +451,7 @@ export const cancelScheduledBooking = asyncHandler(async (req, res) => {
 
   const statusNorm = String(ride.status || '').toLowerCase().replace(/-/g, '_');
   if (statusNorm === 'in_progress' || statusNorm === 'started') {
-    return res.status(400).json({
-      success: false,
-      message: 'Cannot cancel a ride that is already in progress.',
-    });
+    throw new ValidationError('Cannot cancel a ride that is already in progress.');
   }
 
   // Determine who cancelled

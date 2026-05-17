@@ -13,7 +13,7 @@ import Ride from '../models/Ride.js';
 import Payment from '../models/Payment.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import VehicleType from '../models/VehicleType.js';
-import { AppError, NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
+import { AppError, NotFoundError, ValidationError, ConflictError, AuthorizationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { calculateDistance } from '../utils/geolocation.js';
@@ -2097,10 +2097,7 @@ export const markArrived = asyncHandler(async (req, res) => {
 
   // CHECK 1: Prevent duplicate arrived calls (idempotent)
   if (ride.status === 'arrived' || ride.arrivedAt || ride.arrived_at) {
-    return res.status(409).json({
-      success: false,
-      error: 'Arrival already marked for this ride',
-    });
+    throw new ConflictError('Arrival was already marked for this ride');
   }
 
   if (ride.driver?.toString() !== driver._id.toString()) {
@@ -2163,12 +2160,16 @@ export const markArrived = asyncHandler(async (req, res) => {
 
   // CHECK 6: Decision logic with contingencies
   if (proximityStatus === 'blocked') {
-    return res.status(403).json({
-      success: false,
-      error: `You are ${Math.round(distanceMeters)}m from the pickup. Please get closer before marking arrival.`,
-      distance_meters: Math.round(distanceMeters),
-      threshold_meters: STRICT_THRESHOLD_METERS,
-    });
+    throw new AuthorizationError(
+      `You're about ${Math.round(distanceMeters)}m from the pickup. Please get closer before marking arrival.`,
+      {
+        code: 'TOO_FAR_FROM_PICKUP',
+        data: {
+          distance_meters: Math.round(distanceMeters),
+          threshold_meters: STRICT_THRESHOLD_METERS,
+        },
+      }
+    );
   }
 
   if (proximityStatus === 'unlikely') {
