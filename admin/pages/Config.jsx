@@ -95,23 +95,26 @@ function ConfigPage({ showToast, defaultTab }) {
 
   const savePaymentMethods = () => {
     setPaymentMethodsSaving(true);
-    Api.put('/api/admin/settings/payment-methods', { paymentMethods }).then((r) => {
-      if (r.error) showToast(r.error, 'error');
-      else {
-        const d = r.data?.data || r.data;
-        const saved = d?.paymentMethods || paymentMethods;
-        setPaymentMethods(saved);
-        setPaymentMethodsBaseline(saved ? JSON.parse(JSON.stringify(saved)) : null);
-        setPaymentMethodActiveCounts(d?.activeRideCounts || paymentMethodActiveCounts);
-        const warnings = d?.warnings || [];
-        setPaymentMethodSaveWarnings(warnings);
-        if (warnings.length) {
-          showToast('Saved with warnings — see notes below', 'error');
-        } else {
-          showToast('Payment methods saved');
+    Api.put('/api/admin/settings/payment-methods', { paymentMethods })
+      .then((r) => {
+        if (r.error) showToast(r.error, 'error');
+        else {
+          const d = r.data?.data || r.data;
+          const saved = d?.paymentMethods || paymentMethods;
+          setPaymentMethods(saved);
+          setPaymentMethodsBaseline(saved ? JSON.parse(JSON.stringify(saved)) : null);
+          setPaymentMethodActiveCounts(d?.activeRideCounts || paymentMethodActiveCounts);
+          const warnings = d?.warnings || [];
+          setPaymentMethodSaveWarnings(warnings);
+          if (warnings.length) {
+            showToast('Saved with warnings — see notes below', 'error');
+          } else {
+            showToast('Payment methods saved');
+          }
         }
-      }
-    }).finally(() => setPaymentMethodsSaving(false));
+      })
+      .catch(() => showToast('Failed to save payment methods', 'error'))
+      .finally(() => setPaymentMethodsSaving(false));
   };
 
   useEffect(() => {

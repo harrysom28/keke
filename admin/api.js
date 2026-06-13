@@ -106,6 +106,10 @@
     return request(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined });
   }
 
+  function put(path, body) {
+    return request(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined });
+  }
+
   function del(path) {
     return request(path, { method: 'DELETE' });
   }
@@ -117,6 +121,7 @@
     get,
     post,
     patch,
+    put,
     delete: del,
   };
 })(typeof window !== 'undefined' ? window : this);

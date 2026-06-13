@@ -50,12 +50,6 @@ import {
   startOrphanedRideRecovery,
   stopOrphanedRideRecovery,
 } from './startup/recoverOrphanedRides.js';
-import {
-  adminPanelDir,
-  adminPanelDirExists,
-  isAdminPanelHost,
-  mountAdminPanel,
-} from './middleware/adminPanel.js';
 
 // Handle uncaught exceptions and rejections
 handleUncaughtException();
@@ -194,16 +188,10 @@ if (process.env.NODE_ENV !== 'test') {
 const uploadsDir = path.join(__dirname, '../uploads');
 app.use('/uploads', express.static(uploadsDir));
 
-// Admin dashboard static UI (admin.getkekeapp.com) when admin-panel/ is bundled in the image
-mountAdminPanel(app);
-
 // Rate limiting + API routes + 404 + error handler are mounted in startServer() after Redis connectivity is known
 
-// Root route (API hosts only — admin host serves index.html via adminPanel middleware)
+// Root route
 app.get('/', (req, res) => {
-  if (isAdminPanelHost(req.hostname) && adminPanelDirExists()) {
-    return res.sendFile(path.join(adminPanelDir, 'index.html'));
-  }
   res.json({
     status: 'success',
     message: 'Ride-Hailing API',

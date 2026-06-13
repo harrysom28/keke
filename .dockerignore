@@ -1,9 +1,0 @@
-.git
-**/node_modules
-mobile
-backend/uploads
-backend/logs
-**/.env
-**/.env.*
-*.md
-!admin/README.md
