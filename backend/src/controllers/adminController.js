@@ -42,6 +42,24 @@ function escapeRegex(str) {
   return str.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&').slice(0, 200);
 }
 
+function formatAdminPaymentUser(user) {
+  if (!user) return null;
+  if (typeof user === 'object' && user._id) {
+    return {
+      user_id: user._id.toString(),
+      name: user.name ?? null,
+      email: user.email ?? null,
+    };
+  }
+  return { user_id: String(user), name: null, email: null };
+}
+
+function parseAdminPagination(query) {
+  const pageNum = Math.max(1, parseInt(query.page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(query.limit, 10) || 20));
+  return { pageNum, limitNum, skip: (pageNum - 1) * limitNum };
+}
+
 /** Allowed admin ride status transitions. Prevents invalid state (e.g. completed -> accepted). */
 const RIDE_STATUS_TRANSITIONS = {
   requested: ['accepted', 'cancelled', 'no-driver-found'],
@@ -2000,8 +2018,8 @@ export const handleDispute = asyncHandler(async (req, res) => {
  * List payments - GET /api/admin/payments
  */
 export const listPayments = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, status, method, paymentType, dateFrom, dateTo } = req.query;
-  const skip = (page - 1) * limit;
+  const { status, method, paymentType, dateFrom, dateTo } = req.query;
+  const { pageNum, limitNum, skip } = parseAdminPagination(req.query);
 
   const filter = {};
 
@@ -2028,7 +2046,7 @@ export const listPayments = asyncHandler(async (req, res) => {
     .populate('ride', 'status fare')
     .sort({ createdAt: -1 })
     .skip(skip)
-    .limit(parseInt(limit));
+    .limit(limitNum);
 
   const total = await Payment.countDocuments(filter);
 
@@ -2037,11 +2055,7 @@ export const listPayments = asyncHandler(async (req, res) => {
     data: {
       payments: payments.map((payment) => ({
         payment_id: payment._id.toString(),
-        user: {
-          user_id: payment.user._id.toString(),
-          name: payment.user.name,
-          email: payment.user.email,
-        },
+        user: formatAdminPaymentUser(payment.user),
         ride_id: payment.ride?._id?.toString() || null,
         amount: payment.amount,
         method: payment.method,
@@ -2051,10 +2065,10 @@ export const listPayments = asyncHandler(async (req, res) => {
         paid_at: payment.paidAt,
       })),
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNum,
+        limit: limitNum,
         total,
-        pages: Math.ceil(total / limit),
+        pages: Math.max(1, Math.ceil(total / limitNum)),
       },
     },
   });
@@ -2278,12 +2292,12 @@ export const processRefund = asyncHandler(async (req, res) => {
  * List withdrawals - GET /api/admin/withdrawals
  */
 export const listWithdrawals = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, status } = req.query;
-  const skip = (page - 1) * limit;
+  const { status } = req.query;
+  const { pageNum, limitNum, skip } = parseAdminPagination(req.query);
 
   const filter = {
     amount: { $lt: 0 }, // Withdrawals are negative amounts
-    metadata: { type: 'withdrawal' },
+    'metadata.type': 'withdrawal',
   };
 
   if (status) {
@@ -2294,7 +2308,7 @@ export const listWithdrawals = asyncHandler(async (req, res) => {
     .populate('user', 'name email phone')
     .sort({ createdAt: -1 })
     .skip(skip)
-    .limit(parseInt(limit));
+    .limit(limitNum);
 
   const total = await Payment.countDocuments(filter);
 
@@ -2303,21 +2317,17 @@ export const listWithdrawals = asyncHandler(async (req, res) => {
     data: {
       withdrawals: withdrawals.map((payment) => ({
         withdrawal_id: payment._id.toString(),
-        user: {
-          user_id: payment.user._id.toString(),
-          name: payment.user.name,
-          email: payment.user.email,
-        },
+        user: formatAdminPaymentUser(payment.user),
         amount: Math.abs(payment.amount),
         status: payment.status,
         created_at: payment.createdAt,
         metadata: payment.metadata ? Object.fromEntries(payment.metadata) : {},
       })),
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNum,
+        limit: limitNum,
         total,
-        pages: Math.ceil(total / limit),
+        pages: Math.max(1, Math.ceil(total / limitNum)),
       },
     },
   });
