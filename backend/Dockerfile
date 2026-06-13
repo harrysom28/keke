@@ -1,5 +1,7 @@
 FROM node:18-alpine
 
+# Local / backend-only builds (no admin UI). Production uses repo-root ../Dockerfile instead.
+
 # Set working directory
 WORKDIR /app
 

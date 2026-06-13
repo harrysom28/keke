@@ -1,6 +1,6 @@
 # Keke Admin Dashboard
 
-Static admin UI served at `admin.getkekeapp.com`. It talks to the backend API (`api.getkekeapp.com`).
+Static admin UI for `admin.getkekeapp.com`. API calls go to `api.getkekeapp.com`.
 
 ## Local preview
 
@@ -9,25 +9,33 @@ npm run admin
 # http://localhost:3000
 ```
 
-## Production deploy (Dokploy)
+## Production (recommended): serve from Backend
 
-**Pushing to Git only redeploys Backend** unless you also have an Admin app in Dokploy.
+The admin UI is bundled into the **Backend** Docker image so every Backend redeploy updates the admin files automatically.
 
-1. In Dokploy → **Projects** → **keke** → **Add Service** → **Application**
-2. Name: `Admin`
-3. **Build type:** Dockerfile
-4. **Build context / root directory:** `admin` (this folder)
-5. **Dockerfile path:** `Dockerfile`
-6. **Port:** `80`
-7. **Domain:** `admin.getkekeapp.com`
-8. Enable **Auto Deploy** on `main` branch pushes
-9. Deploy
+### Dokploy — Backend service
 
-After deploy, open **Configuration** → you should see the **Payment methods** tab.
+| Setting | Value |
+|---|---|
+| Root directory | `.` (repository root) |
+| Dockerfile | `Dockerfile` |
+| Port | `8000` |
+| Domains | `api.getkekeapp.com` **and** `admin.getkekeapp.com` |
 
-Verify deploy worked:
+After changing root directory / Dockerfile, **redeploy Backend**.
+
+Remove `admin.getkekeapp.com` from any separate Admin/static service so traffic hits Backend.
+
+### Verify
 
 ```bash
-curl -s https://admin.getkekeapp.com/pages/Config.jsx | grep -c payment-methods
-# should print 1 or more (0 = still old files)
+curl -s https://admin.getkekeapp.com/pages/Config.jsx | grep payment-methods
+curl -s https://admin.getkekeapp.com/pages/Config.jsx | wc -c
+# expect matches + ~60263 bytes
 ```
+
+Then hard refresh → **Configuration → Payment methods**.
+
+## Alternative: standalone Admin container
+
+Use `admin/Dockerfile` only if you run a separate Admin app. You must point `admin.getkekeapp.com` exclusively to that service (remove any old static host).
