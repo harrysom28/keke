@@ -26,6 +26,12 @@ function ConfigPage({ showToast, defaultTab }) {
   const [arrival, setArrival] = useState(null);
   const [walletLimits, setWalletLimits] = useState(null);
   const [feesSaving, setFeesSaving] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState(null);
+  const [paymentMethodsBaseline, setPaymentMethodsBaseline] = useState(null);
+  const [paymentMethodLabels, setPaymentMethodLabels] = useState({});
+  const [paymentMethodActiveCounts, setPaymentMethodActiveCounts] = useState(null);
+  const [paymentMethodsSaving, setPaymentMethodsSaving] = useState(false);
+  const [paymentMethodSaveWarnings, setPaymentMethodSaveWarnings] = useState([]);
   const [vtModal, setVtModal] = useState({ open: false, editing: null, name: '', display_name: '', description: '', base_fare: '', per_km_rate: '', per_minute_rate: '', minimum_fare: '', multiplier: '1', capacity: '4', order: '0', is_active: true });
   const [promoModal, setPromoModal] = useState({ open: false, editing: null, code: '', description: '', discount_type: 'percentage', discount_value: '', max_discount: '', min_amount: '0', max_uses: '', max_uses_per_user: '1', valid_from: '', valid_to: '', is_active: true });
 
@@ -37,11 +43,82 @@ function ConfigPage({ showToast, defaultTab }) {
     if (res.error) showToast(res.error, 'error');
     else setPromocodes(res.data?.data?.promocodes || res.data?.promocodes || []);
   });
+  const loadPaymentMethods = () => Api.get('/api/admin/settings/payment-methods').then((res) => {
+    if (res.error) showToast(res.error, 'error');
+    else {
+      const d = res.data?.data || res.data;
+      const pm = d?.paymentMethods || null;
+      setPaymentMethods(pm);
+      setPaymentMethodsBaseline(pm ? JSON.parse(JSON.stringify(pm)) : null);
+      setPaymentMethodLabels(d?.labels || {});
+      setPaymentMethodActiveCounts(d?.activeRideCounts || null);
+      setPaymentMethodSaveWarnings([]);
+    }
+  });
+
+  const PAYMENT_METHOD_IDS = ['wallet', 'cash', 'card', 'transfer'];
+  const paymentMethodLabel = (id) => paymentMethodLabels[id] || ({ wallet: 'Wallet', cash: 'Cash', card: 'Card', transfer: 'Bank Transfer' }[id] || id);
+
+  const togglePaymentMethodEnabled = (id, enabled) => {
+    setPaymentMethods((prev) => {
+      const next = { ...(prev || {}) };
+      next[id] = { ...(next[id] || {}), enabled };
+      if (!enabled) next[id].default = false;
+      return next;
+    });
+    setPaymentMethodSaveWarnings([]);
+  };
+
+  const setPaymentMethodDefault = (id) => {
+    setPaymentMethods((prev) => {
+      const next = { ...(prev || {}) };
+      PAYMENT_METHOD_IDS.forEach((mid) => {
+        next[mid] = { ...(next[mid] || {}), default: mid === id };
+      });
+      return next;
+    });
+    setPaymentMethodSaveWarnings([]);
+  };
+
+  const disableWarningsForDraft = () => {
+    if (!paymentMethods || !paymentMethodActiveCounts || !paymentMethodsBaseline) return [];
+    return PAYMENT_METHOD_IDS.filter((id) => {
+      const wasEnabled = paymentMethodsBaseline[id]?.enabled !== false;
+      const nowEnabled = paymentMethods[id]?.enabled !== false;
+      const active = paymentMethodActiveCounts[id] || 0;
+      return wasEnabled && !nowEnabled && active > 0;
+    }).map((id) => {
+      const active = paymentMethodActiveCounts[id] || 0;
+      return `${active} active ride(s) use ${paymentMethodLabel(id)}. Disabling hides it for new bookings only.`;
+    });
+  };
+
+  const savePaymentMethods = () => {
+    setPaymentMethodsSaving(true);
+    Api.put('/api/admin/settings/payment-methods', { paymentMethods }).then((r) => {
+      if (r.error) showToast(r.error, 'error');
+      else {
+        const d = r.data?.data || r.data;
+        const saved = d?.paymentMethods || paymentMethods;
+        setPaymentMethods(saved);
+        setPaymentMethodsBaseline(saved ? JSON.parse(JSON.stringify(saved)) : null);
+        setPaymentMethodActiveCounts(d?.activeRideCounts || paymentMethodActiveCounts);
+        const warnings = d?.warnings || [];
+        setPaymentMethodSaveWarnings(warnings);
+        if (warnings.length) {
+          showToast('Saved with warnings — see notes below', 'error');
+        } else {
+          showToast('Payment methods saved');
+        }
+      }
+    }).finally(() => setPaymentMethodsSaving(false));
+  };
 
   useEffect(() => {
     setLoading(true);
     if (tab === 'vehicle-types') loadVehicleTypes().finally(() => setLoading(false));
     else if (tab === 'promocodes') loadPromocodes().finally(() => setLoading(false));
+    else if (tab === 'payment-methods') loadPaymentMethods().finally(() => setLoading(false));
     else if (tab === 'alerts' || tab === 'referral' || tab === 'topup' || tab === 'driver-tasks' || tab === 'pricing' || tab === 'fee-settings') {
       Api.get('/api/admin/settings').then((r) => {
         if (!r.error) {
@@ -279,7 +356,86 @@ function ConfigPage({ showToast, defaultTab }) {
         <button type="button" onClick={() => setTab('driver-tasks')} className={`px-3 py-1.5 rounded-lg ${tab === 'driver-tasks' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}>Driver challenges</button>
         <button type="button" onClick={() => setTab('pricing')} className={`px-3 py-1.5 rounded-lg ${tab === 'pricing' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}>Ride pricing</button>
         <button type="button" onClick={() => setTab('fee-settings')} className={`px-3 py-1.5 rounded-lg ${tab === 'fee-settings' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}>Fee settings</button>
+        <button type="button" onClick={() => setTab('payment-methods')} className={`px-3 py-1.5 rounded-lg ${tab === 'payment-methods' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}>Payment methods</button>
       </div>
+
+      {tab === 'payment-methods' && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 max-w-lg">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Payment methods</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Control which payment options riders see when booking. At least one method must stay enabled. The default method is pre-selected in the app.
+          </p>
+          {loading ? <C.Skeleton className="h-48 w-full" /> : paymentMethods ? (
+            <div className="space-y-4">
+              {PAYMENT_METHOD_IDS.map((id) => {
+                const row = paymentMethods[id] || {};
+                const enabled = row.enabled !== false;
+                const activeCount = paymentMethodActiveCounts?.[id] || 0;
+                return (
+                  <div key={id} className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-white">{paymentMethodLabel(id)}</div>
+                        {activeCount > 0 ? (
+                          <div className="text-xs text-gray-500 dark:text-gray-400">{activeCount} active ride{activeCount === 1 ? '' : 's'}</div>
+                        ) : null}
+                      </div>
+                      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          onChange={(e) => togglePaymentMethodEnabled(id, e.target.checked)}
+                        />
+                        Enabled
+                      </label>
+                    </div>
+                    {enabled ? (
+                      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                        <input
+                          type="radio"
+                          name="payment-method-default"
+                          checked={!!row.default}
+                          onChange={() => setPaymentMethodDefault(id)}
+                        />
+                        Default for new bookings
+                      </label>
+                    ) : null}
+                    {!enabled && activeCount > 0 && paymentMethodsBaseline?.[id]?.enabled !== false ? (
+                      <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded p-2">
+                        {activeCount} active ride(s) still use {paymentMethodLabel(id)}. Disabling hides it for new bookings only.
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {disableWarningsForDraft().length > 0 ? (
+                <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-1">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Before you save</p>
+                  {disableWarningsForDraft().map((w) => (
+                    <p key={w} className="text-xs text-amber-700 dark:text-amber-400">{w}</p>
+                  ))}
+                </div>
+              ) : null}
+              {paymentMethodSaveWarnings.length > 0 ? (
+                <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-1">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Saved with warnings</p>
+                  {paymentMethodSaveWarnings.map((w) => (
+                    <p key={w} className="text-xs text-amber-700 dark:text-amber-400">{w}</p>
+                  ))}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={savePaymentMethods}
+                disabled={paymentMethodsSaving}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {paymentMethodsSaving ? 'Saving…' : 'Save payment methods'}
+              </button>
+            </div>
+          ) : <p className="text-gray-500">Could not load payment method settings.</p>}
+        </div>
+      )}
 
       {tab === 'vehicle-types' && (
         <>

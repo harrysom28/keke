@@ -37,6 +37,7 @@ import { TripDetailsCard } from "@/components/ride-in-transit/TripDetailsCard";
 import { UserInfoCard } from "@/components/ride-in-transit/UserInfoCard";
 import { ProgressBar } from "@/components/ride-in-transit/ProgressBar";
 import { RiderActionButtons } from "@/components/ride-in-transit/ActionButtons";
+import { isCashPaymentMethod, isWalletPaymentMethod } from "@/utils/paymentMethods";
 
 /** Matches `base-green` in tailwind.config.ts */
 const BRAND_GREEN = "#3C8F7C";
@@ -359,6 +360,13 @@ export const WaitingView = ({
     if (isNaN(num) || num === 0) return "₦0";
     return `₦${Math.round(num).toLocaleString()}`;
   };
+
+  const ridePaymentMethod =
+    (data as any)?.payment_type ??
+    (data as any)?.paymentMethod ??
+    (data as any)?.payment_method;
+  const isCashPayment = isCashPaymentMethod(ridePaymentMethod);
+  const isWalletPayment = isWalletPaymentMethod(ridePaymentMethod);
 
   const formatDistance = (distance: string | number | undefined) => {
     if (!distance) return "0 km";
@@ -883,13 +891,26 @@ export const WaitingView = ({
           </TouchableOpacity>
         )}
 
-        {/* ── Secure fare banner (accepted, en-route) ── */}
+        {/* ── Payment banner (accepted, en-route) ── */}
         {!isAccepted ? null : !hasRideStarted ? (
+          isCashPayment ? (
+            <View style={styles.secureFareBanner}>
+              <View style={styles.secureFareHeader}>
+                <Ionicons name="cash-outline" size={18} color={BRAND_GREEN} />
+                <View style={tw`flex-1`}>
+                  <Text style={styles.secureFareTitle}>Pay in cash</Text>
+                  <Text style={styles.secureFareText}>
+                    Pay driver {formatCost(data?.cost)} in cash at end of trip.
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ) : isWalletPayment ? (
           <View style={styles.secureFareBanner}>
             <View style={styles.secureFareHeader}>
               <Ionicons name="lock-closed" size={18} color={BRAND_GREEN} />
               <View style={tw`flex-1`}>
-                <Text style={styles.secureFareTitle}>Your fare is secured</Text>
+                <Text style={styles.secureFareTitle}>Fare secured in wallet</Text>
                 <Text style={styles.secureFareText}>
                   {formatCost(data?.cost)} is held in your wallet. Do not pay cash or
                   renegotiate with your driver.
@@ -915,6 +936,7 @@ export const WaitingView = ({
               </TouchableOpacity>
             </View>
           </View>
+          ) : null
         ) : null}
 
         {/* ── Fare card (skip in searching state — info strip already shows fare) ── */}

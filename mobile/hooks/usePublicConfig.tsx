@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import apiClient from '@/utils/apiClient';
 import { PUSHER_API_KEY, PUSHER_API_CLUSTER, WEB_CLIENT_ID } from '@/constants/Keys';
+import {
+  DEFAULT_PUBLIC_PAYMENT_METHODS,
+  type PublicPaymentMethodsConfig,
+} from '@/utils/paymentMethods';
 
 interface PublicConfig {
   pusher: {
@@ -10,6 +14,7 @@ interface PublicConfig {
   google: {
     client_id: string;
   };
+  paymentMethods: PublicPaymentMethodsConfig;
 }
 
 /**
@@ -19,12 +24,13 @@ interface PublicConfig {
 export function usePublicConfig() {
   const [config, setConfig] = useState<PublicConfig>({
     pusher: {
-      key: PUSHER_API_KEY, // Fallback from app.json
-      cluster: PUSHER_API_CLUSTER, // Fallback from app.json
+      key: PUSHER_API_KEY,
+      cluster: PUSHER_API_CLUSTER,
     },
     google: {
-      client_id: WEB_CLIENT_ID, // Fallback from app.json
+      client_id: WEB_CLIENT_ID,
     },
+    paymentMethods: DEFAULT_PUBLIC_PAYMENT_METHODS,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,9 +40,9 @@ export function usePublicConfig() {
       try {
         setLoading(true);
         const response = await apiClient.get('config/public');
-        
-        // ResponseTrait returns status: true (boolean), not 'success'
+
         if (response.data.status === true && response.data.data) {
+          const pm = response.data.data.paymentMethods;
           setConfig({
             pusher: {
               key: response.data.data.pusher?.key || PUSHER_API_KEY,
@@ -45,12 +51,21 @@ export function usePublicConfig() {
             google: {
               client_id: response.data.data.google?.client_id || WEB_CLIENT_ID,
             },
+            paymentMethods: {
+              enabled: Array.isArray(pm?.enabled) && pm.enabled.length
+                ? pm.enabled
+                : DEFAULT_PUBLIC_PAYMENT_METHODS.enabled,
+              default: pm?.default || DEFAULT_PUBLIC_PAYMENT_METHODS.default,
+              labels: {
+                ...DEFAULT_PUBLIC_PAYMENT_METHODS.labels,
+                ...(pm?.labels || {}),
+              },
+            },
           });
           setError(null);
         }
       } catch (err: any) {
         console.warn('Failed to fetch public config from backend, using fallback values:', err?.message);
-        // Use fallback values from app.json - don't set error as this is acceptable
         setError(null);
       } finally {
         setLoading(false);
@@ -62,4 +77,3 @@ export function usePublicConfig() {
 
   return { config, loading, error };
 }
-

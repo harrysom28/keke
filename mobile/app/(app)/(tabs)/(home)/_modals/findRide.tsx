@@ -38,6 +38,7 @@ import { useFocusEffect } from "expo-router";
 import { getErrorMessage, showErrorMessage } from "@/utils/errorHandler";
 import { requestManager } from "@/utils/requestManager";
 import apiClient from "@/utils/apiClient";
+import { mapUiPaymentToApi } from "@/utils/paymentMethods";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -194,18 +195,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       // Transform frontend data structure to match backend validation
       const finalPaymentType = payment_type.length > 0 ? payment_type : (rideData?.payment_type || 'wallet');
       
-      // Map payment type to backend format (lowercase)
-      const paymentMethodMap: { [key: string]: string } = {
-        'Cash': 'cash',
-        'Wallet': 'wallet',
-        'Card': 'card',
-        'Bank Transfer': 'bank_transfer',
-        'cash': 'cash',
-        'wallet': 'wallet',
-        'card': 'card',
-        'bank_transfer': 'bank_transfer',
-      };
-      const paymentMethod = paymentMethodMap[finalPaymentType] || 'wallet';
+      const paymentMethod = mapUiPaymentToApi(finalPaymentType);
       
       // Log ride data for debugging
       console.log('🔍 Ride data before validation:', {

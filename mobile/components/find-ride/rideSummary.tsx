@@ -27,16 +27,14 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
           />
         </View>
         <Text style={tw.style(`text-2xl text-black`, { fontFamily: "RobotoBold" })}>
-          Ride Complete
+          {model.summaryTitle}
         </Text>
         <Text
           style={tw.style(`text-sm text-[#8F92A1] mt-1`, {
             fontFamily: "RobotoRegular",
           })}
         >
-          {model.driver_name
-            ? `${model.driver_name} dropped you off`
-            : "Your driver dropped you off"}
+          {model.summarySubtitle}
         </Text>
       </View>
 
@@ -46,7 +44,7 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
             fontFamily: "RobotoRegular",
           })}
         >
-          Total paid
+          {model.amountLabel}
         </Text>
         <Text style={tw.style(`text-white text-5xl`, { fontFamily: "RobotoBold" })}>
           ₦{model.fareDisplay}
@@ -89,7 +87,7 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
             }}
           >
             <Text style={{ fontWeight: "700", fontSize: 14, color: "#fff" }}>
-              Total charged
+              {model.amountDueOutstanding ? "Total due" : "Total charged"}
             </Text>
             <Text style={{ fontWeight: "700", fontSize: 14, color: "#fff" }}>
               ₦{model.total.toLocaleString()}
@@ -101,7 +99,7 @@ export const RideSummaryView = ({ ride, onContinue, onDone }: RideSummaryProps) 
             fontFamily: "RobotoMedium",
           })}
         >
-          Paid via {model.paymentLabel}
+          {model.footerPaymentText}
         </Text>
       </View>
 

@@ -33,6 +33,14 @@ import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useComb
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
 import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
+import PaymentMethodSelector from "@/components/PaymentMethodSelector";
+import { usePublicConfig } from "@/hooks/usePublicConfig";
+import {
+  configToEnabledMethods,
+  defaultUiPaymentKey,
+  mapUiPaymentToApi,
+} from "@/utils/paymentMethods";
+import { getCachedWallet, setCachedWallet } from "@/utils/walletCache";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -146,7 +154,12 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   } | null>(null);
   const [pickupCoords, setPickupCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [cashPaymentEnabled, setCashPaymentEnabled] = useState(false); // Admin approval required
+  const [walletAvailableBalance, setWalletAvailableBalance] = useState<number | null>(null);
+  const { config: publicConfig } = usePublicConfig();
+  const enabledPaymentMethods = useMemo(
+    () => configToEnabledMethods(publicConfig.paymentMethods),
+    [publicConfig.paymentMethods]
+  );
 
   useEffect(() => {
     if (openVersion === 0) return;
@@ -154,7 +167,20 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
     setSelectedDate(nextSelection.dayOffset);
     setSelectedTime(nextSelection.time);
     setShowTimePicker(false);
-  }, [openVersion]);
+    setState((prev) => ({
+      ...prev,
+      payment_type: defaultUiPaymentKey(publicConfig.paymentMethods),
+    }));
+  }, [openVersion, publicConfig.paymentMethods]);
+
+  useEffect(() => {
+    const defaultKey = defaultUiPaymentKey(publicConfig.paymentMethods);
+    setState((prev) =>
+      prev.payment_type && enabledPaymentMethods.some((m) => m.uiKey === prev.payment_type)
+        ? prev
+        : { ...prev, payment_type: defaultKey }
+    );
+  }, [publicConfig.paymentMethods, enabledPaymentMethods]);
 
   // Keep this sheet tall, but avoid forcing a near-fullscreen height on smaller content.
   const screenHeight = Dimensions.get('window').height;
@@ -532,6 +558,39 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
       fareSummary
   );
 
+  useEffect(() => {
+    if (!canShowFinanceSummary) {
+      setWalletAvailableBalance(null);
+      return;
+    }
+
+    let mounted = true;
+    const cachedWallet = getCachedWallet<any>();
+    const walletPromise = cachedWallet
+      ? Promise.resolve(cachedWallet)
+      : apiClient.get("wallet", { timeout: 10000 }).then((res) => {
+          setCachedWallet(res);
+          return res;
+        });
+
+    walletPromise
+      .then((walletRes) => {
+        if (!mounted) return;
+        const data = walletRes?.data?.data;
+        const available = data?.availableBalance ?? data?.balance;
+        const num = typeof available === "number" ? available : Number(available || 0);
+        setWalletAvailableBalance(Number.isFinite(num) ? num : 0);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setWalletAvailableBalance(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [canShowFinanceSummary]);
+
   const handleSubmit = async () => {
     if (!state.pickup_location || !state.dropoff_location) {
       safeShowMessage({
@@ -629,13 +688,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
       }
 
       // Map payment type to backend format
-      const paymentMethodMap: { [key: string]: string } = {
-        'Cash': 'cash',
-        'Wallet': 'wallet',
-        'cash': 'cash',
-        'wallet': 'wallet',
-      };
-      const paymentMethod = paymentMethodMap[state.payment_type] || 'wallet';
+      const paymentMethod = mapUiPaymentToApi(state.payment_type);
 
       // Prepare request data (scheduledFor for payload shape; backend accepts scheduledAt)
       const requestData = {
@@ -1194,52 +1247,16 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
             <Text style={tw.style(`text-[15px] text-[#242E42] mb-2`, { fontFamily: "RobotoBold" })}>
               Payment Type
             </Text>
-            <View style={tw`flex-row gap-x-2 mb-2`}>
-              <TouchableOpacity
-                onPress={() => setState((prev) => ({ ...prev, payment_type: "Wallet" }))}
-                style={tw.style(
-                  `flex-1 bg-[#F5F5F5] rounded-[10px] p-1.5 items-center justify-center`,
-                  state.payment_type === "Wallet" && `bg-base-green/10 border-2 border-base-green`
-                )}
-              >
-                <MaterialCommunityIcons name="wallet" size={13} color={BRAND_GREEN} />
-                <Text style={tw.style(`text-[10px] text-[#242E42] mt-0.5`, { fontFamily: "RobotoBold" })}>
-                  Wallet
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  if (cashPaymentEnabled) {
-                    setState((prev) => ({ ...prev, payment_type: "Cash" }));
-                  } else {
-                    safeShowMessage({
-                      type: "info",
-                      message: "Cash payment requires admin approval. Please contact support.",
-                    });
-                  }
-                }}
-                disabled={!cashPaymentEnabled}
-                style={tw.style(
-                  `flex-1 bg-[#F5F5F5] rounded-[10px] p-1.5 items-center justify-center`,
-                  state.payment_type === "Cash" && `bg-base-green/10 border-2 border-base-green`,
-                  !cashPaymentEnabled && `opacity-50`
-                )}
-              >
-                <MaterialCommunityIcons name="cash" size={13} color={cashPaymentEnabled ? BRAND_GREEN : "#999"} />
-                <Text style={tw.style(
-                  `text-[10px] mt-0.5`, 
-                  { fontFamily: "RobotoBold" },
-                  cashPaymentEnabled ? `text-[#242E42]` : `text-[#999]`
-                )}>
-                  Cash
-                </Text>
-                {!cashPaymentEnabled && (
-                  <Text style={tw.style(`text-[7px] text-[#999]`, { fontFamily: "RobotoRegular" })}>
-                    Admin approval required
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
+            <PaymentMethodSelector
+              selected={state.payment_type}
+              onSelect={(uiKey) =>
+                setState((prev) => ({ ...prev, payment_type: uiKey }))
+              }
+              enabledMethods={enabledPaymentMethods}
+              walletBalance={walletAvailableBalance}
+              fareTotal={fareSummary?.totalFare}
+              variant="cards"
+            />
 
           </ScrollView>
 

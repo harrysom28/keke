@@ -17,6 +17,14 @@ export type RideSummaryModel = {
   serviceCharge: number;
   total: number;
   paymentLabel: string;
+  isCashPayment: boolean;
+  isWalletPayment: boolean;
+  paymentStatus: string;
+  summaryTitle: string;
+  summarySubtitle: string;
+  amountLabel: string;
+  footerPaymentText: string;
+  amountDueOutstanding: boolean;
   distance?: string;
   duration?: string;
   driver_name?: string;
@@ -82,9 +90,21 @@ export function mapRideToSummary(
 
   const fareDisplay = (total > 0 ? total : summed).toLocaleString();
 
+  const driver = r.driver as Record<string, unknown> | undefined;
+  const driverName =
+    (driver?.driver_name as string) ||
+    (driver?.name as string) ||
+    (r.driver_name as string) ||
+    undefined;
+
   const paymentMethod = String(
     r.payment_type ?? r.paymentMethod ?? r.payment_method ?? "wallet"
   ).toLowerCase();
+  const paymentStatus = String(
+    r.payment_status ?? r.paymentStatus ?? ""
+  ).toLowerCase();
+  const isCashPayment = paymentMethod === "cash";
+  const isWalletPayment = paymentMethod === "wallet";
   const paymentLabel =
     paymentMethod === "cash"
       ? "Cash"
@@ -92,7 +112,34 @@ export function mapRideToSummary(
         ? "Wallet"
         : paymentMethod === "card"
           ? "Card"
-          : paymentMethod;
+          : paymentMethod === "bank_transfer" || paymentMethod === "transfer"
+            ? "Bank Transfer"
+            : paymentMethod;
+
+  const cashCollected =
+    paymentStatus === "cash_collected" || paymentStatus === "completed";
+
+  const summaryTitle = isCashPayment && !cashCollected
+    ? "Trip complete"
+    : "Ride Complete";
+
+  const summarySubtitle = isCashPayment && !cashCollected
+    ? "Please pay your driver before leaving"
+    : driverName
+      ? `${driverName} dropped you off`
+      : "Your driver dropped you off";
+
+  const amountLabel = isCashPayment && !cashCollected
+    ? "Amount due"
+    : isCashPayment
+      ? "Paid in cash"
+      : "Total paid";
+
+  const footerPaymentText = isCashPayment && !cashCollected
+    ? `Pay driver ₦${fareDisplay} in cash`
+    : isCashPayment
+      ? `Paid ₦${fareDisplay} in cash`
+      : `Paid via ${paymentLabel}`;
 
   const distanceRaw = r.distance;
   const distance =
@@ -114,8 +161,6 @@ export function mapRideToSummary(
           ? durationRaw
           : undefined;
 
-  const driver = r.driver as Record<string, unknown> | undefined;
-
   return {
     pickup_name,
     dropoff_name,
@@ -124,12 +169,16 @@ export function mapRideToSummary(
     serviceCharge,
     total: total > 0 ? total : summed,
     paymentLabel,
+    isCashPayment,
+    isWalletPayment,
+    paymentStatus,
+    summaryTitle,
+    summarySubtitle,
+    amountLabel,
+    footerPaymentText,
+    amountDueOutstanding: isCashPayment && !cashCollected,
     distance: distance || undefined,
     duration: duration || undefined,
-    driver_name:
-      (driver?.driver_name as string) ||
-      (driver?.name as string) ||
-      (r.driver_name as string) ||
-      undefined,
+    driver_name: driverName,
   };
 }
