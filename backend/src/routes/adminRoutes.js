@@ -31,6 +31,13 @@ router.get('/analytics', adminController.getAnalytics);
 // Settings (alerts, etc.)
 router.get('/settings', adminController.getSettings);
 router.patch('/settings', validationRules.updateSettings, validate, adminController.updateSettings);
+router.get('/settings/payment-methods', adminController.getPaymentMethodSettingsHandler);
+router.put(
+  '/settings/payment-methods',
+  validationRules.updatePaymentMethods,
+  validate,
+  adminController.updatePaymentMethodSettingsHandler
+);
 
 // User management
 router.get('/users', adminController.listUsers);

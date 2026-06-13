@@ -92,6 +92,24 @@ const adminSettingsSchema = new mongoose.Schema(
       minWithdrawAmount: { type: Number, default: 1000 },
       maxDailyWithdrawal: { type: Number, default: 500000 },
     },
+    paymentMethods: {
+      wallet: {
+        enabled: { type: Boolean, default: true },
+        default: { type: Boolean, default: true },
+      },
+      cash: {
+        enabled: { type: Boolean, default: true },
+        default: { type: Boolean, default: false },
+      },
+      card: {
+        enabled: { type: Boolean, default: false },
+        default: { type: Boolean, default: false },
+      },
+      transfer: {
+        enabled: { type: Boolean, default: false },
+        default: { type: Boolean, default: false },
+      },
+    },
     feesLastUpdatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     feesLastUpdatedAt: { type: Date, default: null },
   },

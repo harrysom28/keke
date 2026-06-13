@@ -2468,7 +2468,11 @@ export const completeRide = asyncHandler(async (req, res) => {
   ride.completedAt = new Date();
   const isEscrowWallet = ride.paymentMethod === 'wallet' && ['held', 'charged'].includes(ride.paymentStatus);
   if (!isEscrowWallet) {
-    ride.paymentStatus = paymentStatus || (ride.paymentMethod === 'cash' ? 'pending' : 'completed');
+    if (ride.paymentMethod === 'cash') {
+      ride.paymentStatus = 'pending';
+    } else {
+      ride.paymentStatus = paymentStatus || 'completed';
+    }
   }
 
   ride.statusHistory.push({

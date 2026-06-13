@@ -63,6 +63,25 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
   const [fareLoading, setFareLoading] = useState(false);
   const [fareError, setFareError] = useState<string | null>(null);
   const [walletAvailableBalance, setWalletAvailableBalance] = useState<number | null>(null);
+  const [nonWalletPaymentAvailable, setNonWalletPaymentAvailable] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    apiClient
+      .get("config/public", { timeout: 10000 })
+      .then(({ data }) => {
+        if (!mounted) return;
+        const enabled: string[] = data?.data?.paymentMethods?.enabled || ["wallet"];
+        setNonWalletPaymentAvailable(enabled.some((method) => method !== "wallet"));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setNonWalletPaymentAvailable(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     const initialDropoffName = initialDropoff?.name?.trim();
@@ -460,6 +479,8 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
     walletAvailableBalance != null &&
     fareTotal > 0 &&
     walletAvailableBalance < fareTotal;
+  /** Block only when wallet is required (no cash/card/transfer enabled) and balance is low. */
+  const walletBlocksBooking = walletInsufficientForRide && !nonWalletPaymentAvailable;
   const shortfall =
     walletAvailableBalance != null && fareTotal > 0
       ? Math.max(0, Math.ceil(fareTotal - walletAvailableBalance))
@@ -929,10 +950,10 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
           style={tw.style(
             `flex-row justify-center items-center px-6 py-3.5 rounded-full`,
             selected.pickup && selected.dropoff
-              ? (walletInsufficientForRide ? `bg-gray-300` : `bg-base-green`)
+              ? (walletBlocksBooking ? `bg-gray-300` : `bg-base-green`)
               : `bg-gray-300`
           )}
-          disabled={!selected.pickup || !selected.dropoff || walletInsufficientForRide}
+          disabled={!selected.pickup || !selected.dropoff || walletBlocksBooking}
         onPress={async () => {
           if (selected.pickup === "") {
             showMessage({
@@ -944,7 +965,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
               type: "warning",
               message: "Please select a dropoff location",
             });
-          } else if (walletInsufficientForRide) {
+          } else if (walletBlocksBooking) {
             router.push("/(app)/(tabs)/(profile)/wallet");
           } else {
             // Safety: block proceeding when Redux origin coords are missing/invalid.
@@ -996,7 +1017,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
         }}
       >
           <Text style={tw.style(`text-white text-[16px] mr-2`, { fontFamily: "RobotoBold" })}>
-            {walletInsufficientForRide ? "Top Up Wallet" : "Confirm Booking"}
+            {walletBlocksBooking ? "Top Up Wallet" : "Confirm Booking"}
           </Text>
           <AntDesign name="right" size={20} color="white" />
       </TouchableOpacity>

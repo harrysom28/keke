@@ -52,7 +52,7 @@ export const processRidePayment = async (ride) => {
       throw new Error('Ride must be completed before processing payment');
     }
 
-    if (ride.paymentStatus === 'completed') {
+    if (ride.paymentStatus === 'completed' || ride.paymentStatus === 'cash_collected') {
       logger.info(`Payment already processed for ride ${ride._id}`);
       return { success: true, message: 'Payment already processed' };
     }
@@ -201,7 +201,6 @@ export const processRidePayment = async (ride) => {
         break;
 
       case 'cash':
-        // For cash payments, just create a payment record
         payment = await Payment.create({
           user: ride.rider,
           ride: ride._id,
@@ -214,8 +213,19 @@ export const processRidePayment = async (ride) => {
         });
 
         transactionId = payment.transactionId;
+        ride.paymentStatus = 'cash_collected';
+        await ride.save();
+        if (driver) {
+          await applyRideEarningToWallet(ride);
+          driver.totalRides += 1;
+          await driver.save();
+        }
         logger.info(`Cash payment recorded for ride ${ride._id}: ${amount}`);
-        break;
+        return {
+          success: true,
+          payment,
+          transactionId,
+        };
 
       case 'bank_transfer':
         // For bank transfer, create pending payment

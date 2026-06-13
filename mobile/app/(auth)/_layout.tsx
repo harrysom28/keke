@@ -7,6 +7,7 @@ export default function AuthLayout() {
       <Stack.Screen name="register" />
       <Stack.Screen name="usertype" />
       <Stack.Screen name="login" />
+      <Stack.Screen name="email-signup" />
       <Stack.Screen name="signup" />
       <Stack.Screen name="authenticate" />
       <Stack.Screen name="otpcode" />

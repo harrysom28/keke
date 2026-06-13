@@ -17,14 +17,15 @@ export interface IRide {
   promo_code: string;
 }
 
+export interface IUserLocation {
+  name?: string;
+  long?: string;
+  lat?: string;
+  formatted_address?: string;
+}
+
 export interface IUtils {
-  user_location:
-    | {
-        name: string;
-        long: string;
-        lat: string;
-      }
-    | object;
+  user_location?: IUserLocation | object;
   vehicle: object;
   drivers: Array<object>;
   promo_code: string;

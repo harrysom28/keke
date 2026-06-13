@@ -28,6 +28,7 @@ import {
   splitCancellationPenalty,
   EscrowWalletError,
 } from '../services/escrowWalletService.js';
+import { assertPaymentMethodEnabled } from '../services/paymentMethodsService.js';
 import SupportTicket from '../models/SupportTicket.js';
 import { logRideAudit } from '../services/rideAuditLogService.js';
 
@@ -173,7 +174,9 @@ export const requestRide = asyncHandler(async (req, res) => {
   );
 
   const totalFare = fareWithSurge.finalFare;
-  const isWalletPayment = paymentMethod === 'wallet';
+
+  const normalizedPaymentMethod = await assertPaymentMethodEnabled(paymentMethod || 'wallet');
+  const isWalletPayment = normalizedPaymentMethod === 'wallet';
   let escrowBreakdown = null;
   if (isWalletPayment) {
     try {
@@ -225,7 +228,7 @@ export const requestRide = asyncHandler(async (req, res) => {
       estimated: durationMinutes,
       unit: 'minutes',
     },
-    paymentMethod,
+    paymentMethod: normalizedPaymentMethod,
     promoCode: promoCode || null,
     ...(preferredDriverId && { preferredDriver: preferredDriverId }),
     statusHistory: [{

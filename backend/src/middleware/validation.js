@@ -134,6 +134,38 @@ export const validationRules = {
     body('insurance_document').optional().trim(),
   ],
 
+  emailRegister: [
+    body('name')
+      .trim()
+      .notEmpty()
+      .withMessage('Name is required')
+      .matches(/^[a-zA-Z\s'-]+$/)
+      .withMessage('Name must contain only letters, spaces, hyphens, and apostrophes'),
+    body('email')
+      .trim()
+      .notEmpty()
+      .withMessage('Email is required')
+      .isEmail()
+      .withMessage('Please provide a valid email'),
+    body('password')
+      .notEmpty()
+      .withMessage('Password is required')
+      .isLength({ min: 6 })
+      .withMessage('Password must be at least 6 characters'),
+  ],
+
+  emailLogin: [
+    body('email')
+      .trim()
+      .notEmpty()
+      .withMessage('Email is required')
+      .isEmail()
+      .withMessage('Please provide a valid email'),
+    body('password')
+      .notEmpty()
+      .withMessage('Password is required'),
+  ],
+
   // Login
   login: [
     body('email_phone_number')
@@ -1205,6 +1237,46 @@ export const validationRules = {
       .optional()
       .isMongoId()
       .withMessage('Invalid admin ID'),
+  ],
+
+  updatePaymentMethods: [
+    body('paymentMethods')
+      .notEmpty()
+      .withMessage('paymentMethods is required')
+      .isObject()
+      .withMessage('paymentMethods must be an object'),
+    body('paymentMethods.wallet.enabled')
+      .optional()
+      .isBoolean()
+      .withMessage('wallet.enabled must be a boolean'),
+    body('paymentMethods.wallet.default')
+      .optional()
+      .isBoolean()
+      .withMessage('wallet.default must be a boolean'),
+    body('paymentMethods.cash.enabled')
+      .optional()
+      .isBoolean()
+      .withMessage('cash.enabled must be a boolean'),
+    body('paymentMethods.cash.default')
+      .optional()
+      .isBoolean()
+      .withMessage('cash.default must be a boolean'),
+    body('paymentMethods.card.enabled')
+      .optional()
+      .isBoolean()
+      .withMessage('card.enabled must be a boolean'),
+    body('paymentMethods.card.default')
+      .optional()
+      .isBoolean()
+      .withMessage('card.default must be a boolean'),
+    body('paymentMethods.transfer.enabled')
+      .optional()
+      .isBoolean()
+      .withMessage('transfer.enabled must be a boolean'),
+    body('paymentMethods.transfer.default')
+      .optional()
+      .isBoolean()
+      .withMessage('transfer.default must be a boolean'),
   ],
 
   // Update admin settings

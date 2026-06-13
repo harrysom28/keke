@@ -25,6 +25,7 @@ import { validationRules, validate } from '../middleware/validation.js';
 import { limiters } from '../middleware/rateLimiter.js';
 import { getRedisClient } from '../config/redis.js';
 import { handlePaystackWebhook } from '../controllers/paystackWebhookController.js';
+import { getPublicPaymentMethodsConfig } from '../services/paymentMethodsService.js';
 
 const router = express.Router();
 
@@ -60,10 +61,11 @@ router.get('/health', async (req, res) => {
 });
 
 // Public config endpoint (for mobile app) - MUST BE BEFORE PROTECTED ROUTES
-router.get('/config/public', (req, res) => {
+router.get('/config/public', async (req, res) => {
   const pusherKey = process.env.PUSHER_KEY || process.env.PUSHER_APP_KEY || '';
   const pusherCluster = (process.env.PUSHER_CLUSTER || process.env.PUSHER_APP_CLUSTER || 'mt1').replace(/^["']|["']$/g, '').trim();
-  
+  const paymentMethods = await getPublicPaymentMethodsConfig();
+
   res.json({
     status: true,
     data: {
@@ -74,6 +76,7 @@ router.get('/config/public', (req, res) => {
       google: {
         client_id: process.env.GOOGLE_CLIENT_ID || '',
       },
+      paymentMethods,
     },
   });
 });

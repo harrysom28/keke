@@ -159,7 +159,7 @@ const rideSchema = new mongoose.Schema(
     },
     paymentStatus: {
       type: String,
-      enum: ['pending', 'completed', 'failed', 'refunded', 'held', 'charged', 'settled', 'partial'],
+      enum: ['pending', 'completed', 'failed', 'refunded', 'held', 'charged', 'settled', 'partial', 'cash_collected'],
       default: 'pending',
     },
     promoCode: {

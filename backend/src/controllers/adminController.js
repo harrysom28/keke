@@ -26,6 +26,13 @@ import { AuthenticationError, NotFoundError, ValidationError, ConflictError } fr
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { invalidateAdminSettingsCache } from '../utils/adminSettingsCache.js';
+import {
+  getPaymentMethodSettings,
+  getActiveRideCountsByPaymentMethod,
+  updatePaymentMethodSettings,
+  getPublicPaymentMethodsConfig,
+  PAYMENT_METHOD_LABELS,
+} from '../services/paymentMethodsService.js';
 import { getSocketService } from '../services/socketService.js';
 import { processRidePayment, sendPaymentReceipt } from '../services/paymentService.js';
 
@@ -363,6 +370,7 @@ export const getSettings = asyncHandler(async (req, res) => {
   if (!doc) {
     doc = await AdminSettings.create({ key: 'default' });
   }
+  const paymentMethods = await getPaymentMethodSettings();
   const defaultReferral = {
     enabled: true,
     rewardType: 'free_ride',
@@ -435,6 +443,40 @@ export const getSettings = asyncHandler(async (req, res) => {
       driverChallengeDefs: Array.isArray(doc.driverChallengeDefs) && doc.driverChallengeDefs.length
         ? doc.driverChallengeDefs
         : defaultDriverChallengeDefs,
+      paymentMethods,
+    },
+  });
+});
+
+/**
+ * Get payment method settings - GET /api/admin/settings/payment-methods
+ */
+export const getPaymentMethodSettingsHandler = asyncHandler(async (req, res) => {
+  const paymentMethods = await getPaymentMethodSettings();
+  const activeRideCounts = await getActiveRideCountsByPaymentMethod();
+  res.json({
+    status: 'success',
+    data: {
+      paymentMethods,
+      labels: PAYMENT_METHOD_LABELS,
+      activeRideCounts,
+    },
+  });
+});
+
+/**
+ * Update payment method settings - PUT /api/admin/settings/payment-methods
+ */
+export const updatePaymentMethodSettingsHandler = asyncHandler(async (req, res) => {
+  const { paymentMethods } = req.body;
+  const result = await updatePaymentMethodSettings(paymentMethods);
+  res.json({
+    status: 'success',
+    message: 'Payment method settings saved',
+    data: {
+      paymentMethods: result.paymentMethods,
+      activeRideCounts: result.activeRideCounts,
+      warnings: result.warnings,
     },
   });
 });

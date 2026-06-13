@@ -487,6 +487,90 @@ export const login = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Email/password registration (testing / secondary auth — skips OTP)
+ * POST /api/auth/email/register
+ * Body: name, email, password, device_id?, device_token?
+ */
+export const emailRegister = asyncHandler(async (req, res) => {
+  const { name, email, password, device_id, device_token } = req.body;
+  const normalizedEmail = String(email).toLowerCase().trim();
+  const trimmedName = String(name).trim();
+
+  const existingUser = await User.findOne({ email: normalizedEmail });
+  if (existingUser) {
+    throw new ConflictError('An account with this email already exists');
+  }
+
+  const user = await User.create({
+    name: trimmedName,
+    email: normalizedEmail,
+    password,
+    role: 'passenger',
+    isVerified: true,
+    isRegCompleted: true,
+    isRegVerified: true,
+    onboardingStage: 'rider_complete',
+    deviceId: device_id,
+    deviceToken: device_token,
+  });
+
+  provisionDvaAsync(user._id);
+
+  const tokens = await issueTokenPairWithSession(user, req);
+
+  res.status(201).json({
+    status: 'success',
+    message: 'Registration successful',
+    authorisation: {
+      token: tokens.token,
+      refresh_token: tokens.refreshToken,
+      type: 'bearer',
+    },
+    data: {
+      user: formatUserResponse(user),
+    },
+  });
+});
+
+/**
+ * Email/password login
+ * POST /api/auth/email/login
+ * Body: email, password, device_id?, device_token?
+ */
+export const emailLogin = asyncHandler(async (req, res) => {
+  const { email, password, device_id, device_token } = req.body;
+  const normalizedEmail = String(email).toLowerCase().trim();
+
+  const user = await User.findOne({ email: normalizedEmail }).select('+password');
+  if (!user || !(await user.comparePassword(password))) {
+    throw new AuthenticationError('Invalid email or password');
+  }
+
+  if (!user.isActive) {
+    throw new AuthenticationError('Your account has been deactivated');
+  }
+
+  if (device_id) user.deviceId = device_id;
+  if (device_token) user.deviceToken = device_token;
+  await user.save();
+
+  const tokens = await issueTokenPairWithSession(user, req);
+
+  res.json({
+    status: 'success',
+    message: 'Login successful',
+    authorisation: {
+      token: tokens.token,
+      refresh_token: tokens.refreshToken,
+      type: 'bearer',
+    },
+    data: {
+      user: formatUserResponse(user),
+    },
+  });
+});
+
+/**
  * Refresh token - device-bound, rotates refresh token on use
  * Requires: refresh_token, device_id (or x-device-id header)
  */

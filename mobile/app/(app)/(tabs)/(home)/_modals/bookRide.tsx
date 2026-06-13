@@ -22,7 +22,7 @@ import { AntDesign, MaterialCommunityIcons } from "@expo/vector-icons";
 import { AppContext } from "@/app/context";
 import { REQUEST_RIDE } from "@/constants";
 import apiClient from "@/utils/apiClient";
-import { setAppData, setRideData, AppDetailsState } from "@/store/AppSlice";
+import { setAppData, setRideData, AppDetailsState, type IUtils, type IUserLocation } from "@/store/AppSlice";
 import { getErrorMessage } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import { geocodeAddress, resolvePickupLabel, reverseGeocode } from "@/utils/mapsApi";
@@ -123,7 +123,9 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   const insets = useCombinedSafeInsets();
   const dispatch = useDispatch();
   const { apiConfig } = useContext(AppContext);
-  const { rideUtils } = useSelector(AppDetailsState);
+  const { ride } = useSelector(AppDetailsState);
+  const rideUtils = ride.utils as IUtils;
+  const userLocation = rideUtils.user_location as IUserLocation | undefined;
   const { location } = useCurrentLocation({ isFocused: true, purpose: "rider" });
   const [selectedDate, setSelectedDate] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).dayOffset); // 0=Today, 1=Tomorrow, 2=day after...
   const [selectedTime, setSelectedTime] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).time);
@@ -297,7 +299,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   useEffect(() => {
     if (!location || location.latitude === 0 || location.longitude === 0) return;
 
-    const pickupAddress = rideUtils?.user_location?.name || rideUtils?.user_location?.formatted_address;
+    const pickupAddress = userLocation?.name || userLocation?.formatted_address;
     if (typeof pickupAddress === 'string' && pickupAddress.trim() && pickupAddress.trim().toLowerCase() !== 'location' && !pickupAddress.includes("Current Location")) {
       setState((prev) => ({ ...prev, pickup_location: pickupAddress }));
       setPickupCoords({ lat: location.latitude, lng: location.longitude });
@@ -314,7 +316,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
         }
       })
       .catch(() => {});
-  }, [location, rideUtils]);
+  }, [location, userLocation]);
 
   // Sync pickup/dropoff to Redux so home map recenters and shows route when Schedule sheet is open
   useEffect(() => {
@@ -572,8 +574,8 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
       if (pickupCoords && pickupCoords.lat && pickupCoords.lng) {
         // Use stored coordinates (current location)
         pickupLocation = { lat: pickupCoords.lat, lng: pickupCoords.lng };
-        pickupAddress = state.pickup_location || rideUtils?.user_location?.formatted_address || "Current location";
-        pickupName = rideUtils?.user_location?.name || pickupAddress.split(',')[0];
+        pickupAddress = state.pickup_location || userLocation?.formatted_address || "Current location";
+        pickupName = userLocation?.name || pickupAddress.split(',')[0];
       } else {
         // Geocode pickup address
         const pickupGeocode = await geocodeAddress(state.pickup_location);
@@ -708,7 +710,10 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
         >
           <Pressable
             style={tw.style("bg-white rounded-t-2xl pt-2 pb-6 px-4")}
-            onPress={(e) => e.stopPropagation()}
+            onPress={(e) => {
+              const ev = e as unknown as { stopPropagation?: () => void };
+              ev.stopPropagation?.();
+            }}
           >
             <RNDateTimePicker
               value={
@@ -854,7 +859,10 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                   >
                     <Pressable
                       style={tw`bg-white rounded-t-2xl pt-4 pb-8 px-4`}
-                      onPress={(e) => e.stopPropagation()}
+                      onPress={(e) => {
+              const ev = e as unknown as { stopPropagation?: () => void };
+              ev.stopPropagation?.();
+            }}
                     >
                       <View style={tw`flex-row items-center justify-between mb-2`}>
                         <Text style={tw.style(`text-lg text-[#242E42]`, { fontFamily: 'RobotoBold' })}>

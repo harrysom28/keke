@@ -10,6 +10,8 @@ const router = express.Router();
 router.get('/referral-code/validate', limiters.authLimiter, validationRules.validateReferralCode, validate, authController.validateReferralCode);
 router.post('/user/signup', limiters.authLimiter, validationRules.register, validate, authController.register);
 router.post('/user/signin', limiters.authLimiter, validationRules.login, validate, authController.login);
+router.post('/email/register', limiters.authLimiter, validationRules.emailRegister, validate, authController.emailRegister);
+router.post('/email/login', limiters.authLimiter, validationRules.emailLogin, validate, authController.emailLogin);
 router.post('/user/confirm-otp', limiters.otpVerifyLimiter, validationRules.verifyOTP, validate, authController.verifyOTPCode);
 router.post('/user/request-login-otp', limiters.authLimiter, validationRules.requestLoginOtp, validate, authController.requestLoginOtp);
 router.post('/user/login-with-otp', limiters.otpVerifyLimiter, validationRules.loginWithOtp, validate, authController.loginWithOtp);
