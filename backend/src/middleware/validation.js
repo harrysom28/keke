@@ -1225,13 +1225,16 @@ export const validationRules = {
       .isIn([
         'user_activate', 'user_deactivate', 'user_delete',
         'driver_approve', 'driver_reject', 'refund', 'dispute_resolve',
-        'withdrawal_approve', 'withdrawal_reject', 'vehicle_type_delete', 'settings_update',
+        'withdrawal_approve', 'withdrawal_reject',
+        'driver_kyc_approve', 'driver_kyc_reject', 'driver_vehicle_approve', 'driver_vehicle_reject',
+        'payout_approve', 'payout_reject',
+        'vehicle_type_delete', 'settings_update',
         'promocode_create', 'promocode_update',
       ])
       .withMessage('Invalid action filter'),
     query('resourceType')
       .optional()
-      .isIn(['user', 'driver', 'payment', 'ride', 'withdrawal', 'vehicle_type', 'promocode', 'settings'])
+      .isIn(['user', 'driver', 'payment', 'ride', 'withdrawal', 'payout_request', 'driver_kyc', 'driver_vehicle', 'vehicle_type', 'promocode', 'settings'])
       .withMessage('Invalid resource type filter'),
     query('adminId')
       .optional()

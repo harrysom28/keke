@@ -25,6 +25,12 @@ const auditLogSchema = new mongoose.Schema(
         'dispute_resolve',
         'withdrawal_approve',
         'withdrawal_reject',
+        'driver_kyc_approve',
+        'driver_kyc_reject',
+        'driver_vehicle_approve',
+        'driver_vehicle_reject',
+        'payout_approve',
+        'payout_reject',
         'vehicle_type_delete',
         'settings_update',
         'promocode_create',
@@ -35,7 +41,7 @@ const auditLogSchema = new mongoose.Schema(
     resourceType: {
       type: String,
       required: true,
-      enum: ['user', 'driver', 'payment', 'ride', 'withdrawal', 'vehicle_type', 'promocode', 'settings'],
+      enum: ['user', 'driver', 'payment', 'ride', 'withdrawal', 'payout_request', 'driver_kyc', 'driver_vehicle', 'vehicle_type', 'promocode', 'settings'],
     },
     resourceId: {
       type: String,

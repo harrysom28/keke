@@ -65,6 +65,8 @@ function RideDetailPage({ id, onBack, showToast }) {
   const [driversLoading, setDriversLoading] = useState(false);
   const [assignDriverId, setAssignDriverId] = useState('');
   const [assigning, setAssigning] = useState(false);
+  const [completeModal, setCompleteModal] = useState({ open: false, reason: '', adminNote: '' });
+  const [completing, setCompleting] = useState(false);
 
   const loadRide = () => {
     if (!id) return;
@@ -79,6 +81,7 @@ function RideDetailPage({ id, onBack, showToast }) {
 
   const r = ride?.ride || ride;
   const canAssign = r && (r.status === 'requested' || r.status === 'no-driver-found') && !r.driver;
+  const canForceComplete = r && ['in-progress', 'issue_flagged', 'driver_offline'].includes(r.status);
   const vehicleTypeId = r?.vehicle_type_id || null;
 
   useEffect(() => {
@@ -106,6 +109,20 @@ function RideDetailPage({ id, onBack, showToast }) {
         loadRide();
       })
       .finally(() => setAssigning(false));
+  };
+
+  const handleForceComplete = () => {
+    if (completing) return;
+    setCompleting(true);
+    Api.post('/api/admin/rides/' + id + '/complete', {
+      reason: completeModal.reason || undefined,
+      adminNote: completeModal.adminNote || undefined,
+    }).then((res) => {
+      if (res.error) { showToast(res.error, 'error'); return; }
+      showToast('Ride marked completed');
+      setCompleteModal({ open: false, reason: '', adminNote: '' });
+      loadRide();
+    }).finally(() => setCompleting(false));
   };
 
   if (loading || !ride) return <div className="flex justify-center p-12"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" /></div>;
@@ -155,7 +172,30 @@ function RideDetailPage({ id, onBack, showToast }) {
             </div>
           </div>
         )}
+
+        {canForceComplete && (
+          <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-600">
+            <h3 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Force complete</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Mark this stuck ride as completed. Payment processing runs automatically when possible.</p>
+            <button
+              type="button"
+              onClick={() => setCompleteModal({ open: true, reason: '', adminNote: '' })}
+              className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700"
+            >
+              Force complete ride
+            </button>
+          </div>
+        )}
       </div>
+
+      <C.Modal open={completeModal.open} onClose={() => setCompleteModal({ open: false, reason: '', adminNote: '' })} title="Force complete ride">
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Optional notes for audit trail.</p>
+        <input type="text" placeholder="Reason shown in status history" value={completeModal.reason} onChange={(e) => setCompleteModal((m) => ({ ...m, reason: e.target.value }))} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 mb-2" />
+        <input type="text" placeholder="Internal admin note" value={completeModal.adminNote} onChange={(e) => setCompleteModal((m) => ({ ...m, adminNote: e.target.value }))} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 mb-2" />
+        <button type="button" onClick={handleForceComplete} disabled={completing} className="mt-2 px-3 py-1.5 bg-amber-600 text-white rounded-lg disabled:opacity-50">
+          {completing ? 'Completing…' : 'Confirm force complete'}
+        </button>
+      </C.Modal>
     </div>
   );
 }

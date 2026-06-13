@@ -46,9 +46,34 @@
     }
   }
 
+  function getApiBaseUrl() {
+    var config = (typeof global !== 'undefined' && global.__CONFIG__) ? global.__CONFIG__ : {};
+    var base = (config.API_BASE_URL != null && config.API_BASE_URL !== '') ? String(config.API_BASE_URL) : '';
+    if (!base && typeof window !== 'undefined' && window.location) {
+      var h = window.location.hostname;
+      base = (h === 'localhost' || h === '127.0.0.1') ? 'http://localhost:8000' : (window.location.protocol + '//' + h + ':8000');
+    }
+    return base.replace(/\/$/, '');
+  }
+
   function logout() {
-    removeToken();
-    if (typeof window.onAdminUnauthorized === 'function') window.onAdminUnauthorized();
+    var token = getToken();
+    var done = function () {
+      removeToken();
+      if (typeof window.onAdminUnauthorized === 'function') window.onAdminUnauthorized();
+    };
+    if (!token) {
+      done();
+      return Promise.resolve();
+    }
+    return fetch(getApiBaseUrl() + '/api/admin/logout', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: 'Bearer ' + token,
+      },
+    }).catch(function () {}).finally(done);
   }
 
   global.AdminAuth = {

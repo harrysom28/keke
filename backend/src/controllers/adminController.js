@@ -54,6 +54,19 @@ function formatAdminPaymentUser(user) {
   return { user_id: String(user), name: null, email: null };
 }
 
+function formatAdminResponseUser(user) {
+  if (!user) return null;
+  if (typeof user === 'object' && user._id) {
+    return {
+      user_id: user._id.toString(),
+      name: user.name ?? null,
+      email: user.email ?? null,
+      role: user.role ?? null,
+    };
+  }
+  return { user_id: String(user), name: null, email: null, role: null };
+}
+
 function parseAdminPagination(query) {
   const pageNum = Math.max(1, parseInt(query.page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(query.limit, 10) || 20));
@@ -1436,6 +1449,15 @@ export const rejectDriverKyc = asyncHandler(async (req, res) => {
   );
   if (!kyc) throw new NotFoundError('Driver KYC record');
   await syncDriverVerificationStatus(userId);
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'driver_kyc_reject',
+    resourceType: 'driver_kyc',
+    resourceId: kyc._id.toString(),
+    details: { userId, reason: reason || 'Rejected by admin' },
+    req,
+  });
   res.json({ status: 'success', message: 'Identity KYC rejected' });
 });
 
@@ -1451,6 +1473,15 @@ export const approveDriverVehicle = asyncHandler(async (req, res) => {
   );
   if (!vehicle) throw new NotFoundError('Driver vehicle record');
   await syncDriverVerificationStatus(userId);
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'driver_vehicle_approve',
+    resourceType: 'driver_vehicle',
+    resourceId: vehicle._id.toString(),
+    details: { userId },
+    req,
+  });
   res.json({ status: 'success', message: 'Vehicle verified' });
 });
 
@@ -1467,6 +1498,15 @@ export const rejectDriverVehicle = asyncHandler(async (req, res) => {
   );
   if (!vehicle) throw new NotFoundError('Driver vehicle record');
   await syncDriverVerificationStatus(userId);
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'driver_vehicle_reject',
+    resourceType: 'driver_vehicle',
+    resourceId: vehicle._id.toString(),
+    details: { userId, reason: reason || 'Rejected by admin' },
+    req,
+  });
   res.json({ status: 'success', message: 'Vehicle rejected' });
 });
 
@@ -1748,11 +1788,13 @@ export const adminForceCompleteRide = asyncHandler(async (req, res) => {
   }
 
   return res.status(200).json({
-    success: true,
+    status: 'success',
     message: 'Ride completed successfully by admin',
-    ride_id: rideId,
-    completed_by: 'admin',
-    reason: reason || 'admin_resolved',
+    data: {
+      ride_id: rideId,
+      completed_by: 'admin',
+      reason: reason || 'admin_resolved',
+    },
   });
 });
 
@@ -2460,11 +2502,7 @@ export const listSupportTickets = asyncHandler(async (req, res) => {
     data: {
       tickets: tickets.map((ticket) => ({
         ticket_id: ticket._id.toString(),
-        user: {
-          user_id: ticket.user._id.toString(),
-          name: ticket.user.name,
-          email: ticket.user.email,
-        },
+        user: formatAdminPaymentUser(ticket.user),
         ride_id: ticket.ride?._id?.toString() || null,
         category: ticket.category,
         subject: ticket.subject,
@@ -2509,11 +2547,7 @@ export const getTicketDetails = asyncHandler(async (req, res) => {
     data: {
       ticket: {
         ticket_id: ticket._id.toString(),
-        user: {
-          user_id: ticket.user._id.toString(),
-          name: ticket.user.name,
-          email: ticket.user.email,
-        },
+        user: formatAdminPaymentUser(ticket.user),
         ride: ticket.ride ? {
           ride_id: ticket.ride._id.toString(),
           status: ticket.ride.status,
@@ -2530,12 +2564,7 @@ export const getTicketDetails = asyncHandler(async (req, res) => {
         } : null,
         responses: ticket.responses?.map((response) => ({
           response_id: response._id?.toString(),
-          user: {
-            user_id: response.user._id.toString(),
-            name: response.user.name,
-            email: response.user.email,
-            role: response.user.role,
-          },
+          user: formatAdminResponseUser(response.user),
           message: response.message,
           attachments: response.attachments || [],
           created_at: response.createdAt,
@@ -2682,7 +2711,7 @@ export const listPromocodes = asyncHandler(async (req, res) => {
         valid_to: promo.validTo,
         is_active: promo.isActive,
         applicable_user_types: promo.applicableUserTypes,
-        applicable_vehicle_types: promo.applicableVehicleTypes.map((vt) => ({
+        applicable_vehicle_types: (promo.applicableVehicleTypes || []).map((vt) => ({
           vehicle_id: vt._id.toString(),
           name: vt.name,
         })),

@@ -259,6 +259,16 @@ function ConfigPage({ showToast, defaultTab }) {
     }
   };
 
+  const deleteVehicleType = (row) => {
+    const id = row.vehicle_id;
+    const label = row.display_name || row.name || id;
+    if (!window.confirm('Delete vehicle type "' + label + '"? This cannot be undone if drivers are using it.')) return;
+    Api.delete('/api/admin/vehicle-types/' + id).then((r) => {
+      if (r.error) showToast(r.error, 'error');
+      else { showToast('Vehicle type deleted'); loadVehicleTypes(); }
+    });
+  };
+
   const openAddPromo = () => {
     const from = new Date();
     const to = new Date();
@@ -333,7 +343,12 @@ function ConfigPage({ showToast, defaultTab }) {
     { key: 'per_minute_rate', label: 'Per min', render: (v) => v != null ? Utils.formatCurrency(v) : '—' },
     { key: 'capacity', label: 'Capacity' },
     { key: 'is_active', label: 'Active', render: (v) => v ? 'Yes' : 'No' },
-    { key: 'vehicle_id', label: 'Action', render: (v, row) => <button type="button" onClick={() => openEditVt(row)} className="text-blue-600 hover:underline text-sm">Edit</button> },
+    { key: 'vehicle_id', label: 'Action', render: (v, row) => (
+      <div className="flex gap-3">
+        <button type="button" onClick={() => openEditVt(row)} className="text-blue-600 hover:underline text-sm">Edit</button>
+        <button type="button" onClick={() => deleteVehicleType(row)} className="text-red-600 hover:underline text-sm">Delete</button>
+      </div>
+    ) },
   ];
   const pcColumns = [
     { key: 'code', label: 'Code' },

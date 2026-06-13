@@ -304,7 +304,7 @@ function App() {
                       <p className="text-xs text-gray-500 dark:text-gray-400">Dashboard</p>
                     </div>
                     <button type="button" onClick={() => { setDark(!dark); setProfileOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Theme</button>
-                    <button type="button" onClick={() => { Auth.logout(); setAuthenticated(false); setProfileOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100 dark:hover:bg-gray-700">Logout</button>
+                    <button type="button" onClick={() => { Auth.logout().finally(() => { setAuthenticated(false); setProfileOpen(false); }); }} className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100 dark:hover:bg-gray-700">Logout</button>
                   </div>
                 </>
               )}
