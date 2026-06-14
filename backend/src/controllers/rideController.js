@@ -1,5 +1,6 @@
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
+import RideOffer from '../models/RideOffer.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import VehicleType from '../models/VehicleType.js';
 import { getAdminSettings } from '../utils/adminSettingsCache.js';
@@ -31,14 +32,16 @@ import {
 import { assertPaymentMethodEnabled } from '../services/paymentMethodsService.js';
 import SupportTicket from '../models/SupportTicket.js';
 import { logRideAudit } from '../services/rideAuditLogService.js';
+import {
+  RIDER_MATCH_SEARCH_RADIUS_KM,
+  RIDER_PREVIEW_SEARCH_RADIUS_KM,
+  resolveDispatchSearchRadiusKm,
+} from '../utils/driverSearchRadius.js';
 
 const normalizeRideCurrency = (currency) => {
   const normalized = String(currency || 'NGN').toUpperCase();
   return normalized === 'USD' ? 'NGN' : normalized;
 };
-
-/** Driver geosearch radius (km) for new requests — keep aligned with `search_radius_km` in `formatRideResponse`. */
-const RIDER_MATCH_SEARCH_RADIUS_KM = 10;
 
 /**
  * Request ride - matches mobile app endpoint /api/booking/request-ride
@@ -590,11 +593,13 @@ export const findNearbyDrivers = asyncHandler(async (req, res) => {
     throw new ValidationError('Invalid location coordinates');
   }
 
-  // Find nearby available drivers (increased radius to 15km for better coverage)
+  // Find nearby available drivers (keke-appropriate preview radius)
+  Driver.markStaleDriversOffline().catch(() => {});
+
   const nearbyDrivers = await Driver.findNearbyAvailable(
     latitude,
     longitude,
-    15 // 15km radius (increased from 10km)
+    RIDER_PREVIEW_SEARCH_RADIUS_KM
   );
 
   logger.info(`Found ${nearbyDrivers.length} nearby available drivers at (${latitude}, ${longitude})`);
@@ -1174,8 +1179,8 @@ const formatRideResponse = (ride) => {
     drivers_notified: Array.isArray(ride.notifiedDriverIds)
       ? ride.notifiedDriverIds.length
       : 0,
-    /** Initial geosearch radius (km) — same as `RIDER_MATCH_SEARCH_RADIUS_KM` / `findAndMatchDrivers`. */
-    search_radius_km: RIDER_MATCH_SEARCH_RADIUS_KM,
+    /** Geosearch radius (km) for this ride's current dispatch round. */
+    search_radius_km: resolveDispatchSearchRadiusKm(ride),
     scheduled_at: ride.scheduledAt ? ride.scheduledAt.toISOString() : null, // Include scheduled time
     is_scheduled: ride.isScheduled || false, // Include scheduled flag
     createdAt: ride.createdAt,
@@ -1293,86 +1298,60 @@ export const assignNewDriver = asyncHandler(async (req, res) => {
     throw new NotFoundError('No alternative driver available at this time.');
   }
 
-  // Remove previous driver
+  // Release previous driver if one was assigned
   if (ride.driver) {
-    const previousDriver = await Driver.findById(ride.driver._id);
+    const previousDriverId = ride.driver._id || ride.driver;
+    const previousDriver = await Driver.findById(previousDriverId);
     if (previousDriver) {
       previousDriver.isAvailable = true;
       await previousDriver.save();
     }
   }
 
-  // Assign new driver
-  ride.driver = alternativeDriver._id;
-  ride.status = 'accepted';
-  ride.acceptedByDriver = true;
-  ride.acceptedAt = new Date();
-  ride.statusHistory.push({
-    status: 'accepted',
-    timestamp: new Date(),
-    note: `Reassigned to driver ${alternativeDriver._id}: ${reason || 'Previous driver unavailable'}`,
+  const resetStatus = ride.isScheduled ? 'scheduled' : 'searching';
+  const resetNote = `Rider requested new driver: ${reason || 'Previous driver unavailable'}`;
+
+  await RideOffer.updateMany(
+    { ride_id: ride._id, status: 'pending' },
+    { $set: { status: 'expired', expired_at: new Date() } }
+  );
+
+  await Ride.findByIdAndUpdate(ride._id, {
+    $set: {
+      driver: null,
+      acceptedByDriver: false,
+      acceptedAt: null,
+      status: resetStatus,
+    },
+    $push: {
+      statusHistory: {
+        status: resetStatus,
+        timestamp: new Date(),
+        note: resetNote,
+      },
+    },
   });
 
-  await ride.save();
-  await ride.populate('rider', 'name phone profileImage rating');
-  await ride.populate('vehicleType');
-  await ride.populate('driver.user', 'name phone profileImage rating');
+  const rideDoc = await Ride.findById(rideId)
+    .populate('rider', 'name phone profileImage rating deviceToken')
+    .populate('vehicleType');
 
-  // Make new driver unavailable
-  alternativeDriver.isAvailable = false;
-  await alternativeDriver.save();
-
-  await Ride.findByIdAndUpdate(rideId, {
-    $addToSet: { notifiedDriverIds: alternativeDriver._id },
-  });
-
-  // Send real-time notifications
-  const socketService = getSocketService();
-  if (socketService) {
-    socketService.emitRideAccepted(ride, alternativeDriver);
-    socketService.emitRideStatusUpdate(ride, 'accepted', alternativeDriver);
+  if (!rideDoc) {
+    throw new NotFoundError('Ride');
   }
 
-  // Push notification to rider: new driver assigned (ride_accepted)
-  try {
-    const { sendToUser } = await import('../services/notificationService.js');
-    const riderId = ride.rider._id || ride.rider;
-    const driverName = ride.driver?.user?.name || 'Your driver';
-    await sendToUser(riderId, 'rider', {
-      event_key: 'ride_accepted',
-      title: 'Driver is on the way!',
-      message: `${driverName} has accepted your ride and is heading to your pickup.`,
-      priority: 'high',
-      ride_id: ride._id.toString(),
-      screen: 'home',
-      action_type: 'navigate',
-      action_payload: { screen: 'home', rideId: ride._id.toString() },
-      data: { subType: 'ride_accepted', rideId: ride._id.toString() },
-    });
-  } catch (err) {
-    logger.error(`New driver assigned push notification failed: ${err.message}`);
-  }
+  const matchedDrivers = [{ driver: alternativeDriver, score: 100, distance: 0 }];
+  await dispatchRide(rideDoc, matchedDrivers, { maxOffers: 1 });
 
-  logger.info(`Ride ${rideId} reassigned to driver ${alternativeDriver._id}`);
+  logger.info(
+    `Ride ${rideId} reassignment offer dispatched to driver ${alternativeDriver._id} (awaiting accept)`
+  );
 
   res.json({
     status: 'success',
-    message: 'New driver assigned successfully',
+    message: 'Notified a new driver — waiting for acceptance',
     data: {
-      ride: formatRideResponse(ride),
-      driver: {
-        driver_id: alternativeDriver._id.toString(),
-        name: alternativeDriver.user?.name,
-        phone: alternativeDriver.user?.phone,
-        image: alternativeDriver.user?.profileImage,
-        rating: alternativeDriver.rating?.average || 0,
-        vehicle: {
-          make: alternativeDriver.vehicleDetails?.make,
-          model: alternativeDriver.vehicleDetails?.model,
-          plate_number: alternativeDriver.vehicleDetails?.plateNumber,
-          color: alternativeDriver.vehicleDetails?.color,
-        },
-      },
+      ride: formatRideResponse(rideDoc),
     },
   });
 });

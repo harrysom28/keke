@@ -59,7 +59,9 @@ import { getErrorMessage } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
+import { useDriverOnlineHeartbeat } from "@/hooks/useDriverOnlineHeartbeat";
 import { useIsFocused } from "@react-navigation/native";
+import apiClient from "@/utils/apiClient";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import Svg, { Path } from "react-native-svg";
 import {
@@ -152,6 +154,29 @@ export default function HomeScreen() {
                           !isNaN(location.longitude) &&
                           location.accuracy != null &&
                           location.accuracy < 200; // Only use if accuracy is reasonable (< 200m)
+
+  const [sessionOnline, setSessionOnline] = useState(false);
+  useEffect(() => {
+    if (!isFocused) return;
+    apiClient
+      .get("driver/earnings")
+      .then(({ data }) => {
+        setSessionOnline(Boolean(data?.data?.is_online));
+      })
+      .catch(() => setSessionOnline(false));
+  }, [isFocused]);
+
+  useDriverOnlineHeartbeat(
+    sessionOnline,
+    isFocused,
+    hasValidLocation && location
+      ? {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          address: address?.formattedAddress,
+        }
+      : null
+  );
 
   const mapRegion = hasValidLocation && location
     ? {
@@ -342,7 +367,6 @@ export default function HomeScreen() {
 
   const lastProcessedRideOfferSeqRef = useRef(0);
   useEffect(() => {
-    if (!isFocused) return;
     const seq = driverRideOfferPusherSeq ?? 0;
     const payload = driverRideOfferPusherPayload;
     if (!payload || !seq || seq === lastProcessedRideOfferSeqRef.current) {
@@ -352,7 +376,6 @@ export default function HomeScreen() {
     handlePusherRideRequest(payload);
     dispatch(setAppData({ driverRideOfferPusherPayload: null }));
   }, [
-    isFocused,
     driverRideOfferPusherSeq,
     driverRideOfferPusherPayload,
     handlePusherRideRequest,

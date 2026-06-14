@@ -85,6 +85,11 @@ import { useFocusRefresh } from "@/hooks/useFocusRefresh";
 import { invalidateRecentPlacesCache } from "@/utils/recentPlacesCache";
 import { invalidateWalletCache } from "@/utils/walletCache";
 import { requestManager } from "@/utils/requestManager";
+import {
+  getRiderAppCancelToastMessage,
+  resolveRideCancelledActor,
+  shouldSuppressRiderCancelToast,
+} from "@/utils/rideCancellation";
 
 // Max distance (km) for fitting map to route; beyond this we center on pickup to avoid continental zoom
 const MAX_FIT_DISTANCE_KM = 150;
@@ -451,69 +456,122 @@ export default function HomeScreen() {
 
   const openPostRideSummary = useCallback(
     (snapshot: Partial<TRide> & Record<string, unknown>) => {
-      const merged = {
+      const applyFareFields = (
+        record: TRide & Record<string, unknown>
+      ): TRide & Record<string, unknown> => {
+        const rawCost =
+          record.cost ??
+          (record.fare as { totalFare?: number } | undefined)?.totalFare ??
+          (record.fare_breakdown as { ride_fare?: number } | undefined)?.ride_fare ??
+          (record.fare_breakdown as { total_paid?: number } | undefined)?.total_paid;
+        if (rawCost != null && rawCost !== "") {
+          record.cost = String(
+            typeof rawCost === "number" ? Math.round(rawCost) : rawCost
+          );
+        }
+        const fb = record.fare_breakdown as
+          | { ride_fare?: number; service_charge?: number; total_paid?: number }
+          | undefined;
+        if (fb && typeof fb === "object") {
+          record.fare_breakdown = fb;
+          record.fareBreakdown = {
+            baseFare: Number(fb.ride_fare) || 0,
+            serviceCharge: Number(fb.service_charge) || 0,
+            total: Number(fb.total_paid) || 0,
+          };
+        }
+        return record;
+      };
+
+      const presentSummary = (record: TRide & Record<string, unknown>) => {
+        const merged = applyFareFields(record);
+        setTemp(merged as TRide);
+        setRide({
+          screen: "SUMMARY",
+          data: { waiting: merged as unknown as IARide["data"]["waiting"] },
+        });
+        dispatch(
+          setAppData({
+            isBooking: true,
+          })
+        );
+        setMaps({
+          origin: { latitude: 0, longitude: 0 },
+          destination: { latitude: 0, longitude: 0 },
+        });
+        setRouteKey((k) => k + 1);
+        tripCompletedRef.current = false;
+        setTripCompleted(false);
+
+        // Open the ride sheet directly on SUMMARY (do not gate behind TripCompletedModal).
+        setTimeout(() => {
+          try {
+            activeRideSheetRef?.current?.open();
+          } catch {
+            // ignore
+          }
+        }, 250);
+
+        if (mapRef.current) {
+          const lat = locationRef.current.latitude;
+          const lng = locationRef.current.longitude;
+          const currentHasValidLocation =
+            lat !== 0 && lng !== 0 && !isNaN(lat) && !isNaN(lng);
+          const defaultRegion = currentHasValidLocation
+            ? { latitude: lat, longitude: lng, ...mapDelta }
+            : { latitude: 9.082, longitude: 8.6753, ...mapDelta };
+          mapRef.current.animateToRegion(defaultRegion, 800);
+        }
+      };
+
+      const base = {
         ...tempRef.current,
         ...snapshot,
         status: "completed",
       } as TRide & Record<string, unknown>;
-      const rawCost =
-        (merged as { cost?: unknown }).cost ??
-        (snapshot as { fare?: { totalFare?: number } } | undefined)?.fare
-          ?.totalFare ??
-        (snapshot as { fare_breakdown?: { ride_fare?: number } })?.fare_breakdown
-          ?.ride_fare;
-      if (rawCost != null && rawCost !== "") {
-        merged.cost = String(
-          typeof rawCost === "number" ? Math.round(rawCost) : rawCost
-        );
-      }
-      const fb = (snapshot as { fare_breakdown?: { ride_fare?: number; service_charge?: number; total_paid?: number } })
-        .fare_breakdown;
-      if (fb && typeof fb === "object") {
-        merged.fare_breakdown = fb;
-        merged.fareBreakdown = {
-          baseFare: Number(fb.ride_fare) || 0,
-          serviceCharge: Number(fb.service_charge) || 0,
-          total: Number(fb.total_paid) || 0,
-        };
-      }
-      setTemp(merged as TRide);
-      setRide({
-        screen: "SUMMARY",
-        data: { waiting: merged as unknown as IARide["data"]["waiting"] },
-      });
-      dispatch(
-        setAppData({
-          isBooking: true,
-        })
-      );
-      setMaps({
-        origin: { latitude: 0, longitude: 0 },
-        destination: { latitude: 0, longitude: 0 },
-      });
-      setRouteKey((k) => k + 1);
-      tripCompletedRef.current = false;
-      setTripCompleted(false);
+      const rideId = String(base.ride_id ?? base._id ?? "").trim();
+      const hasFare = (() => {
+        const preview = applyFareFields({ ...base });
+        return !!preview.cost && preview.cost !== "0";
+      })();
 
-      // Open the ride sheet directly on SUMMARY (do not gate behind TripCompletedModal).
-      setTimeout(() => {
+      if (hasFare || !rideId) {
+        presentSummary(base);
+        return;
+      }
+
+      (async () => {
+        let enriched: TRide & Record<string, unknown> = base;
         try {
-          activeRideSheetRef?.current?.open();
+          const { data } = await apiClient.get(`rides/${rideId}`);
+          const detail =
+            data?.data?.ride ?? data?.ride ?? data?.data ?? null;
+          if (detail && typeof detail === "object") {
+            enriched = {
+              ...base,
+              ...(detail as Record<string, unknown>),
+              ride_id: rideId,
+              status: "completed",
+            };
+          }
         } catch {
-          // ignore
+          try {
+            const { data } = await apiClient.get("booking/active-ride");
+            const rideData = data?.data?.ride || data?.ride || null;
+            if (rideData && typeof rideData === "object" && Object.keys(rideData).length > 0) {
+              enriched = {
+                ...base,
+                ...(rideData as Record<string, unknown>),
+                ride_id: rideId,
+                status: "completed",
+              };
+            }
+          } catch {
+            // keep snapshot as-is
+          }
         }
-      }, 250);
-
-      if (mapRef.current) {
-        const lat = locationRef.current.latitude;
-        const lng = locationRef.current.longitude;
-        const currentHasValidLocation =
-          lat !== 0 && lng !== 0 && !isNaN(lat) && !isNaN(lng);
-        const defaultRegion = currentHasValidLocation
-          ? { latitude: lat, longitude: lng, ...mapDelta }
-          : { latitude: 9.082, longitude: 8.6753, ...mapDelta };
-        mapRef.current.animateToRegion(defaultRegion, 800);
-      }
+        presentSummary(enriched);
+      })();
     },
     [dispatch]
   );
@@ -1080,21 +1138,24 @@ export default function HomeScreen() {
     [applyPusherRideStatusPatchFn]
   );
 
-  const handleDriverCancelledRide = useCallback(
+  const handleRideCancelled = useCallback(
     (payload?: Record<string, unknown> | null) => {
       const st = String(
         payload?.internal_status ?? payload?.status ?? ""
       ).toLowerCase();
       const rematching = st === "searching" || st === "requested";
+      const actor = resolveRideCancelledActor(payload);
 
-      safeShowMessage({
-        type: "danger",
-        message: rematching
-          ? "Your driver cancelled. Finding another driver…"
-          : "Your driver has cancelled the ride",
-      });
+      if (!(actor === "rider" && shouldSuppressRiderCancelToast())) {
+        const toast = getRiderAppCancelToastMessage(
+          actor,
+          rematching,
+          payload?.reason
+        );
+        safeShowMessage({ type: toast.type, message: toast.message });
+      }
 
-      if (rematching) {
+      if (rematching && actor === "driver") {
         const rideId = String(
           payload?.ride_id ?? payload?.rideId ?? tempRef.current?.ride_id ?? ""
         ).trim();
@@ -1105,9 +1166,11 @@ export default function HomeScreen() {
         return;
       }
 
-      clearRideState();
-      activeRideSheetRef?.current?.close();
-      dispatch(setAppData({ isBooking: false }));
+      if (actor === "rider" || actor === "system" || !rematching) {
+        clearRideState();
+        activeRideSheetRef?.current?.close();
+        dispatch(setAppData({ isBooking: false }));
+      }
       getActiveRide();
     },
     [applyPusherRideStatusPatchFn, clearRideState, dispatch]
@@ -1847,7 +1910,7 @@ export default function HomeScreen() {
     onEvent: (event) => {
       const payload = parsePusherDataPayload((event as { data?: unknown }).data);
       logger.info(`Driver cancelled event received: ${String((event as { eventName?: string })?.eventName)}`);
-      handleDriverCancelledRide(payload);
+      handleRideCancelled(payload);
     },
   });
 
@@ -1907,7 +1970,7 @@ export default function HomeScreen() {
           payload.internal_status ?? payload.status ?? ""
         ).toLowerCase();
         if (st === "cancelled" || st === "canceled") {
-          handleDriverCancelledRide(payload);
+          handleRideCancelled(payload);
           return;
         }
         applyPusherRideStatusPatchFn(payload);
@@ -1920,7 +1983,7 @@ export default function HomeScreen() {
         name === "RIDE_CANCELLED" ||
         name === "driver_cancelled"
       ) {
-        handleDriverCancelledRide(payload);
+        handleRideCancelled(payload);
         return;
       }
       if (
@@ -1960,7 +2023,7 @@ export default function HomeScreen() {
           payload.internal_status ?? payload.status ?? ""
         ).toLowerCase();
         if (st === "cancelled" || st === "canceled") {
-          handleDriverCancelledRide(payload);
+          handleRideCancelled(payload);
           return;
         }
         applyPusherRideStatusPatchFn(payload);
@@ -1978,7 +2041,7 @@ export default function HomeScreen() {
         name === "ride-cancelled" ||
         name === "driver_cancelled"
       ) {
-        handleDriverCancelledRide(payload);
+        handleRideCancelled(payload);
         return;
       }
       if (
@@ -2364,7 +2427,7 @@ export default function HomeScreen() {
       setPaymentReceipt(true);
       getActiveRide();
     }
-  }, [notificationEvent, applyRideAcceptedPatchFn, handleDriverCancelledRide]);
+  }, [notificationEvent, applyRideAcceptedPatchFn, handleRideCancelled]);
 
   // Use throttled location update hook to prevent rate limiting
   const updateLocation = useThrottledLocationUpdate();
@@ -2501,6 +2564,7 @@ export default function HomeScreen() {
       <TripCompletedModal
         // saved ride data
         cost={temp.cost}
+        paymentType={temp?.payment_type}
         visible={tripCompleted}
         view="passenger"
         action={() => {

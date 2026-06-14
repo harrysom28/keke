@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "keke",
+    "name": "Keke Ride",
     "slug": "keke",
     "version": "1.0.0",
     "runtimeVersion": "1.0.0",
@@ -9,7 +9,7 @@
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "image": "./assets/images/splash.png",
+      "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -43,7 +43,7 @@
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.POST_NOTIFICATIONS"
       ],
-      "package": "com.keke.app",
+      "package": "com.kekeride.app",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyC_YzZFaiK-ryYgPOS-b3DdFqz7o73WdgU"
@@ -58,6 +58,15 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 120,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
       [
         "expo-image-picker",
         {

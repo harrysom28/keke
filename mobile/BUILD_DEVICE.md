@@ -57,7 +57,7 @@ eas build --platform android --profile preview2
 - After the build finishes, download the APK from the EAS link and install on the device.
 
 **⚠️ Map is black / grey / not displaying on Android?**  
-The home map needs a valid Google Maps API key at build time. Set `EXPO_PUBLIC_MAPS_DISPLAY_KEY` in `mobile/.env`, then run `npm run prebuild:with-patch` and rebuild. On Android, the key must be restricted to Maps SDK for Android and your app’s package name + SHA-1 in Google Cloud Console. If you restrict the key, add Android app package `com.keke.app` and the debug keystore SHA-1 (get it with: `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android`); without it the emulator map stays grey/blank.
+The home map needs a valid Google Maps API key at build time. Set `EXPO_PUBLIC_MAPS_DISPLAY_KEY` in `mobile/.env`, then run `npm run prebuild:with-patch` and rebuild. On Android, the key must be restricted to Maps SDK for Android and your app’s package name + SHA-1 in Google Cloud Console. If you restrict the key, add Android app package `com.kekeride.app` and the debug keystore SHA-1 (get it with: `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android`); without it the emulator map stays grey/blank.
 
 **⚠️ "Unable to reach server" / build not accessing server / login too slow?**  
 EAS builds bake in the API URL at build time. Use **ngrok** for a single public URL that works from anywhere (same WiFi, remote, emulator).

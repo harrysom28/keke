@@ -606,9 +606,9 @@ export const updateLocation = asyncHandler(async (req, res) => {
     if (driver) {
       const { updateDriverLocation, persistDriverLocationMongo } = await import('../services/locationService.js');
       await updateDriverLocation(driver._id, longitude, latitude, address || '');
-      persistDriverLocationMongo(driver._id, longitude, latitude, address).catch((err) => {
-        logger.warn(`Mongo driver location persist failed: ${err.message}`);
-      });
+      await persistDriverLocationMongo(driver._id, longitude, latitude, address || '');
+      driver.lastActiveAt = new Date();
+      await driver.save();
 
       const { updateDriverLocationForAcceptedRide } = await import('../services/rideMovementService.js');
       await updateDriverLocationForAcceptedRide(driver._id, { lat: latitude, lng: longitude });

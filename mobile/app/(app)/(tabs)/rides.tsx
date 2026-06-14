@@ -1388,6 +1388,10 @@ const RidesScreen = () => {
     apiClient
       .post("schedule/cancel/booking", { booking_id })
       .then(() => {
+        safeShowMessage({
+          type: "success",
+          message: "Booking cancelled successfully",
+        });
         bookingSheetRef.current?.close();
         setSelectedBooking({});
         lastFetchRef.current = 0;

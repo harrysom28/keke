@@ -1,4 +1,4 @@
-package com.keke.app
+package com.kekeride.app
 
 import android.app.Application
 import android.content.res.Configuration

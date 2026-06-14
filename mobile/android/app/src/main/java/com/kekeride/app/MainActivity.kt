@@ -1,4 +1,4 @@
-package com.keke.app
+package com.kekeride.app
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build

@@ -1,5 +1,9 @@
 import Driver from '../models/Driver.js';
 import { calculateDistance } from '../utils/geolocation.js';
+import {
+  ASSIGN_NEW_DRIVER_RADIUS_KM,
+  resolveDispatchSearchRadiusKm,
+} from '../utils/driverSearchRadius.js';
 import logger from '../utils/logger.js';
 import { getSocketService } from './socketService.js';
 
@@ -20,16 +24,17 @@ class RideMatchingService {
   /**
    * @param {string[]} excludeDriverIds - Driver IDs to skip (already notified in prior dispatch rounds).
    */
-  async findAndMatchDrivers(ride, maxDistanceKm = 10, maxDrivers = 5, excludeDriverIds = []) {
+  async findAndMatchDrivers(ride, _maxDistanceKm = 10, maxDrivers = 5, excludeDriverIds = []) {
     try {
       const pickupLat = ride.pickupLocation.coordinates[1];
       const pickupLng = ride.pickupLocation.coordinates[0];
+      const radiusKm = resolveDispatchSearchRadiusKm(ride);
 
       // Find nearby available drivers using geospatial query
       const nearbyDrivers = await Driver.findNearbyAvailable(
         pickupLat,
         pickupLng,
-        maxDistanceKm
+        radiusKm
       );
 
       if (nearbyDrivers.length === 0) {
@@ -164,7 +169,7 @@ class RideMatchingService {
       const nearbyDrivers = await Driver.findNearbyAvailable(
         pickupLat,
         pickupLng,
-        15 // Larger radius for alternative
+        ASSIGN_NEW_DRIVER_RADIUS_KM
       );
 
       logger.info(`Found ${nearbyDrivers.length} nearby available drivers for alternative search`);

@@ -255,24 +255,40 @@ driverSchema.methods.addEarnings = async function (amount) {
   await this.save();
 };
 
+/** Mark drivers with stale location heartbeats as offline (fire-and-forget). */
+driverSchema.statics.markStaleDriversOffline = function () {
+  const cutoff = new Date(Date.now() - 5 * 60 * 1000);
+  return this.updateMany(
+    {
+      isOnline: true,
+      $or: [
+        { 'currentLocation.lastUpdated': { $lt: cutoff } },
+        { 'currentLocation.lastUpdated': { $exists: false } },
+      ],
+    },
+    { $set: { isOnline: false, isAvailable: false } }
+  ).exec();
+};
+
 // Static method to find nearby available drivers
 driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, maxDistanceKm = 15) {
   const logger = (await import('../utils/logger.js')).default;
-  
+  const locationFreshSince = new Date(Date.now() - 2 * 60 * 1000);
+
   try {
-    // Try geospatial query first (requires 2dsphere index)
     const drivers = await this.find({
       isOnline: true,
       isAvailable: true,
       documentsVerified: true,
       verificationStatus: 'approved',
+      'currentLocation.lastUpdated': { $gte: locationFreshSince },
       currentLocation: {
         $near: {
           $geometry: {
             type: 'Point',
             coordinates: [longitude, latitude],
           },
-          $maxDistance: maxDistanceKm * 1000, // Convert km to meters
+          $maxDistance: maxDistanceKm * 1000,
         },
       },
     })
@@ -280,35 +296,15 @@ driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, 
       .populate('vehicleDetails.vehicleType')
       .sort({ rating: -1, acceptanceRate: -1 })
       .limit(20);
-    
-    // If we found drivers, return them
-    if (drivers && drivers.length > 0) {
-      logger.info(`Geospatial query found ${drivers.length} drivers within ${maxDistanceKm}km`);
-      return drivers;
-    } else {
-      logger.warn(`Geospatial query found 0 drivers within ${maxDistanceKm}km of (${latitude}, ${longitude})`);
-    }
+
+    logger.info(
+      `Geospatial query found ${drivers.length} fresh drivers within ${maxDistanceKm}km`
+    );
+    return drivers;
   } catch (error) {
-    // If geospatial query fails (e.g., index not set up), fall back to regular query
-    logger.warn(`Geospatial query failed, using fallback: ${error.message}`);
+    logger.warn(`Geospatial query failed for nearby drivers: ${error.message}`);
+    return [];
   }
-  
-  // Fallback: Find all available drivers (no distance filtering)
-  // This ensures we still return drivers even if geospatial index isn't set up
-  const fallbackDrivers = await this.find({
-    isOnline: true,
-    isAvailable: true,
-    documentsVerified: true,
-    verificationStatus: 'approved',
-    currentLocation: { $exists: true, $ne: null },
-  })
-    .populate('user', 'name email phone profileImage rating')
-    .populate('vehicleDetails.vehicleType')
-    .sort({ rating: -1, acceptanceRate: -1 })
-    .limit(20);
-  
-  logger.info(`Fallback query found ${fallbackDrivers.length} drivers (no distance filter)`);
-  return fallbackDrivers;
 };
 
 const Driver = mongoose.model('Driver', driverSchema);

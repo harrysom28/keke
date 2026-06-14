@@ -19,6 +19,7 @@ interface Props {
   onClose: () => void;
   action: () => void;
   cost: string;
+  paymentType?: string;
 }
 
 const TripCompletedModal = ({
@@ -27,8 +28,10 @@ const TripCompletedModal = ({
   onClose,
   action,
   cost,
+  paymentType,
 }: Props) => {
   const isPassenger = view === "passenger";
+  const isCashPayment = String(paymentType ?? "").toLowerCase() === "cash";
   const insets = useCombinedSafeInsets();
   const [milestoneMessage, setMilestoneMessage] = useState<string | null>(null);
 
@@ -123,7 +126,9 @@ const TripCompletedModal = ({
                       fontFamily: "RobotoRegular",
                     })}
                   >
-                    ₦{cost} settled automatically from your wallet. No cash exchanged.
+                    {isCashPayment
+                      ? `Pay driver ₦${cost} in cash if you haven't already.`
+                      : `₦${cost} settled automatically from your wallet. No cash exchanged.`}
                   </Text>
                 </View>
                 <Text

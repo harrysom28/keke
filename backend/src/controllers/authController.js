@@ -492,35 +492,61 @@ export const login = asyncHandler(async (req, res) => {
  * Body: name, email, password, device_id?, device_token?
  */
 export const emailRegister = asyncHandler(async (req, res) => {
-  const { name, email, password, device_id, device_token } = req.body;
+  const { name, email, password, device_id, device_token, role, referral_code } = req.body;
   const normalizedEmail = String(email).toLowerCase().trim();
   const trimmedName = String(name).trim();
+  const userRole = role === 'driver' ? 'driver' : 'passenger';
+  const cleanedReferral = typeof referral_code === 'string' ? referral_code.trim() : '';
+  let referrerDoc = null;
+  if (cleanedReferral) {
+    referrerDoc = await User.findOne({ referralCode: cleanedReferral }).select('_id');
+    if (!referrerDoc) {
+      throw new ValidationError('Referral code not found. Please check and try again.');
+    }
+  }
 
   const existingUser = await User.findOne({ email: normalizedEmail });
   if (existingUser) {
     throw new ConflictError('An account with this email already exists');
   }
 
-  const user = await User.create({
+  const userData = {
     name: trimmedName,
     email: normalizedEmail,
     password,
-    role: 'passenger',
+    role: userRole,
     isVerified: true,
     isRegCompleted: true,
     isRegVerified: true,
-    onboardingStage: 'rider_complete',
     deviceId: device_id,
     deviceToken: device_token,
-  });
+  };
 
-  provisionDvaAsync(user._id);
+  if (userRole === 'passenger') {
+    userData.onboardingStage = 'rider_complete';
+  }
+
+  if (referrerDoc) {
+    userData.referredBy = referrerDoc._id;
+  }
+
+  const user = await User.create(userData);
+
+  if (!user.walletAccountNumber) {
+    user.walletAccountNumber = 'KEKE' + user._id.toString().slice(-8).toUpperCase();
+    await user.save({ validateBeforeSave: false });
+  }
+
+  if (userRole === 'passenger') {
+    provisionDvaAsync(user._id);
+  }
 
   const tokens = await issueTokenPairWithSession(user, req);
+  const needsOnboarding = userRole === 'driver';
 
   res.status(201).json({
     status: 'success',
-    message: 'Registration successful',
+    message: needsOnboarding ? 'Account created — complete driver setup to continue' : 'Registration successful',
     authorisation: {
       token: tokens.token,
       refresh_token: tokens.refreshToken,
@@ -528,6 +554,7 @@ export const emailRegister = asyncHandler(async (req, res) => {
     },
     data: {
       user: formatUserResponse(user),
+      needs_onboarding: needsOnboarding,
     },
   });
 });

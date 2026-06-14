@@ -67,7 +67,7 @@ class ScheduledRideService {
 
       for (const ride of scheduledRides) {
         try {
-          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, 10, 5);
+          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, undefined, 5);
 
           if (matchedDrivers.length > 0) {
             setImmediate(() => {
@@ -105,7 +105,7 @@ class ScheduledRideService {
       for (const ride of overdueRides) {
         try {
           // Try to find alternative drivers with larger radius
-          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, 20, 10);
+          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, undefined, 10);
 
           if (matchedDrivers.length > 0) {
             setImmediate(() => {

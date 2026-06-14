@@ -25,6 +25,7 @@ import { AppContext } from "@/app/context";
 import { isRiderMatchedOrBeyond } from "@/utils/activeRidePayload";
 import { pusherManager } from "@/utils/pusherManager";
 import { isValidMongoRideId, resolveRideId } from "@/utils/resolveRideId";
+import { suppressRiderCancelToast } from "@/utils/rideCancellation";
 import { useDevvieSheetHeight } from "@/hooks/useDevvieSheetHeight";
 
 interface Props {
@@ -613,12 +614,16 @@ const ActiveRideSheet = ({
     (async () => {
       try {
         await apiClient.post("booking/cancel-ride", { rideId, reason });
+        suppressRiderCancelToast();
+        showMessage({ type: "success", message: "Ride cancelled" });
         executable();
         finishCancelRideUI();
       } catch (err: unknown) {
         const status = (err as { response?: { status?: number }; status?: number })?.response
           ?.status ?? (err as { status?: number })?.status;
         if (status === 404) {
+          suppressRiderCancelToast();
+          showMessage({ type: "success", message: "Ride cancelled" });
           executable();
           finishCancelRideUI();
           return;

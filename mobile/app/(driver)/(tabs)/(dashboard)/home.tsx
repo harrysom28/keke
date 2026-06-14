@@ -59,6 +59,8 @@ import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
 import { ensureForegroundLocationAccess } from "@/utils/locationPermission";
+import { useCurrentLocation } from "@/hooks/useCurrentLocation";
+import { useDriverOnlineHeartbeat } from "@/hooks/useDriverOnlineHeartbeat";
 
 /** Map schedule/closest API shape (ride_id, nested pickup/dropoff, scheduled_at) to home card fields. */
 function mapClosestBookingForHome(raw: Record<string, unknown>): Partial<TBooking> & Record<string, unknown> {
@@ -128,6 +130,19 @@ const Home = () => {
       ? "On a trip"
       : "Offline";
   const isVerified = activity?.verification_status === "approved" && activity?.documents_verified;
+
+  const { location, address } = useCurrentLocation();
+  useDriverOnlineHeartbeat(
+    sessionOnline,
+    isFocused,
+    location?.latitude != null && location?.longitude != null
+      ? {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          address: address?.formattedAddress,
+        }
+      : null
+  );
 
   const emergencySheetRef = useRef<BottomSheetMethods>(null);
   const bookingSheetRef = useRef<BottomSheetMethods>(null);

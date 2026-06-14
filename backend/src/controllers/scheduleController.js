@@ -106,47 +106,73 @@ export const acceptScheduledBooking = asyncHandler(async (req, res) => {
     throw new ValidationError('Driver must be online and available to accept bookings');
   }
 
-  const ride = await Ride.findById(rideId);
-  if (!ride) {
+  const ridePreview = await Ride.findById(rideId).populate('vehicleType');
+  if (!ridePreview) {
     throw new NotFoundError('Ride');
   }
 
-  if (!ride.isScheduled) {
+  if (!ridePreview.isScheduled) {
     throw new ValidationError('Ride is not a scheduled booking');
   }
 
-  if (ride.status !== 'requested' && ride.status !== 'scheduled') {
+  if (ridePreview.status !== 'requested' && ridePreview.status !== 'scheduled') {
     throw new ValidationError('Ride cannot be accepted in current status');
   }
 
-  if (ride.driver) {
+  if (ridePreview.driver) {
     throw new ConflictError('Ride has already been accepted by another driver');
   }
 
-  // Check if scheduled time is in the future
-  if (ride.scheduledAt && ride.scheduledAt < new Date()) {
+  if (ridePreview.scheduledAt && ridePreview.scheduledAt < new Date()) {
     throw new ValidationError('Cannot accept past scheduled ride');
   }
 
-  // Check if driver matches vehicle type
-  if (driver.vehicleDetails.vehicleType.toString() !== ride.vehicleType.toString()) {
+  const rideVehicleTypeId =
+    ridePreview.vehicleType?._id?.toString?.() || ridePreview.vehicleType?.toString?.();
+  const driverVehicleTypeId = driver.vehicleDetails?.vehicleType?.toString?.();
+  if (rideVehicleTypeId && driverVehicleTypeId && rideVehicleTypeId !== driverVehicleTypeId) {
     throw new ValidationError('Driver vehicle type does not match ride requirements');
   }
 
-  // Assign driver to ride
-  ride.driver = driver._id;
-  ride.status = 'accepted';
-  ride.acceptedByDriver = true;
-  ride.acceptedAt = new Date();
-  ride.statusHistory.push({
-    status: 'accepted',
-    timestamp: new Date(),
-    note: `Scheduled booking accepted by driver ${driver._id}`,
-  });
+  const acceptedAt = new Date();
+  const ride = await Ride.findOneAndUpdate(
+    {
+      _id: rideId,
+      isScheduled: true,
+      driver: null,
+      status: { $in: ['requested', 'scheduled'] },
+      scheduledAt: { $gte: new Date() },
+    },
+    {
+      $set: {
+        driver: driver._id,
+        status: 'accepted',
+        acceptedByDriver: true,
+        acceptedAt,
+      },
+      $push: {
+        statusHistory: {
+          status: 'accepted',
+          timestamp: acceptedAt,
+          note: `Scheduled booking accepted by driver ${driver._id}`,
+        },
+      },
+    },
+    { new: true }
+  )
+    .populate('rider', 'name phone profileImage rating')
+    .populate('vehicleType');
 
-  await ride.save();
-  await ride.populate('rider', 'name phone profileImage rating');
-  await ride.populate('vehicleType');
+  if (!ride) {
+    const latest = await Ride.findById(rideId);
+    if (latest?.driver) {
+      throw new ConflictError('Ride has already been accepted by another driver');
+    }
+    if (latest?.scheduledAt && latest.scheduledAt < new Date()) {
+      throw new ValidationError('Cannot accept past scheduled ride');
+    }
+    throw new ValidationError('Ride cannot be accepted in current status');
+  }
 
   // Only take driver "off the market" once pickup time has started; future accepts stay available.
   const now = new Date();

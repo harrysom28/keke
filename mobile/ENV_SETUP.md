@@ -12,7 +12,7 @@ Create `mobile/.env`:
 ```env
 # Maps display-only key.
 # Restrict this key in Google Cloud Console to:
-# - Application restriction: Android apps (package: com.keke.app + SHA-1 fingerprints)
+# - Application restriction: Android apps (package: com.kekeride.app + SHA-1 fingerprints)
 # - API restriction: Maps SDK for Android ONLY
 EXPO_PUBLIC_MAPS_DISPLAY_KEY=YOUR_ANDROID_DISPLAY_KEY_HERE
 ```
@@ -50,7 +50,7 @@ If maps are not displaying, temporarily **unrestrict the API key** to test if th
 ### After Testing:
 
 ⚠️ **IMPORTANT**: Once you've confirmed the key works, **re-add restrictions** for security:
-- Application restriction: Android apps (package: `com.keke.app` + your SHA-1 fingerprints)
+- Application restriction: Android apps (package: `com.kekeride.app` + your SHA-1 fingerprints)
 - API restriction: Maps SDK for Android ONLY
 
 ### Getting Your SHA-1 Fingerprint:

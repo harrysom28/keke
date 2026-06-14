@@ -152,6 +152,15 @@ export const validationRules = {
       .withMessage('Password is required')
       .isLength({ min: 6 })
       .withMessage('Password must be at least 6 characters'),
+    body('role')
+      .optional()
+      .isIn(['passenger', 'driver'])
+      .withMessage('Role must be passenger or driver'),
+    body('referral_code')
+      .optional()
+      .trim()
+      .isLength({ min: 4, max: 64 })
+      .withMessage('Referral code must be 4–64 characters'),
   ],
 
   emailLogin: [

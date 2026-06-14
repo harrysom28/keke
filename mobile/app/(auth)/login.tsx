@@ -16,7 +16,7 @@ import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { verticalScale } from "@/constants/Metrics";
 import { getUniqueId } from "react-native-device-info";
 import { requestUserNotificationPermission } from "@/utils/notifications";
@@ -44,7 +44,10 @@ const Login = () => {
   const phoneInput = useRef<PhoneInput>(null);
   const isFocused = useIsFocused();
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<LoginMode>("Phone OTP");
+  const params = useLocalSearchParams<{ mode?: string }>();
+  const [mode, setMode] = useState<LoginMode>(
+    params?.mode === "email" ? "Email & Password" : "Phone OTP"
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -176,7 +179,7 @@ const Login = () => {
           >
             Don't have an account?{" "}
             <Text
-              onPress={() => router.push("/email-signup")}
+              onPress={() => router.push("/usertype")}
               style={tw.style(`text-base-green text-lg`, {
                 fontFamily: "RobotoMedium",
               })}
