@@ -6,7 +6,6 @@ import {
 } from "@/store/AppSlice";
 import {
   DRIVER_ACTIVE_RIDE,
-  DRIVER_CURRENT_RIDE_OFFER,
   DRIVER_PASSENGER_LOCATION,
   LOCATION_UPDATE,
 } from "@/constants";
@@ -70,7 +69,7 @@ import {
 } from "@/utils/driverInitialRoute";
 import { LocationPermissionBanner } from "@/components/LocationPermissionBanner";
 import { resolveLocationPermissionFromBanner } from "@/utils/locationPermission";
-import { driverOfferPaymentUiKey } from "@/utils/paymentMethods";
+import { requestDriverOfferRefresh } from "@/utils/driverRideOffer";
 
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
@@ -91,7 +90,6 @@ export default function HomeScreen() {
     subscription,
     unread_count,
     driverPendingRideOffer,
-    driverRideOfferPusherSeq,
     driverRideOfferPusherPayload,
   } = useSelector(AppDetailsState);
   const { getCurrentUser, apiConfig, notificationEvent } =
@@ -123,10 +121,7 @@ export default function HomeScreen() {
 
   const newRideSheetRef = useRef<BottomSheetMethods>(null);
   const payChangeSheetRef = useRef<BottomSheetMethods>(null);
-  const pendingOfferSheetOpenRef = useRef(false);
-  const declinedOfferRideIdsRef = useRef<Set<string>>(new Set());
   const [ride, setRide] = useState<Partial<TDriverActiveRide>>({});
-  const [offerDeadlineMs, setOfferDeadlineMs] = useState<number | null>(null);
   const [nearby, setNearby] = useState<
     {
       location: {
@@ -303,165 +298,6 @@ export default function HomeScreen() {
     }
   }, [isFocused]);
 
-  const openOfferSheet = useCallback(() => {
-    if (!isFocused) {
-      pendingOfferSheetOpenRef.current = true;
-      return;
-    }
-    pendingOfferSheetOpenRef.current = false;
-    newRideSheetRef.current?.open();
-  }, [isFocused]);
-
-  useEffect(() => {
-    if (!isFocused || !pendingOfferSheetOpenRef.current) return;
-    pendingOfferSheetOpenRef.current = false;
-    newRideSheetRef.current?.open();
-  }, [isFocused]);
-
-  const clearOfferUI = useCallback(() => {
-    pendingOfferSheetOpenRef.current = false;
-    dispatch(setAppData({ driverPendingRideOffer: false }));
-    newRideSheetRef.current?.close();
-    setOfferDeadlineMs(null);
-    setRide((prev) => {
-      if (prev?.accepted_by_driver) return prev;
-      return {};
-    });
-  }, [dispatch]);
-
-  const handleDeclineOffer = useCallback(
-    (rideId: string) => {
-      const id = String(rideId || "").trim();
-      if (id) declinedOfferRideIdsRef.current.add(id);
-      clearOfferUI();
-    },
-    [clearOfferUI]
-  );
-
-  const handlePusherRideRequest = useCallback((raw: Record<string, unknown>) => {
-    dispatch(setAppData({ driverPendingRideOffer: true }));
-    const rider = raw.rider as { name?: string; rating?: number } | undefined;
-    const pickup = raw.pickup as { address?: string; lat?: number; lng?: number } | undefined;
-    const dropoff = raw.dropoff as { address?: string; lat?: number; lng?: number } | undefined;
-    const rideIdStr = String(raw.ride_id ?? "");
-    if (rideIdStr) declinedOfferRideIdsRef.current.delete(rideIdStr);
-    const expiresSec = Number(raw.offer_expires_in ?? 60);
-    const fare = raw.fare;
-
-    Vibration.vibrate([0, 400, 200, 400]);
-
-    const mapped: Partial<TDriverActiveRide> = {
-      ride_id: rideIdStr,
-      // Pass through offer id so accept can validate staleness on the backend
-      offer_id: String(raw.offer_id ?? ""),
-      status: "requested",
-      accepted_by_driver: false,
-      is_ride_started: false,
-      drop_off_completed: false,
-      cost: String(Math.round(Number(fare) || 0)),
-      passenger: {
-        passenger_id: "",
-        passenger_email: "",
-        passenger_name: rider?.name ?? "Passenger",
-        passenger_image: "",
-        passenger_phone_number: "",
-      },
-      origin: {
-        lat: Number(pickup?.lat) || 0,
-        long: Number(pickup?.lng) || 0,
-        name: pickup?.address ?? "",
-      },
-      destination: {
-        lat: Number(dropoff?.lat) || 0,
-        long: Number(dropoff?.lng) || 0,
-        name: dropoff?.address ?? "",
-      },
-      payment_type: driverOfferPaymentUiKey({
-        payment_method: raw.payment_method,
-        payment_type: raw.payment_type,
-      }),
-    };
-
-    setRide(mapped);
-    setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
-    openOfferSheet();
-  }, [dispatch, openOfferSheet]);
-
-  const lastProcessedRideOfferSeqRef = useRef(0);
-  useEffect(() => {
-    const seq = driverRideOfferPusherSeq ?? 0;
-    const payload = driverRideOfferPusherPayload;
-    if (!payload || !seq || seq === lastProcessedRideOfferSeqRef.current) {
-      return;
-    }
-    lastProcessedRideOfferSeqRef.current = seq;
-    handlePusherRideRequest(payload);
-    dispatch(setAppData({ driverRideOfferPusherPayload: null }));
-  }, [
-    driverRideOfferPusherSeq,
-    driverRideOfferPusherPayload,
-    handlePusherRideRequest,
-    dispatch,
-  ]);
-
-  const applyCurrentOfferPayload = useCallback(
-    (offerRide: Record<string, unknown> | null | undefined) => {
-      if (!offerRide || typeof offerRide !== "object") {
-        clearOfferUI();
-        return;
-      }
-      const rideIdStr = String(offerRide.ride_id ?? "").trim();
-      if (!rideIdStr || declinedOfferRideIdsRef.current.has(rideIdStr)) {
-        clearOfferUI();
-        return;
-      }
-      const expiresSec = Number(offerRide.offer_expires_in ?? 60);
-      dispatch(setAppData({ driverPendingRideOffer: true }));
-      const fareNum = Number(offerRide.fare ?? offerRide.cost ?? 0);
-      setRide({
-        ...(offerRide as Partial<TDriverActiveRide>),
-        ride_id: rideIdStr,
-        offer_id: String(offerRide.offer_id ?? ""),
-        cost: String(Math.round(fareNum)),
-        status: "requested",
-        accepted_by_driver: false,
-        is_ride_started: false,
-        drop_off_completed: false,
-        payment_type: driverOfferPaymentUiKey(
-          offerRide as { payment_type?: unknown; payment_method?: unknown }
-        ),
-      });
-      setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
-      openOfferSheet();
-    },
-    [clearOfferUI, dispatch, openOfferSheet]
-  );
-
-  const refreshCurrentOffer = useCallback(() => {
-    axios
-      .get(DRIVER_CURRENT_RIDE_OFFER, apiConfig)
-      .then(({ data }) => {
-        const offerRide = data?.data?.ride ?? null;
-        applyCurrentOfferPayload(offerRide);
-      })
-      .catch((err) => {
-        if (err?.response?.status === 404) return;
-        const errorMessage = getErrorMessage(err, "An error occurred. Please try again.");
-        safeShowMessage({ type: "danger", message: errorMessage });
-      });
-  }, [apiConfig, applyCurrentOfferPayload]);
-
-  const handleOfferExpired = () => {
-    clearOfferUI();
-    refreshCurrentOffer();
-  };
-
-  useEffect(() => {
-    if (ride?.accepted_by_driver) {
-      setOfferDeadlineMs(null);
-    }
-  }, [ride?.accepted_by_driver]);
-
   const getActiveRide = () => {
     axios
       .get(DRIVER_ACTIVE_RIDE, apiConfig)
@@ -501,7 +337,7 @@ export default function HomeScreen() {
               );
             }, 100);
           }
-          refreshCurrentOffer();
+          requestDriverOfferRefresh(dispatch);
         };
 
         // Backend: driver active-ride should mirror the rider contract — no finished trip should be returned as active.
@@ -531,24 +367,17 @@ export default function HomeScreen() {
           return;
         }
 
-        setOfferDeadlineMs(null);
         setRide(rideData as Partial<TDriverActiveRide>);
         animateToMapDirections(rideData as Partial<TDriverActiveRide>);
         newRideSheetRef.current?.open();
-        const st = String(rideData?.status ?? "").toLowerCase();
-        const pendingOffer =
-          st === "requested" &&
-          !(rideData as Partial<TDriverActiveRide>)?.accepted_by_driver;
-        dispatch(
-          setAppData({ driverPendingRideOffer: Boolean(pendingOffer) })
-        );
+        dispatch(setAppData({ driverPendingRideOffer: false }));
       })
       .catch((err) => {
         console.log(err?.response?.data);
         // Silently handle 404 errors (driver profile not found, etc.)
         if (err?.response?.status === 404) {
           console.log('Resource not found (404) - silently handling');
-          refreshCurrentOffer();
+          requestDriverOfferRefresh(dispatch);
           return;
         }
         // Use centralized error handler to extract safe string message
@@ -564,10 +393,7 @@ export default function HomeScreen() {
     if (!isFocused) return;
     getActiveRide();
     getLocations();
-    if (driverPendingRideOffer || driverRideOfferPusherSeq) {
-      refreshCurrentOffer();
-    }
-  }, [isFocused, driverPendingRideOffer, driverRideOfferPusherSeq]);
+  }, [isFocused]);
 
   const onMapReady = () => {
     console.log('✅ Driver map ready');
@@ -791,9 +617,6 @@ export default function HomeScreen() {
           onOfferResolved={() =>
             dispatch(setAppData({ driverPendingRideOffer: false }))
           }
-          onDeclineOffer={handleDeclineOffer}
-          offerDeadlineMs={offerDeadlineMs}
-          onOfferExpired={handleOfferExpired}
         />
       </Portal>
       <Portal>

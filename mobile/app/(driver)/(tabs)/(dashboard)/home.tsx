@@ -652,7 +652,6 @@ const Home = () => {
           driverRideOfferPusherSeq: Date.now(),
         })
       );
-      router.push("/(driver)/(tabs)/(dashboard)/home-map");
       return;
     }
     if (subType === "fare_received" || subType === "ride_completed") {
@@ -668,13 +667,6 @@ const Home = () => {
       Vibration.vibrate(300);
     }
   }, [notificationEvent, dispatch, fetchDriverDashboard]);
-
-  const { driverRideOfferPusherSeq, driverPendingRideOffer } = useSelector(AppDetailsState);
-
-  useEffect(() => {
-    if (!driverPendingRideOffer) return;
-    router.push("/(driver)/(tabs)/(dashboard)/home-map");
-  }, [driverRideOfferPusherSeq, driverPendingRideOffer]);
 
   return (
     <>

@@ -1,4 +1,4 @@
-import { Stack, useRouter } from "expo-router";
+import { Stack } from "expo-router";
 import React, { useMemo } from "react";
 import { Vibration } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
@@ -13,7 +13,6 @@ import { AuthState } from "@/store/AuthSlice";
 function DriverPrivateChannelSubscription() {
   const { user } = useSelector(AuthState);
   const dispatch = useDispatch();
-  const router = useRouter();
 
   const driverOfferChannel = useMemo(() => {
     const id = user?.profile?.driver_id;
@@ -65,7 +64,6 @@ function DriverPrivateChannelSubscription() {
         })
       );
       Vibration.vibrate([0, 400, 200, 400]);
-      router.push("/(driver)/(tabs)/(dashboard)/home-map");
     },
   });
 
