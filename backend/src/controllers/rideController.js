@@ -178,7 +178,7 @@ export const requestRide = asyncHandler(async (req, res) => {
 
   const totalFare = fareWithSurge.finalFare;
 
-  const normalizedPaymentMethod = await assertPaymentMethodEnabled(paymentMethod || 'wallet');
+  const normalizedPaymentMethod = await assertPaymentMethodEnabled(paymentMethod || 'cash');
   const isWalletPayment = normalizedPaymentMethod === 'wallet';
   let escrowBreakdown = null;
   if (isWalletPayment) {

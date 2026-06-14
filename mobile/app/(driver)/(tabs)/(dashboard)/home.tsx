@@ -646,7 +646,12 @@ const Home = () => {
     if (!notificationEvent?.body) return;
     const subType = notificationEvent?.data?.subType ?? notificationEvent?.data?.sub_type ?? "";
     if (subType === "ride_requested") {
-      dispatch(setAppData({ driverPendingRideOffer: true }));
+      dispatch(
+        setAppData({
+          driverPendingRideOffer: true,
+          driverRideOfferPusherSeq: Date.now(),
+        })
+      );
       router.push("/(driver)/(tabs)/(dashboard)/home-map");
       return;
     }
@@ -667,7 +672,7 @@ const Home = () => {
   const { driverRideOfferPusherSeq, driverPendingRideOffer } = useSelector(AppDetailsState);
 
   useEffect(() => {
-    if (!driverPendingRideOffer || !driverRideOfferPusherSeq) return;
+    if (!driverPendingRideOffer) return;
     router.push("/(driver)/(tabs)/(dashboard)/home-map");
   }, [driverRideOfferPusherSeq, driverPendingRideOffer]);
 
@@ -1093,7 +1098,7 @@ const Home = () => {
         >
           {Object.keys(activeRide).length > 0 ? (
             <TouchableOpacity
-              onPress={() => router.push("/(dashboard)/home-map" as any)}
+              onPress={() => router.push("/(driver)/(tabs)/(dashboard)/home-map")}
               style={tw.style(
                 `flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[8px]`
               )}
@@ -1109,7 +1114,7 @@ const Home = () => {
           ) : (
             <>
               <TouchableOpacity
-                onPress={() => router.push("/(dashboard)/home-map" as any)}
+                onPress={() => router.push("/(driver)/(tabs)/(dashboard)/home-map")}
                 style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[8px]`}
               >
                 <Text

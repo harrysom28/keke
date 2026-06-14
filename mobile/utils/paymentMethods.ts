@@ -138,3 +138,35 @@ export function preferCashWhenWalletLow(
 export function configIdFromUiKey(uiKey: string): PaymentMethodConfigId {
   return ID_BY_UI_KEY[uiKey] || "wallet";
 }
+
+/** Normalize payment from driver offer payloads (API uses payment_method; UI uses payment_type). */
+export function normalizeDriverOfferPaymentMethod(
+  value: unknown
+): PaymentMethodConfigId | "bank_transfer" {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "cash";
+  if (raw === "bank_transfer" || raw === "bank transfer") return "bank_transfer";
+  if (raw === "cash" || raw === "card" || raw === "transfer" || raw === "wallet") {
+    return raw as PaymentMethodConfigId;
+  }
+  return "cash";
+}
+
+export function driverOfferPaymentUiKey(
+  raw?: { payment_type?: unknown; payment_method?: unknown } | null
+): string {
+  const method = normalizeDriverOfferPaymentMethod(
+    raw?.payment_type ?? raw?.payment_method
+  );
+  if (method === "bank_transfer") return "Transfer";
+  return UI_KEY_BY_ID[method as PaymentMethodConfigId] || "Cash";
+}
+
+export function driverOfferPaymentApiKey(
+  raw?: { payment_type?: unknown; payment_method?: unknown } | null
+): string {
+  const method = normalizeDriverOfferPaymentMethod(
+    raw?.payment_type ?? raw?.payment_method
+  );
+  return method === "bank_transfer" ? "bank_transfer" : method;
+}

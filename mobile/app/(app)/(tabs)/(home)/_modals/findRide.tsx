@@ -193,8 +193,9 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     
     try {
       // Transform frontend data structure to match backend validation
-      const finalPaymentType = payment_type.length > 0 ? payment_type : (rideData?.payment_type || 'wallet');
-      
+      const finalPaymentType =
+        payment_type.length > 0 ? payment_type : (rideData?.payment_type || "Cash");
+
       const paymentMethod = mapUiPaymentToApi(finalPaymentType);
       
       // Log ride data for debugging
@@ -504,7 +505,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
             request={(driverId: string, loading: React.Dispatch<React.SetStateAction<boolean>>) => {
               console.log('🚗 Requesting ride with driver:', driverId);
               dispatch(setRideData({ driver_id: driverId }));
-              createRide(loading, '', driverId);
+              createRide(loading, rideData?.payment_type || "Cash", driverId);
             }}
             onChangeLocation={() => setStep(1)}
             onHeightChange={(measuredHeight) => {

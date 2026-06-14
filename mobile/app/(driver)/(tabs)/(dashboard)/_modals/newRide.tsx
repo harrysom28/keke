@@ -48,6 +48,10 @@ import {
   getRideStateFromData,
   getTripContext,
 } from "@/components/ride-in-transit/rideStates";
+import {
+  driverOfferPaymentApiKey,
+  driverOfferPaymentUiKey,
+} from "@/utils/paymentMethods";
 import { RideStatusHeader } from "@/components/ride-in-transit/RideStatusHeader";
 import { TripDetailsCard } from "@/components/ride-in-transit/TripDetailsCard";
 import { UserInfoCard } from "@/components/ride-in-transit/UserInfoCard";
@@ -148,7 +152,12 @@ const NewRide = ({
     }
     return true;
   };
-  let payment_type = data?.payment_type?.toLocaleLowerCase() as string;
+  const paymentUiLabel = driverOfferPaymentUiKey(
+    data as { payment_type?: unknown; payment_method?: unknown }
+  );
+  const payment_type = driverOfferPaymentApiKey(
+    data as { payment_type?: unknown; payment_method?: unknown }
+  );
   const offerExpiredFiredRef = useRef(false);
   const [offerSecondsLeft, setOfferSecondsLeft] = useState<number | null>(null);
 
@@ -656,11 +665,13 @@ const NewRide = ({
         >
           <Text style={{ fontSize: 12, color: "#6B7280", fontFamily: "RobotoRegular" }}>Payment</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <Ionicons name="wallet-outline" size={14} color="#3C8F7C" />
+            <Ionicons
+              name={payment_type === "wallet" ? "wallet-outline" : "cash-outline"}
+              size={14}
+              color="#3C8F7C"
+            />
             <Text style={{ fontSize: 13, fontWeight: "600", color: "#111827", fontFamily: "RobotoMedium" }}>
-              {String(payment_type || "wallet")
-                .toLowerCase()
-                .replace(/^\w/, (c) => c.toUpperCase())}
+              {paymentUiLabel}
             </Text>
           </View>
         </View>

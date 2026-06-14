@@ -70,6 +70,7 @@ import {
 } from "@/utils/driverInitialRoute";
 import { LocationPermissionBanner } from "@/components/LocationPermissionBanner";
 import { resolveLocationPermissionFromBanner } from "@/utils/locationPermission";
+import { driverOfferPaymentUiKey } from "@/utils/paymentMethods";
 
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
@@ -122,6 +123,7 @@ export default function HomeScreen() {
 
   const newRideSheetRef = useRef<BottomSheetMethods>(null);
   const payChangeSheetRef = useRef<BottomSheetMethods>(null);
+  const pendingOfferSheetOpenRef = useRef(false);
   const declinedOfferRideIdsRef = useRef<Set<string>>(new Set());
   const [ride, setRide] = useState<Partial<TDriverActiveRide>>({});
   const [offerDeadlineMs, setOfferDeadlineMs] = useState<number | null>(null);
@@ -301,7 +303,23 @@ export default function HomeScreen() {
     }
   }, [isFocused]);
 
+  const openOfferSheet = useCallback(() => {
+    if (!isFocused) {
+      pendingOfferSheetOpenRef.current = true;
+      return;
+    }
+    pendingOfferSheetOpenRef.current = false;
+    newRideSheetRef.current?.open();
+  }, [isFocused]);
+
+  useEffect(() => {
+    if (!isFocused || !pendingOfferSheetOpenRef.current) return;
+    pendingOfferSheetOpenRef.current = false;
+    newRideSheetRef.current?.open();
+  }, [isFocused]);
+
   const clearOfferUI = useCallback(() => {
+    pendingOfferSheetOpenRef.current = false;
     dispatch(setAppData({ driverPendingRideOffer: false }));
     newRideSheetRef.current?.close();
     setOfferDeadlineMs(null);
@@ -358,16 +376,16 @@ export default function HomeScreen() {
         long: Number(dropoff?.lng) || 0,
         name: dropoff?.address ?? "",
       },
-      payment_type:
-        String(raw.payment_method || "").toLowerCase() === "wallet"
-          ? "Wallet"
-          : "Cash",
+      payment_type: driverOfferPaymentUiKey({
+        payment_method: raw.payment_method,
+        payment_type: raw.payment_type,
+      }),
     };
 
     setRide(mapped);
     setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
-    newRideSheetRef.current?.open();
-  }, [dispatch]);
+    openOfferSheet();
+  }, [dispatch, openOfferSheet]);
 
   const lastProcessedRideOfferSeqRef = useRef(0);
   useEffect(() => {
@@ -409,11 +427,14 @@ export default function HomeScreen() {
         accepted_by_driver: false,
         is_ride_started: false,
         drop_off_completed: false,
+        payment_type: driverOfferPaymentUiKey(
+          offerRide as { payment_type?: unknown; payment_method?: unknown }
+        ),
       });
       setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
-      newRideSheetRef.current?.open();
+      openOfferSheet();
     },
-    [clearOfferUI, dispatch]
+    [clearOfferUI, dispatch, openOfferSheet]
   );
 
   const refreshCurrentOffer = useCallback(() => {
@@ -457,7 +478,6 @@ export default function HomeScreen() {
         const rideRecord = rideData as Record<string, unknown>;
 
         const clearDriverMapActiveRide = () => {
-          dispatch(setAppData({ driverPendingRideOffer: false }));
           newRideSheetRef.current?.close();
           setRide({});
           setMaps({
@@ -528,24 +548,7 @@ export default function HomeScreen() {
         // Silently handle 404 errors (driver profile not found, etc.)
         if (err?.response?.status === 404) {
           console.log('Resource not found (404) - silently handling');
-          dispatch(setAppData({ driverPendingRideOffer: false }));
-          setRide({});
-          setMaps({
-            origin: { latitude: 0, longitude: 0 },
-            destination: { latitude: 0, longitude: 0 },
-          });
-          setRouteKey(prev => prev + 1); // Force MapDirections refresh
-          newRideSheetRef.current?.close();
-          // Center map on user location
-          if (hasValidLocation && mapRef.current) {
-            setTimeout(() => {
-              mapRef.current?.animateToRegion({
-                latitude: location.latitude,
-                longitude: location.longitude,
-                ...mapDelta,
-              }, 500);
-            }, 100);
-          }
+          refreshCurrentOffer();
           return;
         }
         // Use centralized error handler to extract safe string message
@@ -558,14 +561,13 @@ export default function HomeScreen() {
   };
 
   useEffect(() => {
-    if (isFocused) {
-      getActiveRide();
-      getLocations();
-      if (driverPendingRideOffer) {
-        refreshCurrentOffer();
-      }
+    if (!isFocused) return;
+    getActiveRide();
+    getLocations();
+    if (driverPendingRideOffer || driverRideOfferPusherSeq) {
+      refreshCurrentOffer();
     }
-  }, [isFocused]);
+  }, [isFocused, driverPendingRideOffer, driverRideOfferPusherSeq]);
 
   const onMapReady = () => {
     console.log('✅ Driver map ready');

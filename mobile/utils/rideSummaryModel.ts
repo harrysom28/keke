@@ -98,7 +98,7 @@ export function mapRideToSummary(
     undefined;
 
   const paymentMethod = String(
-    r.payment_type ?? r.paymentMethod ?? r.payment_method ?? "wallet"
+    r.payment_type ?? r.paymentMethod ?? r.payment_method ?? "cash"
   ).toLowerCase();
   const paymentStatus = String(
     r.payment_status ?? r.paymentStatus ?? ""
