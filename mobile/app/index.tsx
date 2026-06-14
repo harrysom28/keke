@@ -45,6 +45,14 @@ const Index = () => {
       return;
     }
 
+    if (roleLoaded && !user?.profile?.role) {
+      dispatch(resetSubscription());
+      dispatch(updateUser({ profile: {} }));
+      dispatch(updateToken(null));
+      router.replace("/(auth)/onboard");
+      return;
+    }
+
     const timeout = setTimeout(() => {
       dispatch(resetSubscription());
       dispatch(updateUser({ profile: {} }));

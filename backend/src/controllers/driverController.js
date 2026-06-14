@@ -974,6 +974,16 @@ export const toggleAvailability = asyncHandler(async (req, res) => {
     if (!driver.onlineSessionStartedAt) {
       driver.onlineSessionStartedAt = new Date();
     }
+    const coords = driver.currentLocation?.coordinates;
+    if (
+      Array.isArray(coords) &&
+      coords.length === 2 &&
+      Number.isFinite(Number(coords[0])) &&
+      Number.isFinite(Number(coords[1])) &&
+      !(Number(coords[0]) === 0 && Number(coords[1]) === 0)
+    ) {
+      driver.currentLocation.lastUpdated = new Date();
+    }
   } else {
     if (driver.onlineSessionStartedAt) {
       const started = new Date(driver.onlineSessionStartedAt).getTime();

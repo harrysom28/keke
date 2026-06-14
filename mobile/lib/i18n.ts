@@ -57,9 +57,11 @@ export async function saveLanguage(lang: string): Promise<void> {
   await AsyncStorage.setItem(LANGUAGE_KEY, normalizeLanguageCode(lang));
 }
 
-/** Full JS reload so RTL applies (Arabic). Avoid `expo-updates` here — dev binaries often lack native ExpoUpdates. */
+/** Full JS reload so RTL applies (Arabic). Production preview/APK builds must not call DevSettings.reload (unstable / no-op). */
 export function reloadAppForLayoutDirection(): void {
-  DevSettings.reload();
+  if (__DEV__) {
+    DevSettings.reload();
+  }
 }
 
 export async function applyLanguageAndRtl(code: string): Promise<void> {

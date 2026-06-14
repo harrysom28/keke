@@ -16,7 +16,7 @@ import { AppContext } from "./context";
 import { addIncomingNotification, setLatestNotification, setUnreadCount } from "@/store/AppSlice";
 import { setAuthData } from "@/store/AuthSlice";
 import { getStoredTokens, setStoredTokens } from "@/utils/secureTokenStorage";
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import * as Device from "expo-device";
 import { AppState, LogBox, Platform, type AppStateStatus } from "react-native";
 
@@ -55,13 +55,16 @@ const navigationIntegration = Sentry.reactNavigationIntegration({
   enableTimeToInitialDisplay: !isRunningInExpoGo(),
 });
 
-Sentry.init({
-  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
-  enabled: !__DEV__,
-  tracesSampleRate: 0.1,
-  integrations: [navigationIntegration],
-  enableNativeFramesTracking: !isRunningInExpoGo(),
-});
+const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN?.trim();
+if (sentryDsn) {
+  Sentry.init({
+    dsn: sentryDsn,
+    enabled: !__DEV__,
+    tracesSampleRate: 0.1,
+    integrations: [navigationIntegration],
+    enableNativeFramesTracking: !isRunningInExpoGo(),
+  });
+}
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -81,6 +84,14 @@ if (__DEV__) {
     }
     originalError(...args);
   };
+}
+
+/** Hide native splash only after persisted state is ready (avoids a blank white screen that looks "stuck"). */
+function HideSplashWhenAppMounts() {
+  useEffect(() => {
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+  return null;
 }
 
 const Navigation = () => {
@@ -274,10 +285,11 @@ const NotificationBootstrap = () => {
   );
 };
 
-export default Sentry.wrap(function RootLayout() {
+function RootLayout() {
   const navigationRef = useNavigationContainerRef();
+  const splashForceHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [loaded] = useFonts({
+  const [loaded, fontError] = useFonts({
     RobotoThin: require("../assets/fonts/Roboto-Thin.ttf"),
     RobotoLight: require("../assets/fonts/Roboto-Light.ttf"),
     RobotoRegular: require("../assets/fonts/Roboto-Regular.ttf"),
@@ -285,6 +297,8 @@ export default Sentry.wrap(function RootLayout() {
     RobotoBold: require("../assets/fonts/Roboto-Bold.ttf"),
     RobotoBlack: require("../assets/fonts/Roboto-Black.ttf"),
   });
+
+  const fontsReady = loaded || !!fontError;
 
   useEffect(() => {
     if (navigationRef?.current) {
@@ -296,11 +310,17 @@ export default Sentry.wrap(function RootLayout() {
     bootstrapI18n().catch(() => {});
   }, []);
 
+  // Last-resort: never leave the native splash up if fonts/persist stall on device.
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
+    splashForceHideRef.current = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    }, 6000);
+    return () => {
+      if (splashForceHideRef.current) {
+        clearTimeout(splashForceHideRef.current);
+      }
+    };
+  }, []);
 
   // Apply custom toast colors to match app theme
   useEffect(() => {
@@ -343,7 +363,7 @@ export default Sentry.wrap(function RootLayout() {
     }
   }, []);
 
-  if (!loaded) {
+  if (!fontsReady) {
     return null;
   }
 
@@ -355,7 +375,15 @@ export default Sentry.wrap(function RootLayout() {
             <PersistGate
               persistor={persistor}
               onBeforeLift={async () => {
-                const stored = await getStoredTokens();
+                const stored = await Promise.race([
+                  getStoredTokens(),
+                  new Promise<Awaited<ReturnType<typeof getStoredTokens>>>((resolve) =>
+                    setTimeout(
+                      () => resolve({ token: null, refreshToken: null }),
+                      3000
+                    )
+                  ),
+                ]);
                 const state = AppStore.getState();
                 const auth = state?.Auth;
                 const fromState =
@@ -377,6 +405,7 @@ export default Sentry.wrap(function RootLayout() {
                 }
               }}
             >
+              <HideSplashWhenAppMounts />
               <GlobalContext>
                 <BottomSheetModalProvider>
                   <PortalProvider>
@@ -406,4 +435,6 @@ export default Sentry.wrap(function RootLayout() {
       />
     </>
   );
-});
+}
+
+export default sentryDsn ? Sentry.wrap(RootLayout) : RootLayout;

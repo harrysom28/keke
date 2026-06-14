@@ -14,7 +14,7 @@ export type EnabledPaymentMethodOption = {
 };
 
 export const DEFAULT_PUBLIC_PAYMENT_METHODS: PublicPaymentMethodsConfig = {
-  enabled: ["wallet"],
+  enabled: ["wallet", "cash"],
   default: "wallet",
   labels: {
     wallet: "Wallet",
@@ -107,6 +107,32 @@ export function isCashPaymentMethod(value: unknown): boolean {
 
 export function isWalletPaymentMethod(value: unknown): boolean {
   return normalizeRidePaymentMethod(value) === "wallet";
+}
+
+/** True when admin (or fallback config) allows cash/card/transfer — not wallet-only. */
+export function hasNonWalletPaymentOption(
+  config?: Partial<PublicPaymentMethodsConfig> | null
+): boolean {
+  return configToEnabledMethods(config).some((m) => m.id !== "wallet");
+}
+
+/** Prefer cash when wallet cannot cover fare; otherwise keep current selection. */
+export function preferCashWhenWalletLow(
+  config: Partial<PublicPaymentMethodsConfig> | null | undefined,
+  currentUiKey: string,
+  walletBalance: number | null | undefined,
+  fareTotal: number
+): string {
+  if (
+    walletBalance == null ||
+    !Number.isFinite(fareTotal) ||
+    fareTotal <= 0 ||
+    walletBalance >= fareTotal
+  ) {
+    return currentUiKey;
+  }
+  const cash = configToEnabledMethods(config).find((m) => m.id === "cash");
+  return cash?.uiKey ?? currentUiKey;
 }
 
 export function configIdFromUiKey(uiKey: string): PaymentMethodConfigId {

@@ -282,6 +282,8 @@ driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, 
       documentsVerified: true,
       verificationStatus: 'approved',
       'currentLocation.lastUpdated': { $gte: locationFreshSince },
+      'currentLocation.coordinates.0': { $ne: 0 },
+      'currentLocation.coordinates.1': { $ne: 0 },
       currentLocation: {
         $near: {
           $geometry: {

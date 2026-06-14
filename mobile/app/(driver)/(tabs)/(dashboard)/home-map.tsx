@@ -169,7 +169,11 @@ export default function HomeScreen() {
   useDriverOnlineHeartbeat(
     sessionOnline,
     isFocused,
-    hasValidLocation && location
+    location != null &&
+      location.latitude !== 0 &&
+      location.longitude !== 0 &&
+      !isNaN(location.latitude) &&
+      !isNaN(location.longitude)
       ? {
           latitude: location.latitude,
           longitude: location.longitude,
@@ -697,17 +701,18 @@ export default function HomeScreen() {
   );
 
   useEffect(() => {
-    if (isFocused) {
-      const loc = {
-        name: address?.formattedAddress as string,
-        lat: location?.latitude,
-        long: location?.longitude,
-      };
-      if (address?.formattedAddress) {
-        debouncedUpdateLocation(loc);
-      }
+    if (!isFocused) return;
+    const lat = location?.latitude;
+    const lng = location?.longitude;
+    if (lat == null || lng == null || lat === 0 || lng === 0 || isNaN(lat) || isNaN(lng)) {
+      return;
     }
-  }, [location?.longitude, address?.formattedAddress, isFocused, debouncedUpdateLocation]);
+    debouncedUpdateLocation({
+      name: address?.formattedAddress ?? "",
+      lat,
+      long: lng,
+    });
+  }, [location?.latitude, location?.longitude, address?.formattedAddress, isFocused, debouncedUpdateLocation]);
 
   usePusherChannel({
     channel: `private-passenger_cancelled`,

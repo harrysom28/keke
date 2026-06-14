@@ -24,6 +24,16 @@ import { getCachedWallet, setCachedWallet } from "@/utils/walletCache";
 import { router } from "expo-router";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import { AuthState } from "@/store/AuthSlice";
+import PaymentMethodSelector from "@/components/PaymentMethodSelector";
+import { usePublicConfig } from "@/hooks/usePublicConfig";
+import {
+  configToEnabledMethods,
+  defaultUiPaymentKey,
+  hasNonWalletPaymentOption,
+  isWalletPaymentMethod,
+  mapUiPaymentToApi,
+  preferCashWhenWalletLow,
+} from "@/utils/paymentMethods";
 
 interface Props {
   action: () => void;
@@ -63,25 +73,15 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
   const [fareLoading, setFareLoading] = useState(false);
   const [fareError, setFareError] = useState<string | null>(null);
   const [walletAvailableBalance, setWalletAvailableBalance] = useState<number | null>(null);
-  const [nonWalletPaymentAvailable, setNonWalletPaymentAvailable] = useState(false);
-
-  useEffect(() => {
-    let mounted = true;
-    apiClient
-      .get("config/public", { timeout: 10000 })
-      .then(({ data }) => {
-        if (!mounted) return;
-        const enabled: string[] = data?.data?.paymentMethods?.enabled || ["wallet"];
-        setNonWalletPaymentAvailable(enabled.some((method) => method !== "wallet"));
-      })
-      .catch(() => {
-        if (!mounted) return;
-        setNonWalletPaymentAvailable(false);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  const { config: publicConfig } = usePublicConfig();
+  const enabledPaymentMethods = useMemo(
+    () => configToEnabledMethods(publicConfig.paymentMethods),
+    [publicConfig.paymentMethods]
+  );
+  const nonWalletPaymentAvailable = hasNonWalletPaymentOption(publicConfig.paymentMethods);
+  const [selectedPayment, setSelectedPayment] = useState(() =>
+    defaultUiPaymentKey(publicConfig.paymentMethods)
+  );
 
   useEffect(() => {
     const initialDropoffName = initialDropoff?.name?.trim();
@@ -485,6 +485,18 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
     walletAvailableBalance != null && fareTotal > 0
       ? Math.max(0, Math.ceil(fareTotal - walletAvailableBalance))
       : 0;
+  const selectedIsWallet = isWalletPaymentMethod(mapUiPaymentToApi(selectedPayment));
+
+  useEffect(() => {
+    setSelectedPayment((prev) =>
+      preferCashWhenWalletLow(
+        publicConfig.paymentMethods,
+        prev,
+        walletAvailableBalance,
+        fareTotal
+      )
+    );
+  }, [publicConfig.paymentMethods, walletAvailableBalance, fareTotal]);
 
   useEffect(() => {
     if (!screenLive) return;
@@ -841,15 +853,38 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
                     <Text style={tw.style(`text-[14px] text-[#242E42]`, { fontFamily: "RobotoBold" })}>
                       {farePreview.display?.Total || ""}
                     </Text>
-                    {walletOk ? (
+                    {selectedIsWallet && walletOk ? (
+                      <Entypo name="check" size={16} color={tw.color("base-green")} />
+                    ) : !selectedIsWallet && fareTotal > 0 ? (
                       <Entypo name="check" size={16} color={tw.color("base-green")} />
                     ) : null}
                   </View>
                 </View>
-                {!walletOk && walletAvailableBalance != null && fareTotal > 0 ? (
+                {selectedIsWallet && walletInsufficientForRide ? (
                   <Text style={tw.style(`text-[12px] text-red-600`, { fontFamily: "RobotoMedium" })}>
-                    Insufficient balance — Top up ₦{shortfall.toLocaleString()}
+                    {nonWalletPaymentAvailable
+                      ? `Wallet balance low — top up ₦${shortfall.toLocaleString()} or choose Cash below`
+                      : `Insufficient balance — Top up ₦${shortfall.toLocaleString()}`}
                   </Text>
+                ) : null}
+                {fareTotal > 0 && enabledPaymentMethods.length > 0 ? (
+                  <View style={tw`mt-3`}>
+                    <Text
+                      style={tw.style(`text-[12px] text-[#242E42] mb-2`, {
+                        fontFamily: "RobotoMedium",
+                      })}
+                    >
+                      Payment method
+                    </Text>
+                    <PaymentMethodSelector
+                      selected={selectedPayment}
+                      onSelect={setSelectedPayment}
+                      enabledMethods={enabledPaymentMethods}
+                      walletBalance={walletAvailableBalance}
+                      fareTotal={fareTotal}
+                      variant="compact"
+                    />
+                  </View>
                 ) : null}
               </View>
             </View>
@@ -967,6 +1002,11 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
             });
           } else if (walletBlocksBooking) {
             router.push("/(app)/(tabs)/(profile)/wallet");
+          } else if (selectedIsWallet && walletInsufficientForRide) {
+            showMessage({
+              type: "warning",
+              message: "Insufficient wallet balance. Choose Cash or top up your wallet.",
+            });
           } else {
             // Safety: block proceeding when Redux origin coords are missing/invalid.
             // This prevents falling into step 2/3 with `origin.lat/long` as empty strings.
@@ -1012,6 +1052,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
 
             const hasResolvedDropoff = await ensureDestinationCoordinates();
             if (!hasResolvedDropoff) return;
+            dispatch(setRideData({ payment_type: selectedPayment } as any));
             action();
           }
         }}

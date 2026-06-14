@@ -358,13 +358,10 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
 
       const respBody = err?.response?.data;
       if (respBody?.code === 'INSUFFICIENT_BALANCE') {
-        const msg =
-          typeof respBody.message === 'string' && respBody.message.trim()
-            ? respBody.message
-            : 'Top up your wallet to book this ride.';
         showMessage({
           type: 'warning',
-          message: msg,
+          message:
+            'Insufficient wallet balance. Switch to Cash in payment options or top up your wallet.',
           duration: 5500,
         });
         return;

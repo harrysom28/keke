@@ -23,6 +23,9 @@ import { usePublicConfig } from "@/hooks/usePublicConfig";
 import {
   configToEnabledMethods,
   defaultUiPaymentKey,
+  isWalletPaymentMethod,
+  mapUiPaymentToApi,
+  preferCashWhenWalletLow,
 } from "@/utils/paymentMethods";
 import { getCachedWallet, setCachedWallet } from "@/utils/walletCache";
 
@@ -99,6 +102,31 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
     () => configToEnabledMethods(publicConfig.paymentMethods),
     [publicConfig.paymentMethods]
   );
+  const selectedFareTotal = useMemo(() => {
+    if (!selectedVehicle) return 0;
+    if (typeof selectedVehicle.fareDetail?.riderTotal === "number") {
+      return selectedVehicle.fareDetail.riderTotal;
+    }
+    const cost = selectedVehicle.cost;
+    return typeof cost === "number" ? cost : Number(cost || 0);
+  }, [selectedVehicle]);
+  const walletInsufficientForSelectedFare =
+    walletAvailableBalance != null &&
+    selectedFareTotal > 0 &&
+    walletAvailableBalance < selectedFareTotal;
+  const selectedIsWallet = isWalletPaymentMethod(mapUiPaymentToApi(selectedPayment));
+
+  useEffect(() => {
+    setSelectedPayment((prev) =>
+      preferCashWhenWalletLow(
+        publicConfig.paymentMethods,
+        prev,
+        walletAvailableBalance,
+        selectedFareTotal
+      )
+    );
+  }, [publicConfig.paymentMethods, walletAvailableBalance, selectedFareTotal]);
+
   const isFocused = useIsFocused();
   const contentRef = useRef<View>(null);
   
@@ -790,8 +818,20 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
       {selectedVehicle && (
         <View style={[styles.requestButtonWrapper, requestButtonPaddingStyle]}>
           <TouchableOpacity
-            style={styles.requestButton}
-            onPress={() => action(selectedVehicle, selectedPayment, promoCode || undefined)}
+            style={[
+              styles.requestButton,
+              selectedIsWallet && walletInsufficientForSelectedFare && styles.requestButtonDisabled,
+            ]}
+            onPress={() => {
+              if (selectedIsWallet && walletInsufficientForSelectedFare) {
+                showMessage({
+                  type: "warning",
+                  message: "Insufficient wallet balance. Switch to Cash or top up your wallet.",
+                });
+                return;
+              }
+              action(selectedVehicle, selectedPayment, promoCode || undefined);
+            }}
             activeOpacity={0.8}
           >
             <Text style={styles.requestButtonText}>Request Ride</Text>
@@ -1153,6 +1193,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 2,
+  },
+  requestButtonDisabled: {
+    opacity: 0.55,
   },
   requestButtonText: {
     color: 'white',

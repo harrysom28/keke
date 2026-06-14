@@ -59,6 +59,7 @@ import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
 import { ensureForegroundLocationAccess } from "@/utils/locationPermission";
+import { syncDriverLocationToServer } from "@/utils/driverLocationSync";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useDriverOnlineHeartbeat } from "@/hooks/useDriverOnlineHeartbeat";
 
@@ -131,7 +132,7 @@ const Home = () => {
       : "Offline";
   const isVerified = activity?.verification_status === "approved" && activity?.documents_verified;
 
-  const { location, address } = useCurrentLocation();
+  const { location, address } = useCurrentLocation({ isFocused, purpose: "driver" });
   useDriverOnlineHeartbeat(
     sessionOnline,
     isFocused,
@@ -222,13 +223,20 @@ const Home = () => {
       setAvailabilityLoading(true);
       apiClient
         .patch("driver/availability", { isAvailable: nextAvailable })
-        .then(({ data }) => {
+        .then(async ({ data }) => {
           const driver = data?.data?.driver;
           setActivity((prev) => ({
             ...prev,
             is_online: driver?.is_online ?? prev?.is_online,
             is_available: driver?.is_available ?? prev?.is_available,
           }));
+          if (nextAvailable && location?.latitude != null && location?.longitude != null) {
+            await syncDriverLocationToServer({
+              latitude: location.latitude,
+              longitude: location.longitude,
+              address: address?.formattedAddress,
+            });
+          }
           safeShowMessage({
             type: "success",
             message: driver?.is_available ? "You're now online" : "You're now offline",
@@ -246,7 +254,7 @@ const Home = () => {
         })
         .finally(() => setAvailabilityLoading(false));
     },
-    [fetchDriverDashboard]
+    [fetchDriverDashboard, location?.latitude, location?.longitude, address?.formattedAddress]
   );
 
   const toggleAvailability = () => {

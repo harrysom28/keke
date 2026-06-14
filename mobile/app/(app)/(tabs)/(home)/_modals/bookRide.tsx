@@ -38,7 +38,9 @@ import { usePublicConfig } from "@/hooks/usePublicConfig";
 import {
   configToEnabledMethods,
   defaultUiPaymentKey,
+  isWalletPaymentMethod,
   mapUiPaymentToApi,
+  preferCashWhenWalletLow,
 } from "@/utils/paymentMethods";
 import { getCachedWallet, setCachedWallet } from "@/utils/walletCache";
 
@@ -559,6 +561,19 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   );
 
   useEffect(() => {
+    if (!fareSummary?.totalFare) return;
+    setState((prev) => ({
+      ...prev,
+      payment_type: preferCashWhenWalletLow(
+        publicConfig.paymentMethods,
+        prev.payment_type,
+        walletAvailableBalance,
+        fareSummary.totalFare
+      ),
+    }));
+  }, [publicConfig.paymentMethods, walletAvailableBalance, fareSummary?.totalFare]);
+
+  useEffect(() => {
     if (!canShowFinanceSummary) {
       setWalletAvailableBalance(null);
       return;
@@ -606,6 +621,20 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
       safeShowMessage({
         type: "danger",
         message: "Please select a payment method",
+      });
+      return;
+    }
+
+    const paymentMethod = mapUiPaymentToApi(state.payment_type);
+    if (
+      isWalletPaymentMethod(paymentMethod) &&
+      walletAvailableBalance != null &&
+      fareSummary?.totalFare &&
+      walletAvailableBalance < fareSummary.totalFare
+    ) {
+      safeShowMessage({
+        type: "warning",
+        message: "Insufficient wallet balance. Choose Cash or top up your wallet.",
       });
       return;
     }
@@ -688,7 +717,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
       }
 
       // Map payment type to backend format
-      const paymentMethod = mapUiPaymentToApi(state.payment_type);
+      const paymentMethodForRequest = mapUiPaymentToApi(state.payment_type);
 
       // Prepare request data (scheduledFor for payload shape; backend accepts scheduledAt)
       const requestData = {
@@ -705,7 +734,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
           address: dropoffAddress,
         },
         vehicleTypeId: state.vehicle_type_id,
-        paymentMethod: paymentMethod,
+        paymentMethod: paymentMethodForRequest,
         scheduledFor: scheduledDateTime.toISOString(),
         scheduledAt: scheduledDateTime.toISOString(),
       };

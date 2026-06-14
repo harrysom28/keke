@@ -1,5 +1,6 @@
 import {
   KeyboardTypeOptions,
+  Platform,
   Text,
   TextInput,
   TouchableOpacity,
@@ -13,6 +14,14 @@ import { verticalScale } from "@/constants/Metrics";
 import { debounce } from "@/utils/debounce";
 
 export type ValidateFn = (value: string) => string | undefined;
+
+/** Custom fonts often hide secureTextEntry bullets on Android — use system font when masked. */
+function inputFontFamily(secureMasked: boolean): string {
+  if (Platform.OS === "android" && secureMasked) {
+    return "sans-serif-medium";
+  }
+  return "RobotoMedium";
+}
 
 interface Props {
   type?: KeyboardTypeOptions;
@@ -92,6 +101,7 @@ const FormInput = ({
 
   const hasError = !!error;
   const borderColor = hasError ? "#F9111F" : "#b8b8b8";
+  const isMaskedPassword = secureTextEntry && show;
 
   return (
     <View style={tw`relative`}>
@@ -101,7 +111,8 @@ const FormInput = ({
           secureTextEntry && `pr-14`,
           {
             height: verticalScale(height),
-            fontFamily: "RobotoMedium",
+            fontFamily: inputFontFamily(isMaskedPassword),
+            color: "#262628",
             verticalAlign: multiline ? "top" : "middle",
             borderColor,
             borderWidth: 1,

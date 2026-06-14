@@ -51,6 +51,7 @@ function InputItem({
   value = "",
 }: Readonly<IProps>) {
   const [show, setShow] = useState(secure);
+  const isMaskedPassword = secure && show;
   return (
     <View style={tw`relative`}>
       <TextInput
@@ -58,7 +59,11 @@ function InputItem({
         style={tw.style(
           `text-[16px] text-black px-5 h-[45px] border border-[#B8B8B8] rounded-[8px]`,
           {
-            fontFamily: "RobotoMedium",
+            fontFamily:
+              Platform.OS === "android" && isMaskedPassword
+                ? "sans-serif-medium"
+                : "RobotoMedium",
+            color: "#262628",
           }
         )}
         value={value}
