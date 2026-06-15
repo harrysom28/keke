@@ -73,6 +73,23 @@ import { requestDriverOfferRefresh } from "@/utils/driverRideOffer";
 
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
+/**
+ * Statuses where the driver is actively handling a ride on the map
+ * (accepted → in progress). Pending OFFERS ("requested"/"searching"/"scheduled")
+ * are intentionally excluded: the layout-level DriverRideOfferHost is the single
+ * source of truth for incoming offers, so home-map must NOT open its own sheet
+ * for them (prevents double-open / flicker / race when an offer arrives on the map).
+ */
+const DRIVER_MAP_ACTIVE_RIDE_STATUSES = new Set([
+  "accepted",
+  "driver_en_route",
+  "arrived",
+  "started",
+  "in-progress",
+  "in_progress",
+  "issue_flagged",
+]);
+
 interface ILocation {
   name: string;
   lat: string;
@@ -364,6 +381,25 @@ export default function HomeScreen() {
             status: rideStatus,
           });
           clearDriverMapActiveRide();
+          return;
+        }
+
+        const acceptedActiveRide =
+          rideRecord.accepted_by_driver === true ||
+          rideRecord.acceptedByDriver === true ||
+          DRIVER_MAP_ACTIVE_RIDE_STATUSES.has(rideStatus);
+
+        if (!acceptedActiveRide) {
+          // This is a pending ride OFFER (not yet accepted by this driver).
+          // Offers are owned exclusively by the layout-level DriverRideOfferHost,
+          // so home-map must not open its own sheet here. Keep the map's sheet
+          // closed and hand off to the single host (only nudge it when it isn't
+          // already showing an offer, to avoid a redundant re-open/flicker).
+          newRideSheetRef.current?.close();
+          setRide({});
+          if (!driverPendingRideOffer) {
+            requestDriverOfferRefresh(dispatch);
+          }
           return;
         }
 

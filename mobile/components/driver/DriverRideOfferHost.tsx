@@ -50,12 +50,27 @@ export default function DriverRideOfferHost() {
   const scheduleOpenSheet = useCallback(() => {
     if (openSheetTimerRef.current) {
       clearTimeout(openSheetTimerRef.current);
-    }
-    // BottomSheet ref is not ready on the same tick NewRide mounts — defer open.
-    openSheetTimerRef.current = setTimeout(() => {
       openSheetTimerRef.current = null;
-      sheetRef.current?.open();
-    }, 120);
+    }
+    // The sheet is portal-mounted at the layout root, so its imperative ref is
+    // not guaranteed to be attached on the tick the offer state commits —
+    // especially off the map where nothing else is forcing a re-render/layout.
+    // Retry until the ref is ready instead of firing a single one-shot that can
+    // be silently dropped (which made offers appear only on the map screen).
+    let attempts = 0;
+    const tryOpen = () => {
+      if (sheetRef.current) {
+        sheetRef.current.open();
+        openSheetTimerRef.current = null;
+        return;
+      }
+      if (attempts++ >= 25) {
+        openSheetTimerRef.current = null;
+        return;
+      }
+      openSheetTimerRef.current = setTimeout(tryOpen, 80);
+    };
+    openSheetTimerRef.current = setTimeout(tryOpen, 60);
   }, []);
 
   const clearOfferUI = useCallback(() => {
