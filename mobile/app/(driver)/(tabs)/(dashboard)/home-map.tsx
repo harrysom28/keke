@@ -191,7 +191,7 @@ export default function HomeScreen() {
       ? {
           latitude: location.latitude,
           longitude: location.longitude,
-          address: address?.formattedAddress,
+          address: address?.formattedAddress ?? undefined,
         }
       : null
   );
@@ -675,7 +675,7 @@ export default function HomeScreen() {
             showsBuildings={true}
             showsTraffic={false}
             showsIndoors={false}
-            showsPointsOfInterest={true}
+            showsPointsOfInterests={true}
             toolbarEnabled={false}
             pitchEnabled={false}
             rotateEnabled={false}
@@ -697,8 +697,11 @@ export default function HomeScreen() {
           >
           {Array.isArray(nearby) && nearby.length > 0 && nearby.map((item, idx) => {
             // Handle different location formats from backend
-            const lat = item?.location?.lat || item?.location?.latitude;
-            const long = item?.location?.long || item?.location?.longitude;
+            const loc = item?.location as
+              | { lat?: number; long?: number; latitude?: number; longitude?: number }
+              | undefined;
+            const lat = loc?.lat ?? loc?.latitude;
+            const long = loc?.long ?? loc?.longitude;
             
             // Skip if coordinates are invalid
             if (!lat || !long) {

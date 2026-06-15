@@ -2,6 +2,7 @@ import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
 import Constants from "expo-constants";
+import messaging from "@react-native-firebase/messaging";
 
 import { setupNotificationChannels } from "@/utils/notifications";
 
@@ -45,21 +46,41 @@ export async function registerForPushNotifications() {
   }
 
   let token = null;
+
+  // Prefer the native FCM registration token from @react-native-firebase. It is
+  // package-specific (correct for the current package name) and delivered
+  // directly by the backend's Firebase Admin SDK — no Expo push service or EAS
+  // push credentials required. This is the most reliable path after a package
+  // rename, where Expo-proxied tokens silently break.
   try {
-    const expoToken = await Notifications.getExpoPushTokenAsync({
-      projectId: EXPO_PROJECT_ID,
-    });
-    token = expoToken?.data ?? null;
+    if (Platform.OS === "ios") {
+      // iOS must register for remote messages before a token is available.
+      await messaging().registerDeviceForRemoteMessages?.();
+    }
+    token = (await messaging().getToken()) || null;
   } catch (err) {
-    console.warn("Expo push token failed, trying native device token:", err?.message);
+    console.warn("Native FCM token failed, falling back to Expo:", err?.message);
   }
 
+  // Fallback: Expo push token (delivered via the Expo Push API).
+  if (!token) {
+    try {
+      const expoToken = await Notifications.getExpoPushTokenAsync({
+        projectId: EXPO_PROJECT_ID,
+      });
+      token = expoToken?.data ?? null;
+    } catch (err) {
+      console.warn("Expo push token failed:", err?.message);
+    }
+  }
+
+  // Last resort: expo-notifications native device token.
   if (!token) {
     try {
       const native = await Notifications.getDevicePushTokenAsync();
       token = native?.data ?? null;
     } catch (err) {
-      console.warn("Native push token failed:", err?.message);
+      console.warn("Native device push token failed:", err?.message);
     }
   }
 
