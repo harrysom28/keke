@@ -1,10 +1,21 @@
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
+import Constants from "expo-constants";
 
 import { setupNotificationChannels } from "@/utils/notifications";
 
-const EXPO_PROJECT_ID = "30082c2b-41a8-455d-86d3-984b6d259cd6";
+/**
+ * EAS project the Expo push token is minted against. This MUST match the project
+ * baked into the native build (app.json `extra.eas.projectId`); a token minted
+ * against the wrong project is silently undeliverable. Resolve it from the live
+ * app config so it can never drift out of sync with the build, falling back to
+ * the current project id for safety.
+ */
+const EXPO_PROJECT_ID =
+  Constants?.expoConfig?.extra?.eas?.projectId ??
+  Constants?.easConfig?.projectId ??
+  "94e02c15-7ea1-43dd-9eaa-5f03e9b9a871";
 
 export async function registerForPushNotifications() {
   if (!Device.isDevice) {
