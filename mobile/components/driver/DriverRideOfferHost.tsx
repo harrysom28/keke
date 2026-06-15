@@ -26,7 +26,7 @@ import {
 } from "@/utils/driverRideOffer";
 
 /**
- * Global driver ride-offer sheet — mounted at tab layout level so incoming
+ * Global driver ride-offer sheet — mounted at driver layout level so incoming
  * offers appear on any tab (home dashboard, bookings, etc.), not only home-map.
  */
 export default function DriverRideOfferHost() {
@@ -36,6 +36,7 @@ export default function DriverRideOfferHost() {
   const sheetRef = useRef<BottomSheetMethods>(null);
   const declinedOfferRideIdsRef = useRef<Set<string>>(new Set());
   const lastProcessedSeqRef = useRef(0);
+  const openSheetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
     driverPendingRideOffer,
@@ -46,13 +47,22 @@ export default function DriverRideOfferHost() {
   const [ride, setRide] = useState<Partial<TDriverActiveRide>>({});
   const [offerDeadlineMs, setOfferDeadlineMs] = useState<number | null>(null);
 
-  const openSheet = useCallback(() => {
-    requestAnimationFrame(() => {
+  const scheduleOpenSheet = useCallback(() => {
+    if (openSheetTimerRef.current) {
+      clearTimeout(openSheetTimerRef.current);
+    }
+    // BottomSheet ref is not ready on the same tick NewRide mounts — defer open.
+    openSheetTimerRef.current = setTimeout(() => {
+      openSheetTimerRef.current = null;
       sheetRef.current?.open();
-    });
+    }, 120);
   }, []);
 
   const clearOfferUI = useCallback(() => {
+    if (openSheetTimerRef.current) {
+      clearTimeout(openSheetTimerRef.current);
+      openSheetTimerRef.current = null;
+    }
     dispatch(setAppData({ driverPendingRideOffer: false }));
     sheetRef.current?.close();
     setOfferDeadlineMs(null);
@@ -71,9 +81,8 @@ export default function DriverRideOfferHost() {
       dispatch(setAppData({ driverPendingRideOffer: true }));
       setRide(offerRide);
       setOfferDeadlineMs(Date.now() + Math.max(1, expiresSec) * 1000);
-      openSheet();
     },
-    [clearOfferUI, dispatch, openSheet]
+    [clearOfferUI, dispatch]
   );
 
   const refreshCurrentOffer = useCallback(() => {
@@ -82,7 +91,9 @@ export default function DriverRideOfferHost() {
       .then(({ data }) => {
         const offerRide = data?.data?.ride ?? null;
         if (!offerRide || typeof offerRide !== "object") {
-          clearOfferUI();
+          if (!isPendingDriverOffer(ride)) {
+            clearOfferUI();
+          }
           return;
         }
         showOffer(mapApiOfferToRide(offerRide as Record<string, unknown>));
@@ -95,7 +106,7 @@ export default function DriverRideOfferHost() {
         );
         safeShowMessage({ type: "danger", message: errorMessage });
       });
-  }, [apiConfig, clearOfferUI, showOffer]);
+  }, [apiConfig, clearOfferUI, ride, showOffer]);
 
   const handleDeclineOffer = useCallback(
     (rideId: string) => {
@@ -140,9 +151,38 @@ export default function DriverRideOfferHost() {
     showOffer,
   ]);
 
-  if (!isPendingDriverOffer(ride) && !driverPendingRideOffer) {
-    return null;
-  }
+  // Open sheet only after ride state is committed and NewRide has mounted.
+  useEffect(() => {
+    const rideId = String(ride?.ride_id ?? "").trim();
+    if (!rideId || !offerDeadlineMs) return;
+    if (declinedOfferRideIdsRef.current.has(rideId)) return;
+    scheduleOpenSheet();
+    return () => {
+      if (openSheetTimerRef.current) {
+        clearTimeout(openSheetTimerRef.current);
+        openSheetTimerRef.current = null;
+      }
+    };
+  }, [ride?.ride_id, offerDeadlineMs, scheduleOpenSheet]);
+
+  // Notification-only path: pending flag without payload — poll until offer loads.
+  useEffect(() => {
+    if (!driverPendingRideOffer) return;
+    if (String(ride?.ride_id ?? "").trim()) return;
+
+    refreshCurrentOffer();
+    const interval = setInterval(refreshCurrentOffer, 4000);
+    return () => clearInterval(interval);
+  }, [driverPendingRideOffer, ride?.ride_id, refreshCurrentOffer]);
+
+  useEffect(
+    () => () => {
+      if (openSheetTimerRef.current) {
+        clearTimeout(openSheetTimerRef.current);
+      }
+    },
+    []
+  );
 
   return (
     <Portal>

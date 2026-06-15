@@ -1,7 +1,6 @@
 import BottomTabBar from "./_customTab";
 import React from "react";
 import { Tabs } from "expo-router";
-import DriverRideOfferHost from "@/components/driver/DriverRideOfferHost";
 
 export const unstable_settings = {
   initialRouteName: "(dashboard)/home",
@@ -9,9 +8,7 @@ export const unstable_settings = {
 
 export default function TabLayout() {
   return (
-    <>
-      <DriverRideOfferHost />
-      <Tabs
+    <Tabs
       tabBar={(props) => <BottomTabBar {...props} />}
       initialRouteName="(dashboard)/home"
       screenOptions={{
@@ -29,6 +26,5 @@ export default function TabLayout() {
       <Tabs.Screen name="(profile)/wallet" />
       <Tabs.Screen name="bookings" />
     </Tabs>
-    </>
   );
 }

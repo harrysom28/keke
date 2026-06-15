@@ -4,6 +4,7 @@ import { Vibration } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 
 import usePusherChannel from "@/hooks/usePusherChannel";
+import DriverRideOfferHost from "@/components/driver/DriverRideOfferHost";
 import { setAppData } from "@/store/AppSlice";
 import { AuthState } from "@/store/AuthSlice";
 /**
@@ -74,6 +75,7 @@ export default function AppLayout() {
   return (
     <>
       <DriverPrivateChannelSubscription />
+      <DriverRideOfferHost />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="dailyActivities" />
