@@ -46,6 +46,7 @@ export async function registerForPushNotifications() {
   }
 
   let token = null;
+  let tokenSource = null;
 
   // Prefer the native FCM registration token from @react-native-firebase. It is
   // package-specific (correct for the current package name) and delivered
@@ -58,6 +59,7 @@ export async function registerForPushNotifications() {
       await messaging().registerDeviceForRemoteMessages?.();
     }
     token = (await messaging().getToken()) || null;
+    if (token) tokenSource = "native-fcm";
   } catch (err) {
     console.warn("Native FCM token failed, falling back to Expo:", err?.message);
   }
@@ -69,6 +71,7 @@ export async function registerForPushNotifications() {
         projectId: EXPO_PROJECT_ID,
       });
       token = expoToken?.data ?? null;
+      if (token) tokenSource = "expo-push";
     } catch (err) {
       console.warn("Expo push token failed:", err?.message);
     }
@@ -79,6 +82,7 @@ export async function registerForPushNotifications() {
     try {
       const native = await Notifications.getDevicePushTokenAsync();
       token = native?.data ?? null;
+      if (token) tokenSource = "expo-device";
     } catch (err) {
       console.warn("Native device push token failed:", err?.message);
     }
@@ -94,7 +98,11 @@ export async function registerForPushNotifications() {
   }
 
   if (token) {
-    console.log("Push token registered locally:", token.slice(0, 24) + "…");
+    console.log(
+      `[push] token source=${tokenSource} platform=${Platform.OS} value=${token.slice(0, 24)}…`,
+    );
+  } else {
+    console.warn("[push] no push token obtained (simulator or permissions denied)");
   }
   return token;
 }
