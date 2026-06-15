@@ -4,7 +4,12 @@ import Driver from '../models/Driver.js';
 import Payment from '../models/Payment.js';
 import Transaction from '../models/Transaction.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
-import { getOrCreateWallet, debitForPayout, releasePendingForDriver } from '../services/walletService.js';
+import {
+  getOrCreateWallet,
+  debitForPayout,
+  releasePendingForDriver,
+  getWithdrawableBalance,
+} from '../services/walletService.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import { logAdminAction } from '../services/auditLogService.js';
@@ -24,8 +29,9 @@ export const requestPayout = asyncHandler(async (req, res) => {
   const wallet = await getOrCreateWallet(driver._id);
   await releasePendingForDriver(driver._id);
   const walletRefreshed = await getOrCreateWallet(driver._id);
-  if (walletRefreshed.availableBalance < numAmount) {
-    throw new ValidationError('Insufficient available balance');
+  // Funds reserved for outstanding commission debt are not withdrawable.
+  if (getWithdrawableBalance(walletRefreshed) < numAmount) {
+    throw new ValidationError('Insufficient withdrawable balance (commission owed reserved)');
   }
 
   const payout = await PayoutRequest.create({
@@ -194,6 +200,8 @@ export const getMyWallet = asyncHandler(async (req, res) => {
       pending_balance: wallet.pendingBalance,
       total_earned: wallet.totalEarned,
       total_withdrawn: wallet.totalWithdrawn,
+      commission_owed: Math.round(Number(wallet.commissionOwed) || 0),
+      withdrawable_balance: Math.round(getWithdrawableBalance(wallet)),
       currency: wallet.currency,
     },
   });

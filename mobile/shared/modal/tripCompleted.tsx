@@ -1,4 +1,5 @@
 import {
+  ActivityIndicator,
   Image,
   ImageBackground,
   Modal,
@@ -20,7 +21,18 @@ interface Props {
   action: () => void;
   cost: string;
   paymentType?: string;
+  /** Driver view: show a spinner on the primary action while confirming. */
+  confirmLoading?: boolean;
+  /** Optional review action (driver rates the passenger). */
+  onReview?: () => void;
+  /** Driver view (cash only): open the "pay change" flow. */
+  onPayChange?: () => void;
 }
+
+// In-app payments (wallet/card) are settled by the system before the trip, so
+// the driver never needs to confirm them. Everything else (cash) requires the
+// driver to confirm collection.
+const IN_APP_PAYMENT_METHODS = ["wallet", "card", "stripe"];
 
 const TripCompletedModal = ({
   visible,
@@ -29,9 +41,14 @@ const TripCompletedModal = ({
   action,
   cost,
   paymentType,
+  confirmLoading = false,
+  onReview,
+  onPayChange,
 }: Props) => {
   const isPassenger = view === "passenger";
-  const isCashPayment = String(paymentType ?? "").toLowerCase() === "cash";
+  const normalizedPayment = String(paymentType ?? "").toLowerCase();
+  const isCashPayment = normalizedPayment === "cash";
+  const requiresConfirmation = !IN_APP_PAYMENT_METHODS.includes(normalizedPayment);
   const insets = useCombinedSafeInsets();
   const [milestoneMessage, setMilestoneMessage] = useState<string | null>(null);
 
@@ -82,7 +99,7 @@ const TripCompletedModal = ({
           </TouchableOpacity>
 
           <View
-            style={tw`flex-col justify-center items-center p-7 gap-y-5 h-[514px] bg-white rounded-[12px]`}
+            style={tw`flex-col justify-center items-center p-7 gap-y-5 min-h-[514px] bg-white rounded-[12px]`}
           >
             <Image
               resizeMode="contain"
@@ -153,8 +170,9 @@ const TripCompletedModal = ({
                     fontFamily: "RobotoRegular",
                   })}
                 >
-                  Your Passenger has notified that trip is completed if payment
-                  has been made, please confirm
+                  {requiresConfirmation
+                    ? "Your passenger should pay the fare in cash. Confirm once you've received payment."
+                    : "Payment for this trip was completed in-app. No cash to collect."}
                 </Text>
 
                 <View>
@@ -175,18 +193,61 @@ const TripCompletedModal = ({
                 </View>
               </>
             )}
-            <TouchableOpacity
-              onPress={action}
-              style={tw`self-start w-full py-3.5 bg-base-green rounded-[8px]`}
-            >
-              <Text
-                style={tw.style(`text-base text-center text-white`, {
-                  fontFamily: "RobotoMedium",
-                })}
+            <View style={tw`w-full flex-col gap-y-3`}>
+              <TouchableOpacity
+                onPress={action}
+                disabled={confirmLoading}
+                style={tw`w-full py-3.5 bg-base-green rounded-[8px]`}
               >
-                {isPassenger ? "View summary & rate" : "Confirm Payment"}
-              </Text>
-            </TouchableOpacity>
+                {confirmLoading ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text
+                    style={tw.style(`text-base text-center text-white`, {
+                      fontFamily: "RobotoMedium",
+                    })}
+                  >
+                    {isPassenger
+                      ? "View summary & rate"
+                      : requiresConfirmation
+                        ? "Confirm Payment"
+                        : "Done"}
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              {!isPassenger && requiresConfirmation && onPayChange ? (
+                <TouchableOpacity
+                  onPress={onPayChange}
+                  disabled={confirmLoading}
+                  style={tw`w-full py-3.5 border border-base-green rounded-[8px]`}
+                >
+                  <Text
+                    style={tw.style(`text-base text-center text-base-green`, {
+                      fontFamily: "RobotoMedium",
+                    })}
+                  >
+                    Pay change
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+
+              {!isPassenger && onReview ? (
+                <TouchableOpacity
+                  onPress={onReview}
+                  disabled={confirmLoading}
+                  style={tw`w-full py-3.5`}
+                >
+                  <Text
+                    style={tw.style(`text-base text-center text-base-green`, {
+                      fontFamily: "RobotoMedium",
+                    })}
+                  >
+                    Rate passenger (optional)
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
         </View>
       </ImageBackground>

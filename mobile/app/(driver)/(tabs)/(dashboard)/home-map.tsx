@@ -6,6 +6,7 @@ import {
 } from "@/store/AppSlice";
 import {
   DRIVER_ACTIVE_RIDE,
+  DRIVER_CONFIRM_PAYMENT,
   DRIVER_PASSENGER_LOCATION,
   LOCATION_UPDATE,
 } from "@/constants";
@@ -42,6 +43,8 @@ import EmergencyModal from "@/app/(app)/(tabs)/(home)/_modals/emergencyModal";
 import { useDriverRoute } from "@/hooks/useRoute";
 import NewRide from "./_modals/newRide";
 import PayChangeSheet from "./_modals/payChange";
+import RateRiderModal from "./_modals/rateRider";
+import TripCompletedModal from "@/shared/modal/tripCompleted";
 import { Portal } from "@gorhom/portal";
 import { TDriverActiveRide } from "@/types";
 import axios from "axios";
@@ -139,6 +142,14 @@ export default function HomeScreen() {
   const newRideSheetRef = useRef<BottomSheetMethods>(null);
   const payChangeSheetRef = useRef<BottomSheetMethods>(null);
   const [ride, setRide] = useState<Partial<TDriverActiveRide>>({});
+  const [tripSummary, setTripSummary] = useState<{
+    rideId: string;
+    cost: string;
+    paymentType: string;
+    passengerName: string;
+  } | null>(null);
+  const [confirmingPayment, setConfirmingPayment] = useState(false);
+  const [showRateRider, setShowRateRider] = useState(false);
   const [nearby, setNearby] = useState<
     {
       location: {
@@ -425,6 +436,32 @@ export default function HomeScreen() {
       });
   };
 
+  const isInAppPayment = ["wallet", "card", "stripe"].includes(
+    String(tripSummary?.paymentType ?? "").toLowerCase(),
+  );
+
+  const confirmCashPayment = () => {
+    if (!tripSummary?.rideId) {
+      setTripSummary(null);
+      return;
+    }
+    setConfirmingPayment(true);
+    axios
+      .post(DRIVER_CONFIRM_PAYMENT, { rideId: tripSummary.rideId }, apiConfig)
+      .then(({ data }) => {
+        safeShowMessage({ type: "success", message: data?.message ?? "Payment confirmed" });
+        setTripSummary(null);
+        getActiveRide();
+      })
+      .catch((err) => {
+        safeShowMessage({
+          type: "danger",
+          message: getErrorMessage(err, "Could not confirm payment. Please try again."),
+        });
+      })
+      .finally(() => setConfirmingPayment(false));
+  };
+
   useEffect(() => {
     if (!isFocused) return;
     getActiveRide();
@@ -653,10 +690,39 @@ export default function HomeScreen() {
           onOfferResolved={() =>
             dispatch(setAppData({ driverPendingRideOffer: false }))
           }
+          onTripCompleted={(snapshot) => setTripSummary(snapshot)}
         />
       </Portal>
       <Portal>
-        <PayChangeSheet bottomSheetRef={payChangeSheetRef} ride={ride} />
+        <PayChangeSheet
+          bottomSheetRef={payChangeSheetRef}
+          ride={ride?.ride_id ? ride : { ride_id: tripSummary?.rideId }}
+        />
+      </Portal>
+      <Portal>
+        <TripCompletedModal
+          visible={!!tripSummary}
+          view="driver"
+          cost={tripSummary?.cost ?? ""}
+          paymentType={tripSummary?.paymentType}
+          confirmLoading={confirmingPayment}
+          onClose={() => setTripSummary(null)}
+          action={isInAppPayment ? () => setTripSummary(null) : confirmCashPayment}
+          onReview={() => setShowRateRider(true)}
+          onPayChange={
+            isInAppPayment
+              ? undefined
+              : () => payChangeSheetRef.current?.open()
+          }
+        />
+      </Portal>
+      <Portal>
+        <RateRiderModal
+          visible={showRateRider}
+          rideId={tripSummary?.rideId ?? ""}
+          passengerName={tripSummary?.passengerName}
+          onClose={() => setShowRateRider(false)}
+        />
       </Portal>
       <View style={{ flex: 1 }}>
         <StatusBar barStyle="dark-content" backgroundColor={"transparent"} />

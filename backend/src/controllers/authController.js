@@ -667,7 +667,9 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
   let formatted = formatUserResponse(user);
 
   if (user.role === 'driver' && user.driver?._id) {
-    const { getOrCreateWallet, ensureWalletDayStats } = await import('../services/walletService.js');
+    const { getOrCreateWallet, ensureWalletDayStats, getWithdrawableBalance } = await import(
+      '../services/walletService.js'
+    );
     const DriverWallet = (await import('../models/DriverWallet.js')).default;
     await getOrCreateWallet(user.driver._id);
     await ensureWalletDayStats(user.driver._id);
@@ -677,6 +679,8 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
     formatted = {
       ...formatted,
       balance: String(walletTotal),
+      commission_owed: Math.round(Number(w?.commissionOwed) || 0),
+      withdrawable_balance: Math.round(getWithdrawableBalance(w)),
     };
   }
 

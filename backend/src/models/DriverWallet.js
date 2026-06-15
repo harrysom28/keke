@@ -41,6 +41,16 @@ const driverWalletSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    /**
+     * Outstanding platform commission the driver owes from CASH rides (where the
+     * driver collected the full fare in cash, including the commission portion).
+     * Repaid automatically by sweeping future wallet credits. Never negative.
+     */
+    commissionOwed: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     /** Gross ride credits credited today (UTC day); rolled in ensureWalletDayStats. */
     todayEarnings: {
       type: Number,

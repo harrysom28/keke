@@ -5,6 +5,32 @@ import logger from '../utils/logger.js';
 
 const PENDING_HOURS = Number(process.env.WALLET_PENDING_HOURS) || 24;
 
+/**
+ * Max outstanding cash-commission debt a driver may carry before being blocked
+ * from going online / accepting cash rides. 0 (default) = disabled (no ceiling
+ * enforced). Set DRIVER_COMMISSION_DEBT_CEILING > 0 to enable — the check points
+ * are already wired (see isDriverOverCommissionCeiling), so enabling is a config
+ * change only, not a code change.
+ */
+const COMMISSION_DEBT_CEILING = Number(process.env.DRIVER_COMMISSION_DEBT_CEILING) || 0;
+
+/** Withdrawable funds = available minus outstanding commission debt (floored at 0). */
+function getWithdrawableBalance(wallet) {
+  const available = Number(wallet?.availableBalance) || 0;
+  const owed = Number(wallet?.commissionOwed) || 0;
+  return Math.max(0, available - owed);
+}
+
+/**
+ * Whether a driver's outstanding commission debt is over the configured ceiling.
+ * Returns false whenever the ceiling is disabled (<= 0), so callers can guard
+ * unconditionally and enabling enforcement is a one-line config change.
+ */
+function isDriverOverCommissionCeiling(commissionOwed) {
+  if (!(COMMISSION_DEBT_CEILING > 0)) return false;
+  return (Number(commissionOwed) || 0) > COMMISSION_DEBT_CEILING;
+}
+
 function generateTransactionId(prefix = 'TXN') {
   return `${prefix}-${Date.now()}-${new mongoose.Types.ObjectId().toString().slice(-8)}`;
 }
@@ -148,6 +174,104 @@ async function creditRideEarning(driverId, driverNetAmount, commissionAmount, ri
 }
 
 /**
+ * Accrue cash-ride commission as driver debt. The driver collected the full
+ * fare in cash (incl. commission), so nothing is credited to the wallet —
+ * instead commissionOwed grows by the commission amount. Idempotent per ride
+ * via the commission_accrued Transaction row.
+ */
+async function accrueCommissionDebt(driverId, commissionAmount, rideId, currency = 'NGN', session = null) {
+  if (commissionAmount == null || commissionAmount <= 0) return { accrued: 0 };
+  const opts = session ? { session } : {};
+
+  if (rideId) {
+    const dup = await Transaction.findOne({ rideId, driverId, type: 'commission_accrued' })
+      .session(session || null)
+      .lean();
+    if (dup) return { duplicate: true, accrued: 0 };
+  }
+
+  await getOrCreateWallet(driverId, currency);
+  const before = await DriverWallet.findOne({ driverId }).session(session || null);
+  const balanceBefore = Number(before?.commissionOwed) || 0;
+
+  const wallet = await DriverWallet.findOneAndUpdate(
+    { driverId },
+    { $inc: { commissionOwed: commissionAmount } },
+    { new: true, ...opts }
+  );
+  if (!wallet) throw new Error('Wallet not found');
+
+  const txnId = generateTransactionId('CMA');
+  await Transaction.create(
+    [
+      {
+        transactionId: txnId,
+        rideId,
+        driverId,
+        type: 'commission_accrued',
+        amount: commissionAmount,
+        currency,
+        balanceBefore,
+        balanceAfter: wallet.commissionOwed,
+        metadata: { rideId: rideId?.toString(), source: 'cash_ride' },
+      },
+    ],
+    opts
+  );
+
+  return { wallet, accrued: commissionAmount, transactionId: txnId };
+}
+
+/**
+ * Sweep outstanding commission debt out of AVAILABLE balance. Reduces
+ * commissionOwed and availableBalance together by the swept amount. Atomic and
+ * guarded so the balance can never go negative; remaining debt persists for the
+ * next credit. Call after any event that increases availableBalance.
+ */
+async function sweepCommissionOwed(driverId, session = null) {
+  const opts = session ? { session } : {};
+  const wallet = await DriverWallet.findOne({ driverId }).session(session || null);
+  if (!wallet) return { swept: 0 };
+
+  const sweep = Math.min(
+    Number(wallet.availableBalance) || 0,
+    Number(wallet.commissionOwed) || 0
+  );
+  if (sweep <= 0) return { swept: 0 };
+
+  const balanceBefore = wallet.availableBalance;
+  const updated = await DriverWallet.findOneAndUpdate(
+    { driverId, availableBalance: { $gte: sweep }, commissionOwed: { $gte: sweep } },
+    { $inc: { availableBalance: -sweep, commissionOwed: -sweep } },
+    { new: true, ...opts }
+  );
+  if (!updated) {
+    // Concurrent modification changed balances; skip rather than risk negative.
+    logger.debug(`sweepCommissionOwed: skipped for driver ${driverId} (concurrent change)`);
+    return { swept: 0 };
+  }
+
+  const txnId = generateTransactionId('CMS');
+  await Transaction.create(
+    [
+      {
+        transactionId: txnId,
+        driverId,
+        type: 'commission_swept',
+        amount: -sweep,
+        currency: updated.currency,
+        balanceBefore,
+        balanceAfter: updated.availableBalance,
+        metadata: { commissionOwedAfter: updated.commissionOwed },
+      },
+    ],
+    opts
+  );
+
+  return { swept: sweep, wallet: updated };
+}
+
+/**
  * Release pending credits to available balance for a driver (availableAt <= now).
  * Creates balance_release transaction(s). Call from cron or before payout.
  */
@@ -186,6 +310,9 @@ async function releasePendingForDriver(driverId, session = null) {
     opts
   );
 
+  // Newly-available funds repay outstanding commission debt first.
+  await sweepCommissionOwed(driverId, session);
+
   return { released: totalRelease };
 }
 
@@ -220,8 +347,9 @@ async function debitForPayout(driverId, amount, reference, session = null) {
   await releasePendingForDriver(driverId, session);
 
   const walletRefreshed = await DriverWallet.findOne({ driverId }).session(session || null);
-  if (walletRefreshed.availableBalance < amount) {
-    throw new Error('Insufficient available balance');
+  // Funds earmarked for outstanding commission debt are not withdrawable.
+  if (getWithdrawableBalance(walletRefreshed) < amount) {
+    throw new Error('Insufficient withdrawable balance (commission owed reserved)');
   }
 
   const balanceBefore = walletRefreshed.availableBalance;
@@ -383,6 +511,9 @@ async function creditCancellationCompensation(driverId, amount, rideId, session 
     opts
   );
 
+  // Compensation lands directly in available balance — sweep any debt.
+  await sweepCommissionOwed(driverId, session);
+
   return { wallet, transactionId: txnId };
 }
 
@@ -390,11 +521,16 @@ export {
   getOrCreateWallet,
   creditRideEarning,
   creditCancellationCompensation,
+  accrueCommissionDebt,
+  sweepCommissionOwed,
+  getWithdrawableBalance,
+  isDriverOverCommissionCeiling,
   releasePendingForDriver,
   releaseAllPendingBalances,
   debitForPayout,
   debitRefund,
   PENDING_HOURS,
+  COMMISSION_DEBT_CEILING,
   generateTransactionId,
   utcDayKey,
 };

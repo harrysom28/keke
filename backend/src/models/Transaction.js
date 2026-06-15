@@ -22,6 +22,8 @@ const transactionSchema = new mongoose.Schema(
       enum: [
         'ride_earning',
         'commission',
+        'commission_accrued',
+        'commission_swept',
         'withdrawal',
         'refund',
         'balance_release',

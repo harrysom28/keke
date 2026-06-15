@@ -2105,12 +2105,11 @@ export default function HomeScreen() {
 
       if (name === "payment-confirmed") {
         const amt = Number(payload.amount ?? 0);
-        safeShowMessage({
-          type: "success",
-          message: "Payment confirmed",
-          description: `₦${Number.isFinite(amt) ? amt.toLocaleString() : String(payload.amount ?? "")} cash — thank you!`,
-          duration: 5000,
-        });
+        if (Number.isFinite(amt) && amt > 0) {
+          setTemp((prev) => ({ ...(prev || {}), cost: String(Math.round(amt)) }) as TRide);
+        }
+        setTripCompleted(false);
+        setPaymentReceipt(true);
         getActiveRide();
         return;
       }

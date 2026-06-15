@@ -16,7 +16,6 @@ import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import {
   DRIVER_ACCEPT_RIDE,
   DRIVER_COMPLETE_RIDE,
-  DRIVER_CONFIRM_PAYMENT,
   DRIVER_MARK_PICKUP_ARRIVED,
   DRIVER_PAY_CHANGE,
   DRIVER_REJECT_RIDE,
@@ -93,6 +92,14 @@ interface Props {
   /** Wall-clock ms when the sequential offer expires (Bolt-style window). */
   offerDeadlineMs?: number | null;
   onOfferExpired?: () => void;
+  /** Fired when the driver completes the trip, so the host can show the
+   * Trip Completed / Confirm Payment modal (which outlives this sheet). */
+  onTripCompleted?: (snapshot: {
+    rideId: string;
+    cost: string;
+    paymentType: string;
+    passengerName: string;
+  }) => void;
 }
 
 const NewRide = ({
@@ -106,6 +113,7 @@ const NewRide = ({
   onDeclineOffer,
   offerDeadlineMs = null,
   onOfferExpired,
+  onTripCompleted,
 }: Props) => {
   const { apiConfig } = useContext(AppContext);
   const insets = useSafeAreaInsets();
@@ -423,11 +431,16 @@ const NewRide = ({
     axios
       .post(DRIVER_COMPLETE_RIDE, { rideId }, apiConfig)
       .then(({ data }) => {
-        // console.log(data);
-        if (payment_type === "wallet") {
-          handleBack();
-          showMessage({ type: "success", message: data?.message });
-        }
+        // Hand off to the layout-level Trip Completed / Confirm Payment modal,
+        // which survives this sheet being closed when the ride goes terminal.
+        onTripCompleted?.({
+          rideId,
+          cost: String(fareDisplay ?? ""),
+          paymentType: payment_type,
+          passengerName,
+        });
+        handleBack();
+        showMessage({ type: "success", message: data?.message });
         getActiveRide();
       })
       .catch((err: any) => {
@@ -444,20 +457,6 @@ const NewRide = ({
       })
       .finally(() => setLoading((prev) => ({ ...prev, complete: false })));
   };
-  const ConfirmPayment = () => {
-    if (!guardRideId()) return;
-    setLoading((prev) => ({ ...prev, confirm: true }));
-    axios
-      .post(DRIVER_CONFIRM_PAYMENT, { rideId }, apiConfig)
-      .then(({ data }) => {
-        handleBack();
-        showMessage({ type: "success", message: data?.message });
-        getActiveRide();
-      })
-      .catch(handleRideApiError)
-      .finally(() => setLoading((prev) => ({ ...prev, confirm: false })));
-  };
-
   const PayChange = (amount: string) => {
     if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, change: true }));
@@ -750,36 +749,6 @@ const NewRide = ({
                   complete: loading.complete,
                 }}
               />
-              {hasRideStarted && data?.drop_off_completed ? (
-                <View style={tw`flex-col gap-y-3 mt-3`}>
-                  <TouchableOpacity
-                    disabled={payment_type === "wallet"}
-                    onPress={() => setShow(true)}
-                    style={tw.style(
-                      `flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[12px] min-h-[48px]`,
-                      { opacity: payment_type === "wallet" ? 0 : 1 }
-                    )}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={tw.style(`text-base text-white uppercase`, { fontFamily: "RobotoBold" })}>
-                      Pay change
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={ConfirmPayment}
-                    style={tw`flex-row items-center justify-center gap-x-2 py-3 bg-base-green rounded-[12px] min-h-[48px]`}
-                    activeOpacity={0.85}
-                  >
-                    {loading.confirm ? (
-                      <ActivityIndicator color="white" />
-                    ) : (
-                      <Text style={tw.style(`text-base text-white uppercase`, { fontFamily: "RobotoBold" })}>
-                        Confirm payment
-                      </Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              ) : null}
             </>
           ) : (
             <View style={tw`flex-col gap-y-4`}>

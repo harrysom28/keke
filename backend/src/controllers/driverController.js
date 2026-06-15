@@ -22,7 +22,13 @@ import { getFileUrl, uploadToCloudinary, uploadStreamToCloudinary } from '../ser
 import { cache } from '../config/redis.js';
 import { logRideLifecycle, mapRideStatusForClientApi } from '../utils/rideStatus.js';
 import rideMatchingService from '../services/rideMatchingService.js';
-import { ensureWalletDayStats, getOrCreateWallet } from '../services/walletService.js';
+import {
+  ensureWalletDayStats,
+  getOrCreateWallet,
+  getWithdrawableBalance,
+  isDriverOverCommissionCeiling,
+  COMMISSION_DEBT_CEILING,
+} from '../services/walletService.js';
 import { formatOnlineDurationMs } from '../utils/driverOnlineTime.js';
 import {
   dispatchRide,
@@ -956,6 +962,21 @@ export const toggleAvailability = asyncHandler(async (req, res) => {
     throw new ValidationError('Driver must be verified to go online');
   }
 
+  // Commission-debt ceiling gate (disabled while DRIVER_COMMISSION_DEBT_CEILING
+  // is 0). When enabled, a driver owing more than the ceiling cannot go online
+  // until they settle their outstanding commission. Wired here so enabling is a
+  // config change only.
+  const goingOnline = isAvailable === true || isAvailable === 'true';
+  if (goingOnline && COMMISSION_DEBT_CEILING > 0) {
+    await getOrCreateWallet(driver._id);
+    const walletForGate = await DriverWallet.findOne({ driverId: driver._id }).lean();
+    if (isDriverOverCommissionCeiling(walletForGate?.commissionOwed)) {
+      throw new ValidationError(
+        `You owe ₦${Math.round(Number(walletForGate?.commissionOwed) || 0).toLocaleString()} in platform commission. Settle it to go back online.`
+      );
+    }
+  }
+
   // Check if driver has active ride
   const activeRide = await Ride.findActiveRideForDriver(driver._id);
   if (activeRide && isAvailable === false) {
@@ -1127,9 +1148,13 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
         availableBalance: walletDoc?.availableBalance ?? 0,
         pendingBalance: walletDoc?.pendingBalance ?? 0,
         totalEarned: lifetimeEarned,
+        commissionOwed: Math.round(Number(walletDoc?.commissionOwed) || 0),
+        withdrawableBalance: Math.round(getWithdrawableBalance(walletDoc)),
       },
       in_app_payment: earnedToday,
       total_balance: String(totalWalletBalance),
+      commission_owed: Math.round(Number(walletDoc?.commissionOwed) || 0),
+      withdrawable_balance: Math.round(getWithdrawableBalance(walletDoc)),
       earnings: {
         total: totalWalletBalance,
         today: earnedToday,
@@ -2548,10 +2573,13 @@ export const completeRide = asyncHandler(async (req, res) => {
     const driverEarnings = Math.round(
       Number(ride?.fare?.driverNetAmount ?? ride?.fare?.totalFare ?? 0)
     );
+    const isCashRide = String(ride.paymentMethod || '').toLowerCase() === 'cash';
 
     await sendToUser(ride.rider._id, 'rider', {
       title: 'Ride completed ✅',
-      message: `₦${fareAmount.toLocaleString()} has been deducted from your wallet. Thanks for riding with Keke!`,
+      message: isCashRide
+        ? `Please pay ₦${fareAmount.toLocaleString()} cash to your driver. Thanks for riding with Keke!`
+        : `₦${fareAmount.toLocaleString()} has been deducted from your wallet. Thanks for riding with Keke!`,
       type: 'alert',
       priority: 'high',
       screen: 'home',
@@ -2562,28 +2590,48 @@ export const completeRide = asyncHandler(async (req, res) => {
       data: { subType: 'ride_completed', rideId: ride._id.toString() },
     });
 
-    const walletDoc = await DriverWallet.findOne({ driverId: driver._id }).lean();
-    const pendingBal = Math.round(Number(walletDoc?.pendingBalance ?? 0));
-    const availableBal = Math.round(Number(walletDoc?.availableBalance ?? 0));
+    if (isCashRide) {
+      // Cash is collected in person — it does not affect the withdrawable wallet.
+      await sendToUser(userId, 'driver', {
+        title: `Collect ₦${fareAmount.toLocaleString()} cash`,
+        message: `Collect ₦${fareAmount.toLocaleString()} cash from the passenger for this trip.`,
+        type: 'alert',
+        priority: 'high',
+        screen: 'home',
+        ride_id: ride._id,
+        action_type: 'navigate',
+        action_payload: { screen: 'DriverHome', rideId: ride._id.toString() },
+        event_key: 'cash_collection',
+        data: {
+          subType: 'cash_collection',
+          rideId: ride._id.toString(),
+          amountNaira: String(fareAmount),
+        },
+      });
+    } else {
+      const walletDoc = await DriverWallet.findOne({ driverId: driver._id }).lean();
+      const pendingBal = Math.round(Number(walletDoc?.pendingBalance ?? 0));
+      const availableBal = Math.round(Number(walletDoc?.availableBalance ?? 0));
 
-    await sendToUser(userId, 'driver', {
-      title: `₦${driverEarnings.toLocaleString()} earned from completed trip`,
-      message: `Driver wallet — Pending: ₦${pendingBal.toLocaleString()} · Available: ₦${availableBal.toLocaleString()}.`,
-      type: 'alert',
-      priority: 'high',
-      screen: 'wallet',
-      ride_id: ride._id,
-      action_type: 'navigate',
-      action_payload: { screen: 'wallet', rideId: ride._id.toString() },
-      event_key: 'fare_received',
-      data: {
-        subType: 'fare_received',
-        rideId: ride._id.toString(),
-        amountNaira: String(driverEarnings),
-        pendingBalance: String(pendingBal),
-        availableBalance: String(availableBal),
-      },
-    });
+      await sendToUser(userId, 'driver', {
+        title: `₦${driverEarnings.toLocaleString()} earned from completed trip`,
+        message: `Driver wallet — Pending: ₦${pendingBal.toLocaleString()} · Available: ₦${availableBal.toLocaleString()}.`,
+        type: 'alert',
+        priority: 'high',
+        screen: 'wallet',
+        ride_id: ride._id,
+        action_type: 'navigate',
+        action_payload: { screen: 'wallet', rideId: ride._id.toString() },
+        event_key: 'fare_received',
+        data: {
+          subType: 'fare_received',
+          rideId: ride._id.toString(),
+          amountNaira: String(driverEarnings),
+          pendingBalance: String(pendingBal),
+          availableBalance: String(availableBal),
+        },
+      });
+    }
   } catch (err) {
     logger.error(`Ride completion notification failed: ${err.message}`);
   }
@@ -2673,9 +2721,14 @@ export const confirmPayment = asyncHandler(async (req, res) => {
   ride.paymentStatus = 'completed';
   await ride.save();
 
+  // Cash is paid directly to the driver and must never hit the withdrawable
+  // wallet. Only credit the wallet for non-cash (online/wallet/card) payments.
+  const isCashRide = String(ride.paymentMethod || '').toLowerCase() === 'cash';
   try {
-    const { applyRideEarningToWallet } = await import('../services/paymentService.js');
-    await applyRideEarningToWallet(ride);
+    if (!isCashRide) {
+      const { applyRideEarningToWallet } = await import('../services/paymentService.js');
+      await applyRideEarningToWallet(ride);
+    }
     driver.totalRides += 1;
     await driver.save();
   } catch (err) {

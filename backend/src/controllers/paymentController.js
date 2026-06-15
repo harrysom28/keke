@@ -4,6 +4,8 @@ import UserWallet from '../models/UserWallet.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
+import DriverWallet from '../models/DriverWallet.js';
+import { getOrCreateWallet, getWithdrawableBalance } from '../services/walletService.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
@@ -547,7 +549,17 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
     throw new ValidationError('Only drivers can withdraw earnings');
   }
 
-  // Check balance
+  // Authoritative guard: cannot withdraw funds reserved for outstanding
+  // commission debt. Withdrawable = available − commissionOwed (from DriverWallet,
+  // the canonical balance shown in-app).
+  await getOrCreateWallet(driver._id);
+  const driverWallet = await DriverWallet.findOne({ driverId: driver._id }).lean();
+  const withdrawable = getWithdrawableBalance(driverWallet);
+  if (withdrawable < amount) {
+    throw new ValidationError('Insufficient withdrawable balance (commission owed reserved)');
+  }
+
+  // Legacy check retained for the legacy earnings ledger.
   if (driver.earnings.total < amount) {
     throw new ValidationError('Insufficient earnings balance');
   }

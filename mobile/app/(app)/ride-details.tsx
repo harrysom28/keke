@@ -240,11 +240,14 @@ export default function RideDetailsScreen() {
                   {ride.driver.vehicle_name || ""} {ride.driver.vehicle_plate ? `· ${ride.driver.vehicle_plate}` : ""}
                 </Text>
               </View>
-              {ride.driver.phone && (
-                <TouchableOpacity onPress={handleCallDriver} style={tw`bg-base-green/10 px-4 py-2 rounded-lg`}>
-                  <Text style={tw`text-base-green font-medium`}>Call</Text>
-                </TouchableOpacity>
-              )}
+              {ride.driver.phone &&
+                !["completed", "cancelled", "canceled"].includes(
+                  String(ride.status || "").toLowerCase(),
+                ) && (
+                  <TouchableOpacity onPress={handleCallDriver} style={tw`bg-base-green/10 px-4 py-2 rounded-lg`}>
+                    <Text style={tw`text-base-green font-medium`}>Call</Text>
+                  </TouchableOpacity>
+                )}
             </View>
           </View>
         )}

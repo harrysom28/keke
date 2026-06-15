@@ -244,12 +244,21 @@ const mapLegacyTypeToDeliveryPayload = (type, title, message, data = {}, related
   };
 };
 
-const getUserFcmToken = (user) =>
-  user?.expoPushToken ||
-  user?.fcm_token ||
-  user?.pushToken ||
-  user?.deviceToken ||
-  '';
+const getUserFcmToken = (user) => {
+  // Prefer a native FCM token (delivered via Firebase Admin, package-correct)
+  // over a possibly-stale Expo token. Native tokens are anything that is not an
+  // ExponentPushToken[...]. This avoids routing native devices through the Expo
+  // Push API when a fresh FCM token exists.
+  const fcm = user?.fcm_token;
+  if (fcm && !String(fcm).startsWith('ExponentPushToken[')) return fcm;
+  return (
+    user?.expoPushToken ||
+    user?.fcm_token ||
+    user?.pushToken ||
+    user?.deviceToken ||
+    ''
+  );
+};
 
 // Email configuration - supports both SMTP_* and MAIL_* (Laravel-style) env vars
 const getMailConfig = () => {

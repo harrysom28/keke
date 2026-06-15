@@ -6,7 +6,7 @@ import Driver from '../models/Driver.js';
 import logger from '../utils/logger.js';
 import Stripe from 'stripe';
 import { computeCommission } from './commissionService.js';
-import { creditRideEarning } from './walletService.js';
+import { creditRideEarning, accrueCommissionDebt } from './walletService.js';
 import { settleRide as escrowSettleRide } from './escrowWalletService.js';
 
 // Initialize Stripe (if API key is provided)
@@ -41,6 +41,39 @@ export async function applyRideEarningToWallet(ride) {
   const currency = (ride.fare.currency || 'NGN').toUpperCase();
   await creditRideEarning(driverId, driverNetAmount, commissionAmount, ride._id, currency);
   logger.info(`Ride earning applied: driver ${driverId}, net ${driverNetAmount}, commission ${commissionAmount}`);
+}
+
+/**
+ * Cash ride: driver collected the full fare (incl. commission) in cash. Compute
+ * commission at the SAME rate as in-app rides, record it on the ride for
+ * reporting, and add it to the driver's outstanding commission debt instead of
+ * crediting the wallet. Idempotent via ride.fare.commissionAmount.
+ */
+export async function accrueCashCommissionDebt(ride) {
+  const driverId = ride.driver?._id || ride.driver;
+  if (!driverId) return;
+  if (ride.fare?.commissionAmount != null) return;
+
+  const grossFare = Number(ride.fare?.totalFare) || 0;
+  if (grossFare <= 0) return;
+
+  const vehicleTypeId = ride.vehicleType?._id || ride.vehicleType || null;
+  const { commissionAmount, driverNetAmount, platformRevenue, commissionRate } = await computeCommission(grossFare, {
+    vehicleTypeId: vehicleTypeId?.toString?.() || null,
+  });
+
+  ride.fare = ride.fare || {};
+  ride.fare.commissionRate = commissionRate;
+  ride.fare.commissionAmount = commissionAmount;
+  ride.fare.driverNetAmount = driverNetAmount;
+  ride.fare.platformRevenue = platformRevenue;
+  await ride.save();
+
+  const currency = (ride.fare.currency || 'NGN').toUpperCase();
+  await accrueCommissionDebt(driverId, commissionAmount, ride._id, currency);
+  logger.info(
+    `Cash commission accrued as debt: driver ${driverId}, commission ${commissionAmount} (ride ${ride._id})`
+  );
 }
 
 /**
@@ -216,7 +249,10 @@ export const processRidePayment = async (ride) => {
         ride.paymentStatus = 'cash_collected';
         await ride.save();
         if (driver) {
-          await applyRideEarningToWallet(ride);
+          // Cash is collected directly by the driver, so it is NOT credited to
+          // the in-app wallet. Instead the platform commission becomes driver
+          // debt (swept from future wallet credits).
+          await accrueCashCommissionDebt(ride);
           driver.totalRides += 1;
           await driver.save();
         }

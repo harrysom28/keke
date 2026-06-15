@@ -443,6 +443,31 @@ const WalletScreen = () => {
               0
             ).toLocaleString()}
           </Text>
+
+          {(() => {
+            const withdrawable = Number(
+              withdrawDetails?.withdrawable_balance ??
+                withdrawDetails?.wallet?.withdrawableBalance ??
+                0
+            );
+            const owed = Number(
+              withdrawDetails?.commission_owed ??
+                withdrawDetails?.wallet?.commissionOwed ??
+                0
+            );
+            return (
+              <View style={tw`mb-4`}>
+                <Text style={tw.style(`text-white/90 text-sm`, { fontFamily: "RobotoMedium" })}>
+                  Available to withdraw: ₦{withdrawable.toLocaleString()}
+                </Text>
+                {owed > 0 ? (
+                  <Text style={tw.style(`text-white/90 text-sm mt-1`, { fontFamily: "RobotoMedium" })}>
+                    Commission owed: ₦{owed.toLocaleString()}
+                  </Text>
+                ) : null}
+              </View>
+            );
+          })()}
           <View style={tw`flex-row gap-x-3`}>
             <TouchableOpacity
               onPress={() => setTopupModal(true)}
