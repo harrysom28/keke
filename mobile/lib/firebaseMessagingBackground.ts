@@ -23,6 +23,15 @@ const pickChannelId = (priority: string, type?: string): string => {
   return "general";
 };
 
+const pickAndroidPriority = (
+  priority: string
+): Notifications.AndroidNotificationPriority => {
+  if (priority === "high" || priority === "critical") {
+    return Notifications.AndroidNotificationPriority.HIGH;
+  }
+  return Notifications.AndroidNotificationPriority.DEFAULT;
+};
+
 try {
   messaging().setBackgroundMessageHandler(async (remoteMessage) => {
     try {
@@ -58,7 +67,10 @@ try {
       await setupNotificationChannels();
 
       const priority = String(data.priority || "medium");
-      const channelId = pickChannelId(priority, data.type);
+      // Backend embeds channelId in data (see sendFcmViaFirebaseAdmin); honour it.
+      const channelId =
+        String(data.channelId || "").trim() ||
+        pickChannelId(priority, data.type);
 
       await Notifications.scheduleNotificationAsync({
         content: {
@@ -66,7 +78,12 @@ try {
           body,
           data,
           sound: "default",
-          ...(Platform.OS === "android" ? { channelId } : {}),
+          ...(Platform.OS === "android"
+            ? {
+                channelId,
+                priority: pickAndroidPriority(priority),
+              }
+            : {}),
         },
         trigger: null,
       });

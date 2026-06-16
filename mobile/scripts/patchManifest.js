@@ -79,6 +79,15 @@ if (mapsKey) {
   );
 }
 
+// Android 13+ (API 33): POST_NOTIFICATIONS must be declared or runtime prompts are ignored.
+if (!manifest.includes("android.permission.POST_NOTIFICATIONS")) {
+  manifest = manifest.replace(
+    '<uses-permission android:name="android.permission.INTERNET"/>',
+    '<uses-permission android:name="android.permission.INTERNET"/>\n  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>'
+  );
+  console.log("✅ AndroidManifest.xml: POST_NOTIFICATIONS permission added.");
+}
+
 // Firebase/notification tools:replace
 addToolsReplace(
   "com.google.firebase.messaging.default_notification_channel_id",
