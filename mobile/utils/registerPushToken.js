@@ -48,32 +48,33 @@ export async function registerForPushNotifications() {
   let token = null;
   let tokenSource = null;
 
-  // Prefer the native FCM registration token from @react-native-firebase. It is
-  // package-specific (correct for the current package name) and delivered
-  // directly by the backend's Firebase Admin SDK — no Expo push service or EAS
-  // push credentials required. This is the most reliable path after a package
-  // rename, where Expo-proxied tokens silently break.
+  // Prefer the Expo push token (delivered via the Expo Push API). The backend
+  // sends these with a simple POST to exp.host — no Firebase Admin service
+  // account is required on the server; the FCM credential lives in EAS and Expo
+  // relays to FCM/APNs under the hood. google-services.json already registers
+  // this package (com.kekeride.app) under Firebase project keke-1ea45.
   try {
-    if (Platform.OS === "ios") {
-      // iOS must register for remote messages before a token is available.
-      await messaging().registerDeviceForRemoteMessages?.();
-    }
-    token = (await messaging().getToken()) || null;
-    if (token) tokenSource = "native-fcm";
+    const expoToken = await Notifications.getExpoPushTokenAsync({
+      projectId: EXPO_PROJECT_ID,
+    });
+    token = expoToken?.data ?? null;
+    if (token) tokenSource = "expo-push";
   } catch (err) {
-    console.warn("Native FCM token failed, falling back to Expo:", err?.message);
+    console.warn("Expo push token failed, falling back to native FCM:", err?.message);
   }
 
-  // Fallback: Expo push token (delivered via the Expo Push API).
+  // Fallback: native FCM registration token from @react-native-firebase,
+  // delivered by the backend's Firebase Admin SDK (requires server credentials).
   if (!token) {
     try {
-      const expoToken = await Notifications.getExpoPushTokenAsync({
-        projectId: EXPO_PROJECT_ID,
-      });
-      token = expoToken?.data ?? null;
-      if (token) tokenSource = "expo-push";
+      if (Platform.OS === "ios") {
+        // iOS must register for remote messages before a token is available.
+        await messaging().registerDeviceForRemoteMessages?.();
+      }
+      token = (await messaging().getToken()) || null;
+      if (token) tokenSource = "native-fcm";
     } catch (err) {
-      console.warn("Expo push token failed:", err?.message);
+      console.warn("Native FCM token failed:", err?.message);
     }
   }
 

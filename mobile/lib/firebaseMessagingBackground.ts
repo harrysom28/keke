@@ -1,55 +1,77 @@
 /**
  * Register FCM background handler at bundle load (before React).
  * @see https://rnfirebase.io/messaging/usage#background--quit-state-messages
+ *
+ * Android ride-offer pushes are sent DATA-ONLY with priority:high (see backend
+ * sendFcmViaFirebaseAdmin). Data-only guarantees this handler runs in the
+ * background/quit state and makes it the SOLE display path (no duplicate from an
+ * OS auto-display, and no reliance on the OS owning the FCM service while
+ * expo-notifications is also installed). title/body/channel travel in `data`.
  */
 import * as Notifications from "expo-notifications";
 import messaging from "@react-native-firebase/messaging";
 import { Platform } from "react-native";
 
 import { configureExpoNotificationHandler } from "@/lib/expoNotificationsSetup";
+import { setupNotificationChannels } from "@/utils/notifications";
 
 configureExpoNotificationHandler();
 
+const pickChannelId = (priority: string, type?: string): string => {
+  if (priority === "high" || priority === "critical") return "rides";
+  if (type === "payment") return "payments";
+  return "general";
+};
+
 try {
   messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-    console.log("Background FCM message:", remoteMessage?.messageId);
+    try {
+      console.log("Background FCM message:", remoteMessage?.messageId);
 
-    const title = remoteMessage?.notification?.title;
-    const body = remoteMessage?.notification?.body;
-    const rawData = remoteMessage?.data;
-    const priority = String(rawData?.priority || "medium");
-
-    if (
-      (title != null && String(title).trim() !== "") ||
-      (body != null && String(body).trim() !== "")
-    ) {
-      const data =
-        rawData && typeof rawData === "object" && !Array.isArray(rawData)
-          ? Object.fromEntries(
-              Object.entries(rawData).map(([k, v]) => [k, String(v ?? "")])
-            )
+      const rawData =
+        remoteMessage?.data &&
+        typeof remoteMessage.data === "object" &&
+        !Array.isArray(remoteMessage.data)
+          ? (remoteMessage.data as Record<string, unknown>)
           : {};
 
-      const channelId =
-        priority === "high" || priority === "critical"
-          ? "rides"
-          : rawData?.type === "payment"
-            ? "payments"
-            : "general";
+      const data = Object.fromEntries(
+        Object.entries(rawData).map(([k, v]) => [k, String(v ?? "")])
+      );
 
-      try {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: title != null ? String(title) : "",
-            body: body != null ? String(body) : "",
-            data,
-            ...(Platform.OS === "android" ? { channelId } : {}),
-          },
-          trigger: null,
-        });
-      } catch (e) {
-        console.warn("Background FCM: scheduleNotificationAsync failed", e);
+      // Data-only payloads carry title/body in `data`; fall back to the
+      // notification block for any mixed/legacy payloads.
+      const title = String(
+        remoteMessage?.notification?.title ?? data.title ?? ""
+      ).trim();
+      const body = String(
+        remoteMessage?.notification?.body ?? data.body ?? data.message ?? ""
+      ).trim();
+
+      if (!title && !body) {
+        return;
       }
+
+      // The React app has NOT mounted in the quit/background state, so its
+      // startup channel setup never ran. Channels must exist before a local
+      // notification can be displayed or Android drops it silently.
+      await setupNotificationChannels();
+
+      const priority = String(data.priority || "medium");
+      const channelId = pickChannelId(priority, data.type);
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+          data,
+          sound: "default",
+          ...(Platform.OS === "android" ? { channelId } : {}),
+        },
+        trigger: null,
+      });
+    } catch (e) {
+      console.warn("Background FCM: failed to display notification", e);
     }
   });
 } catch {

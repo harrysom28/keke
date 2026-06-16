@@ -577,19 +577,37 @@ const sendFcmViaFirebaseAdmin = async (deviceToken, title, body, data = {}, user
   }
 
   try {
-    const channelId = (data.priority === 'high') ? 'rides' : (data.type === 'payment' ? 'payments' : 'general');
+    const channelId =
+      data.priority === 'high' || data.priority === 'critical'
+        ? 'rides'
+        : data.type === 'payment'
+          ? 'payments'
+          : 'general';
     const message = {
       token: deviceToken,
-      notification: { title, body },
-      data: stringifyData(data),
+      // ANDROID: data-only (no `notification` block) + priority:high. This
+      // guarantees the app's setBackgroundMessageHandler runs in the
+      // background/quit state and is the SOLE display path — avoiding the
+      // unreliable OS auto-display (the app runs both expo-notifications and
+      // @react-native-firebase, which fight over the FCM service) and avoiding
+      // duplicate notifications. title/body/channel travel in `data` so the
+      // on-device handler can build the local notification.
+      data: stringifyData({ ...data, title, body, channelId }),
       android: {
         priority: 'high',
-        notification: {
-          channelId,
-          sound: 'default',
+      },
+      // iOS: data-only delivery is unreliable, so keep the APNs alert so the
+      // system displays the notification in background/quit state.
+      apns: {
+        headers: { 'apns-priority': '10' },
+        payload: {
+          aps: {
+            alert: { title, body },
+            sound: 'default',
+            badge: 1,
+          },
         },
       },
-      apns: { payload: { aps: { sound: 'default', badge: 1 } } },
     };
     await admin.messaging().send(message);
     logger.info(`FCM (Firebase Admin) push sent: ${title}`);

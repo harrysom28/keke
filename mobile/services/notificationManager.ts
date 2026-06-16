@@ -463,6 +463,10 @@ export const registerFcmToken = async (): Promise<void> => {
 
     const isExpo = token.startsWith("ExponentPushToken[");
     if (isExpo) {
+      // Expo token is primary. Store it as the only push token so the backend
+      // routes via the Expo Push API. Do NOT also register the native FCM token:
+      // getUserFcmToken prefers a non-Expo fcm_token, so a secondary native
+      // registration would overwrite this and force the Firebase Admin path.
       await apiClient.post("auth/push-token", { token, type: "expo" });
       await apiClient.post("notifications/fcm-token", { token });
       logger.debug("Expo push token registered with backend");
@@ -470,21 +474,6 @@ export const registerFcmToken = async (): Promise<void> => {
       await apiClient.post("notifications/fcm-token", { token });
       await apiClient.post("auth/push-token", { token, type: "fcm" });
       logger.debug("Native FCM/APNs token registered with backend");
-    }
-
-    // When Expo token is primary, also register native FCM if different (Android hybrid builds).
-    if (isExpo) {
-      try {
-        const Notifications = await import("expo-notifications");
-        const native = await Notifications.getDevicePushTokenAsync();
-        const nativeToken = native?.data?.trim();
-        if (nativeToken && nativeToken !== token) {
-          await apiClient.post("notifications/fcm-token", { token: nativeToken });
-          logger.debug("Secondary native push token registered");
-        }
-      } catch {
-        // Native token optional
-      }
     }
   } catch (error) {
     logger.error(
