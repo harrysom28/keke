@@ -523,11 +523,8 @@ export const cancelScheduledBooking = asyncHandler(async (req, res) => {
 
   // Assigned driver must return to the pool when the booking is cancelled (rider or driver).
   if (ride.driver) {
-    const driver = await Driver.findById(ride.driver._id);
-    if (driver) {
-      driver.isAvailable = true;
-      await driver.save();
-    }
+    const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+    await restoreDriverAvailabilityAfterTrip(ride.driver._id ?? ride.driver);
   }
 
   // Send real-time notification

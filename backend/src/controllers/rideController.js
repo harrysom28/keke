@@ -801,12 +801,11 @@ export const cancelRide = asyncHandler(async (req, res) => {
   ) {
     try {
       const driverId = ride.driver._id ?? ride.driver;
-      const driver = await Driver.findById(driverId);
-      if (driver) {
-        driver.isAvailable = true;
-        await driver.save();
+      const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+      const restored = await restoreDriverAvailabilityAfterTrip(driverId);
+      if (restored) {
         logger.info(
-          `Driver ${driver._id} is_available restored after ${cancelledBy} cancelled ride ${rideId}`
+          `Driver ${driverId} availability restored after ${cancelledBy} cancelled ride ${rideId}`
         );
       }
     } catch (availErr) {
@@ -1301,11 +1300,8 @@ export const assignNewDriver = asyncHandler(async (req, res) => {
   // Release previous driver if one was assigned
   if (ride.driver) {
     const previousDriverId = ride.driver._id || ride.driver;
-    const previousDriver = await Driver.findById(previousDriverId);
-    if (previousDriver) {
-      previousDriver.isAvailable = true;
-      await previousDriver.save();
-    }
+    const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+    await restoreDriverAvailabilityAfterTrip(previousDriverId);
   }
 
   const resetStatus = ride.isScheduled ? 'scheduled' : 'searching';

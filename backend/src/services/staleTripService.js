@@ -68,6 +68,15 @@ export async function flagRideAsStaleTimeout(ride) {
   });
   await ride.save();
 
+  if (ride.driver) {
+    try {
+      const { restoreDriverAvailabilityAfterTrip } = await import('./driverAvailabilityService.js');
+      await restoreDriverAvailabilityAfterTrip(ride.driver);
+    } catch (err) {
+      logger.warn(`Failed to restore driver ${ride.driver} after stale flag: ${err.message}`);
+    }
+  }
+
   await logRideAudit({
     rideId: ride._id,
     action: 'stale_flag',
@@ -90,6 +99,21 @@ export async function flagRideAsStaleTimeout(ride) {
       event_key: 'trip_flagged_timeout',
       data: { subType: 'trip_flagged', rideId: ride._id.toString(), reason: 'timeout' },
     });
+    if (ride.driver) {
+      const driverDoc = await Driver.findById(ride.driver).select('user').lean();
+      if (driverDoc?.user) {
+        await sendToUser(driverDoc.user, 'driver', {
+          title: 'Trip flagged — you are online',
+          message: 'This trip was flagged for review. You can accept new rides now.',
+          type: 'alert',
+          priority: 'high',
+          screen: 'home',
+          ride_id: ride._id,
+          event_key: 'trip_flagged_timeout',
+          data: { subType: 'trip_flagged', rideId: ride._id.toString(), reason: 'timeout' },
+        });
+      }
+    }
   } catch (err) {
     logger.warn(`Stale ride push failed for ride ${ride._id}: ${err.message}`);
   }
@@ -285,7 +309,8 @@ async function autoCancelStuckPrePickupRide(ride) {
   // Free the driver
   if (ride.driver) {
     try {
-      await Driver.findByIdAndUpdate(ride.driver, { isAvailable: true });
+      const { restoreDriverAvailabilityAfterTrip } = await import('./driverAvailabilityService.js');
+      await restoreDriverAvailabilityAfterTrip(ride.driver);
     } catch (err) {
       logger.warn(`Failed to free driver ${ride.driver} after auto-cancel: ${err.message}`);
     }

@@ -1929,8 +1929,8 @@ export const rejectRide = asyncHandler(async (req, res) => {
     }
     await ride.cancelRide('driver', reason || 'Driver cancelled scheduled booking', 0, 'driverCancel');
     await ride.populate('rider', 'name phone profileImage rating deviceToken');
-    driver.isAvailable = true;
-    await driver.save();
+    const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+    await restoreDriverAvailabilityAfterTrip(driver);
 
     try {
       const { sendToUser } = await import('../services/notificationService.js');
@@ -2010,13 +2010,13 @@ export const rejectRide = asyncHandler(async (req, res) => {
       note: `Rejected by driver: ${reason || 'No reason provided'}`,
     });
 
-    driver.isAvailable = true;
-    await driver.save();
+    const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+    await restoreDriverAvailabilityAfterTrip(driver);
   } else {
     // If ride is in progress, cancel it
     await ride.cancelRide('driver', reason, 0);
-    driver.isAvailable = true;
-    await driver.save();
+    const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+    await restoreDriverAvailabilityAfterTrip(driver);
   }
 
   await ride.save();
@@ -2520,9 +2520,9 @@ export const completeRide = asyncHandler(async (req, res) => {
   await ride.populate('rider', 'name phone profileImage rating');
   await ride.populate('vehicleType');
 
-  // Make driver available again
-  driver.isAvailable = true;
-  await driver.save();
+  // Make driver available again for the next trip
+  const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+  await restoreDriverAvailabilityAfterTrip(driver);
 
   // Cancel any automation timers for this ride
   if (global.automationTimers && global.automationTimers.has(rideId)) {

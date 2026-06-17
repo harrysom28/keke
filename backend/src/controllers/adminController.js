@@ -1742,6 +1742,15 @@ export const adminForceCompleteRide = asyncHandler(async (req, res) => {
 
   await ride.save();
 
+  if (ride.driver) {
+    try {
+      const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+      await restoreDriverAvailabilityAfterTrip(ride.driver);
+    } catch (err) {
+      logger.warn(`Admin force-complete: failed to restore driver for ride ${rideId}: ${err.message}`);
+    }
+  }
+
   // Immutable audit log (RideAuditLog pattern; must not break the request)
   try {
     await RideAuditLog.create({
