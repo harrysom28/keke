@@ -23,17 +23,17 @@ const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const Pages = [
   {
     img: require("@/assets/images/onboard-1.png"),
-    title: "Fast, Reliable Rides Across Your City",
+    title: "Ride with Drivers Near You",
     text: "",
   },
   {
     img: require("@/assets/images/onboard-2.png"),
-    title: "Ride with Trusted Drivers",
+    title: "Fast Rides Across Your City",
     text: "",
   },
   {
     img: require("@/assets/images/onboard-3.png"),
-    title: "Monitor your trip",
+    title: "Track Your Trip",
     text: "",
   },
 ];

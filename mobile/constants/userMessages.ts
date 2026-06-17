@@ -4,7 +4,7 @@
  */
 export const UserMessages = {
   genericError: "We couldn't complete that request. Please try again.",
-  networkError: "Can't reach Keke right now. Check your connection and try again.",
+  networkError: "Can't reach Keke Ride right now. Check your connection and try again.",
   authRequired: "Your session expired. Please sign in again.",
   validationHint: "Please check your entries and try again.",
 

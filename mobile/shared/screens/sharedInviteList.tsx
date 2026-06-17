@@ -228,10 +228,10 @@ const SharedInviteList = () => {
 
   const shareMessage =
     referralCode && referralUrl
-      ? `Join me on Keke! Use my invite code ${referralCode} when you sign up. ${referralUrl}`
+      ? `Join me on Keke Ride! Use my invite code ${referralCode} when you sign up. ${referralUrl}`
       : referralCode
-        ? `Join me on Keke! Use my invite code ${referralCode} when you sign up.`
-        : "Join me on Keke - the ride-hailing app!";
+        ? `Join me on Keke Ride! Use my invite code ${referralCode} when you sign up.`
+        : "Join me on Keke Ride - the ride-hailing app!";
 
   const onInviteSelected = async () => {
     if (selectedIds.size === 0) {
@@ -241,7 +241,7 @@ const SharedInviteList = () => {
     try {
       await Share.share({
         message: shareMessage,
-        title: "Invite to Keke",
+        title: "Invite to Keke Ride",
       });
       setSelectedIds(new Set());
     } catch (e) {

@@ -141,8 +141,8 @@ const Authenticate = () => {
         } else if (!err?.response) {
           const apiBase = getApiUrlWithOverride();
           const networkMessage = IS_PHYSICAL_DEVICE
-            ? "Cannot reach Keke. Set your computer's IP in mobile/utils/apiUrlOverride.ts, then reload."
-            : "Cannot reach Keke. Check that the backend is running, then try again.";
+            ? "Cannot reach Keke Ride. Set your computer's IP in mobile/utils/apiUrlOverride.ts, then reload."
+            : "Cannot reach Keke Ride. Check that the backend is running, then try again.";
           showMessage({ type: "danger", message: networkMessage });
           if (__DEV__) console.warn("API base:", apiBase);
         } else {

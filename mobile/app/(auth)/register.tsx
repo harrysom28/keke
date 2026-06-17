@@ -45,14 +45,14 @@ const Register = () => {
               fontFamily: "RobotoBold",
             })}
           >
-            Welcome to Keke
+            Welcome to Keke Ride
           </Text>
           <Text
             style={tw.style(`text-[#A0A0A0] text-lg text-center w-[90%] mt-1`, {
               fontFamily: "RobotoMedium",
             })}
           >
-            Choose your location to start finding the keke around you
+            Choose your location to start finding rides around you
           </Text>
         </View>
       </View>

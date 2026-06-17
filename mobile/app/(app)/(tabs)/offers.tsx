@@ -269,9 +269,9 @@ const ListItem = ({ item, index, showModal }: LProps) => {
 };
 
 const List = [
-  "Eligibility: Valid only for rides booked through the Keke app.",
+  "Eligibility: Valid only for rides booked through the Keke Ride app.",
   "Expiration: Must be used before the expiration date indicated.",
-  "Refunds: Forfeited if canceled by the user; reactivated if canceled by Keke.",
+  "Refunds: Forfeited if canceled by the user; reactivated if canceled by Keke Ride.",
   "Misuse: Misuse leads to cancellation and potential account suspension.",
 ];
 

@@ -69,14 +69,14 @@ const SharedInvite = () => {
     `When your friend signs up with your referral code and completes their first ride, you'll both get a reward after ${required} successful invites.`;
 
   const shareMessage = referralCode
-    ? `Join me on Keke! Use my invite code ${referralCode} when you sign up. ${referralUrl || ""}`
-    : "Join me on Keke - the ride-hailing app!";
+    ? `Join me on Keke Ride! Use my invite code ${referralCode} when you sign up. ${referralUrl || ""}`
+    : "Join me on Keke Ride - the ride-hailing app!";
 
   const onShare = async () => {
     try {
       await Share.share({
         message: shareMessage,
-        title: "Invite to Keke",
+        title: "Invite to Keke Ride",
       });
     } catch (error) {
       console.log(error);

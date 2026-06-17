@@ -59,7 +59,7 @@ const AuthTermsScreen = () => {
               fontFamily: "RobotoRegular",
             })}
           >
-            Welcome to Keke. By using our ride-sharing service, you agree to
+            Welcome to Keke Ride. By using our ride-sharing service, you agree to
             comply with and be bound by the following terms and conditions.
             Please review them carefully.
           </Text>
@@ -78,7 +78,7 @@ const AuthTermsScreen = () => {
               fontFamily: "RobotoRegular",
             })}
           >
-            Keke provides a platform connecting passengers with drivers for
+            Keke Ride provides a platform connecting passengers with drivers for
             transportation services. We act as an intermediary and do not provide
             transportation services directly.
           </Text>

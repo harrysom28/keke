@@ -2146,7 +2146,7 @@ export default function HomeScreen() {
         safeShowMessage({
           type: "success",
           message: "Ride completed ✅",
-          description: "Thanks for riding with Keke!",
+          description: "Thanks for riding with Keke Ride!",
           duration: 6000,
         });
         getActiveRide();
