@@ -58,8 +58,12 @@ import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
-import { ensureForegroundLocationAccess } from "@/utils/locationPermission";
+import { ensureForegroundLocationAccess, ensureDriverBackgroundLocationAccess } from "@/utils/locationPermission";
 import { syncDriverLocationToServer } from "@/utils/driverLocationSync";
+import {
+  startDriverBackgroundLocation,
+  stopDriverBackgroundLocation,
+} from "@/lib/driverBackgroundLocation";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useDriverOnlineHeartbeat } from "@/hooks/useDriverOnlineHeartbeat";
 
@@ -107,7 +111,7 @@ const Home = () => {
   useEffect(() => {
     markInitialDriverRouteHandled();
   }, []);
-  const { subscription, unread_count, driverTimeOnlineFromPusher } =
+  const { subscription, unread_count, driverTimeOnlineFromPusher, driverTripEndedSeq } =
     useSelector(AppDetailsState);
   const [activeRide, setActiveRide] = useState<Partial<TDriverActiveRide>>({});
   const [booking, setBooking] = useState<Partial<TBooking>>({});
@@ -120,6 +124,7 @@ const Home = () => {
   const { user } = useSelector(AuthState);
   const dispatch = useDispatch();
   const notificationEventMountGuardRef = useRef(false);
+  const lastTripEndedSeqRef = useRef(0);
 
   /** Session flag from backend; can stay true while on a job. */
   const sessionOnline = activity?.is_online ?? false;
@@ -236,6 +241,9 @@ const Home = () => {
               longitude: location.longitude,
               address: address?.formattedAddress,
             });
+            await startDriverBackgroundLocation();
+          } else if (!nextAvailable) {
+            await stopDriverBackgroundLocation();
           }
           safeShowMessage({
             type: "success",
@@ -256,6 +264,24 @@ const Home = () => {
     },
     [fetchDriverDashboard, location?.latitude, location?.longitude, address?.formattedAddress]
   );
+
+  useEffect(() => {
+    if (!driverTripEndedSeq || driverTripEndedSeq === lastTripEndedSeqRef.current) {
+      return;
+    }
+    lastTripEndedSeqRef.current = driverTripEndedSeq;
+    fetchDriverDashboard();
+    void (async () => {
+      try {
+        const { data } = await apiClient.get("driver/earnings");
+        if (data?.data?.is_available) {
+          await startDriverBackgroundLocation();
+        }
+      } catch {
+        // ignore — dashboard poll will retry
+      }
+    })();
+  }, [driverTripEndedSeq, fetchDriverDashboard]);
 
   const toggleAvailability = () => {
     if (availabilityLoading) return;
@@ -287,6 +313,16 @@ const Home = () => {
       });
       if (!access.granted) {
         return;
+      }
+      const bg = await ensureDriverBackgroundLocationAccess({
+        showRationale: true,
+      });
+      if (!bg.granted) {
+        safeShowMessage({
+          type: "info",
+          message:
+            "You can go online now, but allow background location in Settings to stay visible to riders when the app is not open.",
+        });
       }
       patchAvailability(true);
     })();
@@ -625,6 +661,7 @@ const Home = () => {
         type: "danger",
         message: "Passenger has cancelled the ride",
       });
+      dispatch(setAppData({ driverTripEndedSeq: Date.now() }));
       getActiveRide();
       getClosestBooking();
     },
@@ -654,15 +691,21 @@ const Home = () => {
       );
       return;
     }
-    if (subType === "fare_received" || subType === "ride_completed") {
+    if (subType === "fare_received" || subType === "ride_completed" || subType === "trip_flagged") {
       fetchDriverDashboard();
       getCurrentUserRef.current?.();
+      if (subType === "trip_flagged" || subType === "ride_completed") {
+        dispatch(setAppData({ driverTripEndedSeq: Date.now() }));
+      }
     }
     const silentDriverKeys = new Set(["ride_requested"]);
     if (
       DRIVER_ALERT_SUBTYPES.includes(subType) &&
       !silentDriverKeys.has(subType)
     ) {
+      if (subType === "passenger_cancelled" || subType === "ride_cancelled") {
+        dispatch(setAppData({ driverTripEndedSeq: Date.now() }));
+      }
       safeShowMessage({ message: notificationEvent.body, type: "info" });
       Vibration.vibrate(300);
     }

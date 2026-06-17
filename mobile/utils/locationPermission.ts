@@ -25,10 +25,10 @@ const COPY: Record<
   rider: {
     rationaleTitle: "Location access",
     rationaleBody:
-      "Keke uses your location to show your position on the map and find nearby drivers when you book a ride.",
+      "Keke Ride uses your location to show your position on the map and find nearby drivers when you book a ride.",
     deniedTitle: "Location access needed",
     deniedBody:
-      "Enable location for Keke in Settings to see your position on the map and book rides.",
+      "Enable location for Keke Ride in Settings to see your position on the map and book rides.",
     servicesTitle: "Turn on location services",
     servicesBody:
       "Location Services are turned off on this device. Turn them on to use the map and book rides.",
@@ -36,10 +36,10 @@ const COPY: Record<
   driver: {
     rationaleTitle: "Location access",
     rationaleBody:
-      "Keke needs your location while you are online so riders can find you and you can receive trip requests.",
+      "Keke Ride needs your location while you are online so riders can find you and you can receive trip requests.",
     deniedTitle: "Location access needed",
     deniedBody:
-      "Enable location for Keke in Settings to go online and receive ride requests.",
+      "Enable location for Keke Ride in Settings to go online and receive ride requests.",
     servicesTitle: "Turn on location services",
     servicesBody:
       "Location Services are turned off. Turn them on before going online or opening the driver map.",
@@ -167,4 +167,60 @@ export async function resolveLocationPermissionFromBanner(
     showRationale: true,
   });
   return result.granted && result.servicesEnabled;
+}
+
+/**
+ * Request background location so online drivers stay discoverable when the app
+ * is backgrounded or the screen is locked. Call when the driver goes online.
+ */
+export async function ensureDriverBackgroundLocationAccess(
+  options: { showRationale?: boolean } = {}
+): Promise<LocationAccessResult> {
+  const foreground = await ensureForegroundLocationAccess("driver", options);
+  if (!foreground.granted) {
+    return foreground;
+  }
+
+  let permission = await Location.getBackgroundPermissionsAsync();
+  if (permission.status === Location.PermissionStatus.GRANTED) {
+    return { ...foreground, granted: true };
+  }
+
+  if (permission.status === Location.PermissionStatus.UNDETERMINED) {
+    if (options.showRationale) {
+      const proceed = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          "Background location",
+          "Allow Keke Ride to access your location in the background while you are online so riders can find you and you can receive trip requests when the app is not open.",
+          [
+            { text: "Not now", style: "cancel", onPress: () => resolve(false) },
+            { text: "Continue", onPress: () => resolve(true) },
+          ]
+        );
+      });
+      if (!proceed) {
+        return { ...foreground, granted: false, canAskAgain: true };
+      }
+    }
+    permission = await Location.requestBackgroundPermissionsAsync();
+  }
+
+  const granted = permission.status === Location.PermissionStatus.GRANTED;
+  if (!granted && options.showRationale) {
+    Alert.alert(
+      "Background location needed",
+      "To stay online when the app is in the background, enable “Always” or “Allow all the time” location for Keke Ride in Settings.",
+      [
+        { text: "Not now", style: "cancel" },
+        { text: "Open Settings", onPress: () => void openLocationSettings() },
+      ]
+    );
+  }
+
+  return {
+    granted,
+    servicesEnabled: true,
+    canAskAgain: permission.canAskAgain !== false,
+    status: permission.status,
+  };
 }

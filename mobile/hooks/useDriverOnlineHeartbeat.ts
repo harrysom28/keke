@@ -13,12 +13,15 @@ type Coords = {
 };
 
 /**
- * PATCH driver location every 30s while online, app is foreground, and screen is focused.
+ * PATCH driver location every 30s while online.
  * Refreshes Mongo `currentLocation.lastUpdated` so discovery excludes stale drivers.
+ *
+ * Prefer `useDriverSession` in driver layout for background-safe heartbeats;
+ * this hook remains for screen-scoped foreground updates with live map coords.
  */
 export function useDriverOnlineHeartbeat(
   enabled: boolean,
-  isFocused: boolean,
+  _isFocused: boolean,
   coords: Coords | null | undefined
 ) {
   const coordsRef = useRef(coords);
@@ -44,21 +47,16 @@ export function useDriverOnlineHeartbeat(
   }, []);
 
   useEffect(() => {
-    if (!enabled || !isFocused) return;
-
-    const appActive = () => AppState.currentState === "active";
-    if (!appActive()) return;
+    if (!enabled) return;
 
     void sendHeartbeat();
 
     const intervalId = setInterval(() => {
-      if (appActive()) {
-        void sendHeartbeat();
-      }
+      void sendHeartbeat();
     }, HEARTBEAT_MS);
 
     const sub = AppState.addEventListener("change", (next: AppStateStatus) => {
-      if (next === "active" && enabled && isFocused) {
+      if (next === "active" && enabled) {
         void sendHeartbeat();
       }
     });
@@ -67,5 +65,5 @@ export function useDriverOnlineHeartbeat(
       clearInterval(intervalId);
       sub.remove();
     };
-  }, [enabled, isFocused, sendHeartbeat]);
+  }, [enabled, sendHeartbeat]);
 }

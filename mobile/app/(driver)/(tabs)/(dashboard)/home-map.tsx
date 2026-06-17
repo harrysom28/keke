@@ -90,7 +90,6 @@ const DRIVER_MAP_ACTIVE_RIDE_STATUSES = new Set([
   "started",
   "in-progress",
   "in_progress",
-  "issue_flagged",
 ]);
 
 interface ILocation {
@@ -387,7 +386,14 @@ export default function HomeScreen() {
         }
 
         const rideStatus = getRideStatusLower(rideRecord);
-        if (isTerminalRideStatus(rideStatus) || !isRestorableRideStatus(rideStatus)) {
+        if (
+          rideStatus === "issue_flagged" ||
+          isTerminalRideStatus(rideStatus) ||
+          !isRestorableRideStatus(rideStatus)
+        ) {
+          if (rideStatus === "issue_flagged") {
+            dispatch(setAppData({ driverTripEndedSeq: Date.now() }));
+          }
           console.log("Driver: Ride terminal or not restorable, clearing map", {
             status: rideStatus,
           });
@@ -627,6 +633,7 @@ export default function HomeScreen() {
         type: "danger",
         message: "Passenger has cancelled the ride",
       });
+      dispatch(setAppData({ driverTripEndedSeq: Date.now() }));
       // Clear map immediately
       setMaps({
         origin: { latitude: 0, longitude: 0 },
@@ -661,7 +668,16 @@ export default function HomeScreen() {
   usePusherChannel({
     channel: activeDriverRideChannel || "private.ride.__inactive__",
     visible: isFocused && !!activeDriverRideChannel,
-    onEvent: () => {
+    onEvent: (event) => {
+      const name = (event as { eventName?: string }).eventName;
+      if (
+        name &&
+        ["trip:flagged", "trip:completed", "trip:force_completed", "ride.completed"].includes(
+          name
+        )
+      ) {
+        dispatch(setAppData({ driverTripEndedSeq: Date.now() }));
+      }
       getActiveRide();
     },
   });
@@ -690,7 +706,10 @@ export default function HomeScreen() {
           onOfferResolved={() =>
             dispatch(setAppData({ driverPendingRideOffer: false }))
           }
-          onTripCompleted={(snapshot) => setTripSummary(snapshot)}
+          onTripCompleted={(snapshot) => {
+            dispatch(setAppData({ driverTripEndedSeq: Date.now() }));
+            setTripSummary(snapshot);
+          }}
         />
       </Portal>
       <Portal>

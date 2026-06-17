@@ -1,11 +1,12 @@
 import { Stack } from "expo-router";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import { Vibration } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 
 import usePusherChannel from "@/hooks/usePusherChannel";
+import { useDriverSession } from "@/hooks/useDriverSession";
 import DriverRideOfferHost from "@/components/driver/DriverRideOfferHost";
-import { setAppData } from "@/store/AppSlice";
+import { AppDetailsState, setAppData } from "@/store/AppSlice";
 import { AuthState } from "@/store/AuthSlice";
 /**
  * Single subscription to `private-driver-{id}` for the whole driver area (tabs + stack).
@@ -71,9 +72,22 @@ function DriverPrivateChannelSubscription() {
   return null;
 }
 
+function DriverSessionHost() {
+  const { driverTripEndedSeq } = useSelector(AppDetailsState);
+  const { refreshOnlineStatus } = useDriverSession();
+
+  useEffect(() => {
+    if (!driverTripEndedSeq) return;
+    void refreshOnlineStatus();
+  }, [driverTripEndedSeq, refreshOnlineStatus]);
+
+  return null;
+}
+
 export default function AppLayout() {
   return (
     <>
+      <DriverSessionHost />
       <DriverPrivateChannelSubscription />
       <DriverRideOfferHost />
       <Stack screenOptions={{ headerShown: false }}>

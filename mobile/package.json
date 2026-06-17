@@ -18,8 +18,9 @@
     "prebuild:android": "npx expo prebuild --clean --platform android",
     "prebuild:ios": "npx expo prebuild --clean --platform ios",
     "patch-manifest": "node scripts/patchManifest.js",
-    "prebuild:with-patch": "npx expo prebuild --clean && npm run patch-manifest",
-    "prebuild:android:with-patch": "rm -rf android && npx expo prebuild --platform android && npm run patch-manifest",
+    "sync-native-icons": "node scripts/syncNativeIcons.js",
+    "prebuild:with-patch": "npx expo prebuild --clean && npm run patch-manifest && npm run sync-native-icons",
+    "prebuild:android:with-patch": "rm -rf android && npx expo prebuild --platform android && npm run patch-manifest && npm run sync-native-icons",
     "build:apk": "npm run prebuild:android:with-patch && cd android && ./gradlew assembleRelease && echo '' && echo '✅ Standalone APK built (no Metro / dev server needed). Install on device:' && echo '   '$(pwd)/app/build/outputs/apk/release/app-release.apk && echo '' && echo '   Copy that file to your phone and install, or run: adb install -r app/build/outputs/apk/release/app-release.apk'"
   },
   "jest": {
@@ -65,6 +66,7 @@
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-system-ui": "~6.0.9",
+    "expo-task-manager": "~14.0.9",
     "expo-updates": "~29.0.16",
     "expo-web-browser": "~15.0.10",
     "i18next": "^25.10.10",

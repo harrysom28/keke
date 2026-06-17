@@ -80,6 +80,8 @@ interface IState {
   driverRideOfferPusherPayload?: Record<string, unknown> | null;
   /** Bumps when a new ride-offer payload is staged for home-map. */
   driverRideOfferPusherSeq?: number;
+  /** Bumps when a driver trip ends or is flagged — refresh online/available UI. */
+  driverTripEndedSeq?: number;
   latest_notification: null | {
     id?: string;
     notification_id: string;
@@ -121,6 +123,7 @@ const InitialState: IState = {
   driverTimeOnlineFromPusher: null,
   driverRideOfferPusherPayload: null,
   driverRideOfferPusherSeq: 0,
+  driverTripEndedSeq: 0,
   latest_notification: null,
 };
 const AppSlice = createSlice({
