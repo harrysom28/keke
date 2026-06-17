@@ -10,12 +10,32 @@
  */
 import * as Notifications from "expo-notifications";
 import messaging from "@react-native-firebase/messaging";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 
 import { configureExpoNotificationHandler } from "@/lib/expoNotificationsSetup";
 import { setupNotificationChannels } from "@/utils/notifications";
 
 configureExpoNotificationHandler();
+
+const RECENT_BG_IDS = new Map<string, number>();
+const BG_DEDUPE_MS = 60_000;
+
+const shouldSkipBackgroundDisplay = (messageId: string | undefined): boolean => {
+  if (!messageId) {
+    return false;
+  }
+  const now = Date.now();
+  for (const [id, ts] of RECENT_BG_IDS.entries()) {
+    if (now - ts > BG_DEDUPE_MS) {
+      RECENT_BG_IDS.delete(id);
+    }
+  }
+  if (RECENT_BG_IDS.has(messageId)) {
+    return true;
+  }
+  RECENT_BG_IDS.set(messageId, now);
+  return false;
+};
 
 const pickChannelId = (priority: string, type?: string): string => {
   if (priority === "high" || priority === "critical") return "rides";
@@ -35,7 +55,22 @@ const pickAndroidPriority = (
 try {
   messaging().setBackgroundMessageHandler(async (remoteMessage) => {
     try {
-      console.log("Background FCM message:", remoteMessage?.messageId);
+      // Foreground delivery is handled by messaging().onMessage + notificationManager.
+      if (AppState.currentState === "active") {
+        return;
+      }
+
+      const messageId = remoteMessage?.messageId || undefined;
+      if (shouldSkipBackgroundDisplay(messageId)) {
+        return;
+      }
+
+      // Mixed/legacy payloads: the OS already displays the notification block.
+      if (remoteMessage?.notification?.title || remoteMessage?.notification?.body) {
+        return;
+      }
+
+      console.log("Background FCM message:", messageId);
 
       const rawData =
         remoteMessage?.data &&
@@ -73,6 +108,9 @@ try {
         pickChannelId(priority, data.type);
 
       await Notifications.scheduleNotificationAsync({
+        identifier:
+          messageId ||
+          `fcm-${String(data.notification_id || data.id || title).slice(0, 64)}`,
         content: {
           title,
           body,

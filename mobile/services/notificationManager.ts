@@ -6,6 +6,7 @@ import type { NotificationRequest } from "expo-notifications";
 import messaging from "@react-native-firebase/messaging";
 import { Pusher, PusherEvent } from "@pusher/pusher-websocket-react-native";
 import { router } from "expo-router";
+import { Platform, Vibration } from "react-native";
 import { registerForPushNotifications } from "@/utils/registerPushToken";
 
 export type NotificationPayload = {
@@ -41,6 +42,7 @@ const recentNotificationKeys = new Map<string, number>();
 const buildStableNotificationKey = (payload: NotificationPayload): string => {
   const semantic = [
     payload.event_key || "",
+    payload.notification_id || "",
     payload.ride_id || "",
     payload.title || "",
     payload.message || "",
@@ -171,6 +173,13 @@ export const handle = (payload: NotificationPayload): void => {
   ) {
     inboxHandler?.(payload);
     return;
+  }
+
+  if (
+    (payload.priority === "high" || payload.priority === "critical") &&
+    Platform.OS === "android"
+  ) {
+    Vibration.vibrate(300);
   }
 
   if (payload.priority === "critical") {
@@ -419,19 +428,32 @@ export const initFirebaseListeners = (): void => {
     return;
   }
   try {
-    foregroundUnsubscribe = messaging().onMessage(async (remoteMessage) => {
+    const messagingInstance = messaging();
+    const setPresentation =
+      messagingInstance.setForegroundNotificationPresentationOptions;
+    if (typeof setPresentation === "function") {
+      Promise.resolve(
+        setPresentation.call(messagingInstance, {
+          alert: false,
+          badge: false,
+          sound: false,
+        })
+      ).catch(() => {});
+    }
+
+    foregroundUnsubscribe = messagingInstance.onMessage(async (remoteMessage) => {
       const payload = mapFirebaseToPayload(remoteMessage);
       handle(payload);
     });
 
-    backgroundOpenUnsubscribe = messaging().onNotificationOpenedApp(
+    backgroundOpenUnsubscribe = messagingInstance.onNotificationOpenedApp(
       (remoteMessage) => {
         const payload = mapFirebaseToPayload(remoteMessage);
         handleNavigation(payload);
       }
     );
 
-    messaging()
+    messagingInstance
       .getInitialNotification()
       .then((remoteMessage) => {
         if (!remoteMessage) {
@@ -463,16 +485,11 @@ export const registerFcmToken = async (): Promise<void> => {
 
     const isExpo = token.startsWith("ExponentPushToken[");
     if (isExpo) {
-      // Expo token is primary. Store it as the only push token so the backend
-      // routes via the Expo Push API. Do NOT also register the native FCM token:
-      // getUserFcmToken prefers a non-Expo fcm_token, so a secondary native
-      // registration would overwrite this and force the Firebase Admin path.
       await apiClient.post("auth/push-token", { token, type: "expo" });
-      await apiClient.post("notifications/fcm-token", { token });
       logger.debug("Expo push token registered with backend");
     } else {
+      // Single native FCM/APNs token — backend delivers via Firebase Admin only.
       await apiClient.post("notifications/fcm-token", { token });
-      await apiClient.post("auth/push-token", { token, type: "fcm" });
       logger.debug("Native FCM/APNs token registered with backend");
     }
   } catch (error) {

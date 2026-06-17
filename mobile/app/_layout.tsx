@@ -200,11 +200,9 @@ const NotificationBootstrap = () => {
   useEffect(() => {
     const receivedSub = Notifications.addNotificationReceivedListener(
       (notification) => {
-        // Foreground remote pushes are already handled in initFirebaseListeners (messaging onMessage).
-        const trigger = notification.request.trigger as { type?: string } | null;
-        if (trigger?.type === "push") {
-          return;
-        }
+        // Route all foreground deliveries through notificationManager (deduped).
+        // OS banners are suppressed in expoNotificationsSetup; FCM onMessage and
+        // Expo received can both fire for the same push when both SDKs are linked.
         notificationManager.handle(
           notificationManager.mapExpoNotificationRequestToPayload(
             notification.request
