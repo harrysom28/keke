@@ -137,43 +137,49 @@ export async function createDedicatedVirtualAccount({
  * @returns {Promise<{ account_number: string, bank_name: string, account_name: string, paystackCustomerCode: string }|null>}
  */
 export async function createDVAForUser(user, preferredBank = 'wema-bank') {
-  const secretKey = getSecretKey();
-  if (!secretKey) return null;
+  try {
+    const secretKey = getSecretKey();
+    if (!secretKey) return null;
 
-  const email = user.email || `user-${user._id}@keke.app`;
-  const nameParts = (user.name || 'Customer User').trim().split(/\s+/);
-  const first_name = nameParts[0] || 'Customer';
-  const last_name = nameParts.slice(1).join(' ') || 'User';
-  const phone = user.phone || undefined;
+    const email = user.email || `user-${user._id}@keke.app`;
+    const nameParts = (user.name || 'Customer User').trim().split(/\s+/);
+    const first_name = nameParts[0] || 'Customer';
+    const last_name = nameParts.slice(1).join(' ') || 'User';
+    const phone = user.phone || undefined;
 
-  let customerCode = user.paystackCustomerCode;
+    let customerCode = user.paystackCustomerCode;
 
-  if (!customerCode) {
-    const customer = await createPaystackCustomer({
-      email,
+    if (!customerCode) {
+      const customer = await createPaystackCustomer({
+        email,
+        first_name,
+        last_name,
+        phone,
+        metadata: { userId: user._id.toString() },
+      });
+      if (!customer) return null;
+      customerCode = customer.customer_code;
+    }
+
+    const dva = await createDedicatedVirtualAccount({
+      customerCode,
+      preferredBank,
       first_name,
       last_name,
       phone,
-      metadata: { userId: user._id.toString() },
     });
-    if (!customer) return null;
-    customerCode = customer.customer_code;
+
+    if (!dva) return null;
+
+    return {
+      ...dva,
+      paystackCustomerCode: customerCode,
+    };
+  } catch (err) {
+    const msg = err?.response?.data?.message || err.message;
+    logger.error(`Paystack createDVAForUser error: ${msg}`);
+    return null;
   }
-
-  const dva = await createDedicatedVirtualAccount({
-    customerCode,
-    preferredBank,
-    first_name,
-    last_name,
-    phone,
-  });
-
-  if (!dva) return null;
-
-  return {
-    ...dva,
-    paystackCustomerCode: customerCode,
-  };
 }
 
 /**

@@ -6,6 +6,8 @@ const EMAIL_REGEX = /^[\w.-]+@[a-zA-Z\d.-]+\.[a-zA-Z]{2,}$/;
 const FULLNAME_REGEX = /^([A-Za-z'-]+)\s+([A-Za-z'-]+)$/;
 /** Referral codes: 4–64 chars, alphanumeric (matches backend format) */
 const REFERRAL_CODE_REGEX = /^[A-Za-z0-9]{4,64}$/;
+/** Nigerian mobile: 0XXXXXXXXXX or +234XXXXXXXXXX (10 digits after country/local prefix) */
+const NIGERIAN_PHONE_REGEX = /^(\+?234|0)[789][01]\d{8}$/;
 
 export type Validator = (value: string) => string | undefined;
 
@@ -59,6 +61,22 @@ export const validators = {
       const trimmed = v?.trim() ?? "";
       if (!trimmed) return undefined;
       return REFERRAL_CODE_REGEX.test(trimmed) ? undefined : msg;
+    },
+
+  nigerianPhone: (
+    msg = "Enter a valid Nigerian phone number (e.g. 08012345678 or +2348012345678)"
+  ): Validator =>
+    (v) => {
+      if (!v?.trim()) return undefined;
+      return NIGERIAN_PHONE_REGEX.test(v.replace(/\s/g, "")) ? undefined : msg;
+    },
+
+  nigerianPhoneRequired: (
+    msg = "Enter a valid Nigerian phone number (e.g. 08012345678 or +2348012345678)"
+  ): Validator =>
+    (v) => {
+      if (!v?.trim()) return "Phone number is required";
+      return NIGERIAN_PHONE_REGEX.test(v.replace(/\s/g, "")) ? undefined : msg;
     },
 
   compose: (...fns: Validator[]): Validator =>

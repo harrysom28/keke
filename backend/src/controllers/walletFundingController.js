@@ -56,19 +56,25 @@ export const getWalletWithDVA = asyncHandler(async (req, res) => {
     if (!driverApproved) {
       // Driver not yet approved - do not create DVA; they get it when admin approves
     } else {
-      const created = await createDVAForUser(fullUser);
-      if (created) {
-        await User.findByIdAndUpdate(userId, {
-          paystackCustomerCode: created.paystackCustomerCode,
-          dvaAccountNumber: created.account_number,
-          dvaBankName: created.bank_name,
-          dvaAccountName: created.account_name,
-        });
-        dva = {
-          account_number: created.account_number,
-          bank_name: created.bank_name,
-          account_name: created.account_name,
-        };
+      try {
+        const created = await createDVAForUser(fullUser);
+        if (created) {
+          await User.findByIdAndUpdate(userId, {
+            paystackCustomerCode: created.paystackCustomerCode,
+            dvaAccountNumber: created.account_number,
+            dvaBankName: created.bank_name,
+            dvaAccountName: created.account_name,
+          });
+          dva = {
+            account_number: created.account_number,
+            bank_name: created.bank_name,
+            account_name: created.account_name,
+          };
+        } else {
+          logger.warn(`DVA creation skipped/failed for wallet fetch user ${userId} — will retry later`);
+        }
+      } catch (dvaErr) {
+        logger.warn(`DVA creation failed for wallet fetch user ${userId}: ${dvaErr.message}`);
       }
     }
     user = await User.findById(userId)

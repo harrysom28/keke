@@ -45,6 +45,7 @@ const renderDropdownImage = () => {
 
 const SignUp = () => {
   const phoneInput = useRef<PhoneInput>(null);
+  const emailPhoneInput = useRef<PhoneInput>(null);
   const submitLockRef = useRef(false);
   const router = useRouter();
   const dispatch = useDispatch();
@@ -245,6 +246,21 @@ const SignUp = () => {
       return showMessage({ type: "warning", message: passwordError });
     }
 
+    const phoneNum = emailPhoneInput?.current
+      ?.getNumberAfterPossiblyEliminatingZero()?.formattedNumber as string;
+    const phoneDigits = phoneNum?.replace(/\s/g, "") ?? "";
+    const phoneError = validators.nigerianPhoneRequired()(phoneDigits);
+    if (phoneError) {
+      return showMessage({ type: "warning", message: phoneError });
+    }
+    if (!emailPhoneInput?.current?.isValidNumber(phoneNum)) {
+      return showMessage({
+        type: "warning",
+        message:
+          "Enter a valid Nigerian phone number (e.g. 08012345678 or +2348012345678)",
+      });
+    }
+
     const referralOk = await validateReferralIfProvided(state.referral_code);
     if (!referralOk) return;
 
@@ -258,6 +274,7 @@ const SignUp = () => {
         name,
         email,
         password,
+        phone: phoneDigits,
         role,
         device_id,
       };
@@ -421,6 +438,29 @@ const SignUp = () => {
             placeholder="Password"
             secureTextEntry
             validate={validators.passwordRequired()}
+          />
+          <PhoneInput
+            ref={emailPhoneInput}
+            defaultCode="NG"
+            layout="first"
+            containerStyle={tw.style(
+              `flex-row items-center gap-x-2 border border-[#b8b8b8] rounded-[8px] overflow-hidden`,
+              { height: verticalScale(40) }
+            )}
+            codeTextStyle={tw.style(`h-full text-[15px]`, {
+              fontFamily: "RobotoMedium",
+            })}
+            textInputProps={{
+              placeholder: "Phone number",
+              placeholderTextColor: "#D0D0D0",
+            }}
+            textInputStyle={tw.style(`h-full text-[15px] `, {
+              fontFamily: "RobotoMedium",
+            })}
+            textContainerStyle={tw`bg-white`}
+            renderDropdownImage={renderDropdownImage()}
+            flagButtonStyle={tw`flex-row items-center pl-5`}
+            filterProps={{ placeholder: "Search country" }}
           />
         </>
       )}

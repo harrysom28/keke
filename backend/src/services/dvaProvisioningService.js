@@ -7,7 +7,9 @@ import { createDVAForUser } from './paystackService.js';
 import logger from '../utils/logger.js';
 
 /**
- * Provision DVA for user in background
+ * Provision DVA for user in background. Never throws — failures are logged
+ * and the user record is left without topupAccountNumber so a later
+ * profile/wallet fetch can retry provisioning.
  */
 export function provisionDvaAsync(userId) {
   setImmediate(async () => {
@@ -17,7 +19,14 @@ export function provisionDvaAsync(userId) {
 
       const settings = await AdminSettings.findOne({ key: 'default' }).lean();
       const preferredBank = settings?.dvaPreferredBank || 'wema-bank';
-      const dva = await createDVAForUser(user, preferredBank);
+
+      let dva = null;
+      try {
+        dva = await createDVAForUser(user, preferredBank);
+      } catch (dvaErr) {
+        logger.warn(`DVA createDVAForUser threw for ${userId}: ${dvaErr.message}`);
+      }
+
       if (dva) {
         user.topupAccountNumber = dva.account_number;
         user.topupBankName = dva.bank_name;
@@ -25,6 +34,10 @@ export function provisionDvaAsync(userId) {
         user.paystackCustomerCode = dva.paystackCustomerCode;
         await user.save({ validateBeforeSave: false });
         logger.info(`DVA provisioned for user ${userId}`);
+      } else {
+        logger.warn(
+          `DVA provisioning deferred for ${userId} — topup account missing; will retry on next profile/wallet fetch`
+        );
       }
     } catch (err) {
       logger.warn(`DVA async provisioning failed for ${userId}: ${err.message}`);

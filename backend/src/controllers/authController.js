@@ -489,12 +489,17 @@ export const login = asyncHandler(async (req, res) => {
 /**
  * Email/password registration (testing / secondary auth — skips OTP)
  * POST /api/auth/email/register
- * Body: name, email, password, device_id?, device_token?
+ * Body: name, email, password, phone, device_id?, device_token?
  */
 export const emailRegister = asyncHandler(async (req, res) => {
-  const { name, email, password, device_id, device_token, role, referral_code } = req.body;
+  const { name, email, password, phone, device_id, device_token, role, referral_code } = req.body;
   const normalizedEmail = String(email).toLowerCase().trim();
   const trimmedName = String(name).trim();
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) {
+    throw new ValidationError('Please provide a valid Nigerian phone number');
+  }
+  const phoneQuery = phoneVariants(phone);
   const userRole = role === 'driver' ? 'driver' : 'passenger';
   const cleanedReferral = typeof referral_code === 'string' ? referral_code.trim() : '';
   let referrerDoc = null;
@@ -505,14 +510,23 @@ export const emailRegister = asyncHandler(async (req, res) => {
     }
   }
 
-  const existingUser = await User.findOne({ email: normalizedEmail });
+  const [existingUser, existingPhoneUser] = await Promise.all([
+    User.findOne({ email: normalizedEmail }),
+    phoneQuery.length
+      ? User.findOne({ phone: { $in: phoneQuery } })
+      : Promise.resolve(null),
+  ]);
   if (existingUser) {
     throw new ConflictError('An account with this email already exists');
+  }
+  if (existingPhoneUser) {
+    throw new ConflictError('An account with this phone number already exists');
   }
 
   const userData = {
     name: trimmedName,
     email: normalizedEmail,
+    phone: normalizedPhone,
     password,
     role: userRole,
     isVerified: true,

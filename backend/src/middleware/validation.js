@@ -1,6 +1,7 @@
 import { validationResult, body, param, query } from 'express-validator';
 import { ValidationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
+import { normalizePhone } from '../utils/phone.js';
 
 /**
  * Check validation results
@@ -152,6 +153,19 @@ export const validationRules = {
       .withMessage('Password is required')
       .isLength({ min: 6 })
       .withMessage('Password must be at least 6 characters'),
+    body('phone')
+      .trim()
+      .notEmpty()
+      .withMessage('Phone number is required')
+      .custom((value) => {
+        const normalized = normalizePhone(value);
+        if (!normalized || !normalized.startsWith('+234') || normalized.length !== 14) {
+          throw new Error(
+            'Please provide a valid Nigerian phone number (e.g. 08012345678 or +2348012345678)'
+          );
+        }
+        return true;
+      }),
     body('role')
       .optional()
       .isIn(['passenger', 'driver'])
