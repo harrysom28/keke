@@ -464,7 +464,6 @@ rideSchema.statics.findActiveRideForRider = async function (riderId) {
         'driver_en_route',
         'arrived',
         'in-progress',
-        'issue_flagged',
       ],
     },
     // Mirror driver-side semantics: future scheduled pickups should not block map/hydration quirks,

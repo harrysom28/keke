@@ -48,6 +48,7 @@ export function getRideStateFromData(data: AnyObj): RideState {
     status === "complete" ||
     status === "dropped_off" ||
     status === "dropoff_completed" ||
+    status === "issue_flagged" ||
     !!data?.drop_off_completed;
 
   if (completed) return "completed";

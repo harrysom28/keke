@@ -689,7 +689,6 @@ export default function HomeScreen() {
     dispatch(setAppData({ isBooking: true }));
     dispatch(
       setRideData({
-        waiting: {} as any,
         origin: { name: "", lat: "", long: "" },
         destination: { name: "", lat: "", long: "" },
         vehicle_type_id: "",
@@ -1176,6 +1175,22 @@ export default function HomeScreen() {
     [applyPusherRideStatusPatchFn, clearRideState, dispatch]
   );
 
+  const handleRideFlagged = useCallback(
+    (payload?: Record<string, unknown> | null) => {
+      safeShowMessage({
+        type: "info",
+        message:
+          payload?.reason === "timeout"
+            ? "Your trip was flagged after a long delay. Support will review it."
+            : "This trip was flagged for review. Support will follow up shortly.",
+      });
+      clearRideState();
+      activeRideSheetRef?.current?.close();
+      dispatch(setAppData({ isBooking: false }));
+    },
+    [clearRideState, dispatch]
+  );
+
   const getActiveRide = () => {
     if (getActiveRideInFlightRef.current) {
       logger.debug("getActiveRide coalesced — request already in flight");
@@ -1299,6 +1314,12 @@ export default function HomeScreen() {
               } as Partial<TRide> & Record<string, unknown>);
               return;
             }
+            if (rideStatus === "issue_flagged") {
+              safeShowMessage({
+                type: "info",
+                message: "This trip was flagged for review. Support will follow up shortly.",
+              });
+            }
             logger.debug("Ride is terminal, clearing ride state", {
               status: rideStatus,
             });
@@ -1379,7 +1400,9 @@ export default function HomeScreen() {
           );
 
           if (uiChanged) {
-            animateToMapDirections(reconciledSnapshot ?? (rideData as TRide));
+            animateToMapDirections(
+              (reconciledSnapshot ?? rideData) as unknown as IARide["data"]["waiting"]
+            );
             // Only open/re-open the sheet if user isn't actively on the
             // driver search or other sub-screens — prevents modal re-popping
             // when user taps "Try another driver" and polling fires.
@@ -1955,7 +1978,8 @@ export default function HomeScreen() {
       !!activeRideId &&
       rideStatus !== "completed" &&
       rideStatus !== "cancelled" &&
-      rideStatus !== "rejected",
+      rideStatus !== "rejected" &&
+      rideStatus !== "issue_flagged",
     onSubscriptionSucceeded: () => {
       if (activeRideId) {
         logger.debug(`Subscribed to ride status updates for ride ${activeRideId}`);
@@ -1965,12 +1989,43 @@ export default function HomeScreen() {
       if (!activeRideId) return;
       const name = (event as { eventName?: string })?.eventName;
       const payload = parsePusherDataPayload((event as { data?: unknown }).data);
+      if (
+        name === "trip:flagged" ||
+        (name === "ride.status" &&
+          String(payload?.status ?? payload?.internal_status ?? "").toLowerCase() ===
+            "issue_flagged")
+      ) {
+        handleRideFlagged(payload);
+        return;
+      }
+      if (
+        name === "trip:completed" ||
+        name === "trip:force_completed" ||
+        name === "ride.completed"
+      ) {
+        const fareRaw = payload?.fare;
+        const rideIdEvt = String(payload?.ride_id ?? payload?.rideId ?? activeRideId ?? "");
+        const fareStr =
+          fareRaw != null && fareRaw !== ""
+            ? String(Math.round(Number(fareRaw)))
+            : undefined;
+        invalidateRecentPlacesCache();
+        openPostRideSummary({
+          ride_id: rideIdEvt,
+          ...(fareStr ? { cost: fareStr } : {}),
+        } as Partial<TRide> & Record<string, unknown>);
+        return;
+      }
       if (name === "ride.status" && payload) {
         const st = String(
           payload.internal_status ?? payload.status ?? ""
         ).toLowerCase();
         if (st === "cancelled" || st === "canceled") {
           handleRideCancelled(payload);
+          return;
+        }
+        if (st === "issue_flagged") {
+          handleRideFlagged(payload);
           return;
         }
         applyPusherRideStatusPatchFn(payload);
@@ -2026,6 +2081,10 @@ export default function HomeScreen() {
           handleRideCancelled(payload);
           return;
         }
+        if (st === "issue_flagged") {
+          handleRideFlagged(payload);
+          return;
+        }
         applyPusherRideStatusPatchFn(payload);
         setTimeout(() => getActiveRide(), 600);
         return;
@@ -2033,6 +2092,10 @@ export default function HomeScreen() {
 
       const subTypeEarly =
         payload?.subType ?? payload?.event_key ?? payload?.sub_type ?? name;
+      if (subTypeEarly === "trip_flagged") {
+        handleRideFlagged(payload);
+        return;
+      }
       if (
         subTypeEarly === "driver_cancelled" ||
         subTypeEarly === "ride_cancelled_by_driver" ||
@@ -2150,6 +2213,11 @@ export default function HomeScreen() {
           duration: 6000,
         });
         getActiveRide();
+        return;
+      }
+
+      if (subType === "trip_flagged") {
+        handleRideFlagged(payload);
         return;
       }
 
@@ -2379,6 +2447,13 @@ export default function HomeScreen() {
         ""
     ).trim();
 
+    if (notifSubType === "trip_flagged") {
+      handleRideFlagged(
+        (notificationEvent?.data ?? null) as Record<string, unknown> | null
+      );
+      return;
+    }
+
     if (notifSubType === "ride_accepted" && notifRideId) {
       applyRideAcceptedPatchFn(notifRideId);
       getActiveRide();
@@ -2426,7 +2501,7 @@ export default function HomeScreen() {
       setPaymentReceipt(true);
       getActiveRide();
     }
-  }, [notificationEvent, applyRideAcceptedPatchFn, handleRideCancelled]);
+  }, [notificationEvent, applyRideAcceptedPatchFn, handleRideCancelled, handleRideFlagged]);
 
   // Use throttled location update hook to prevent rate limiting
   const updateLocation = useThrottledLocationUpdate();
@@ -2464,7 +2539,7 @@ export default function HomeScreen() {
     ).toLowerCase();
     const hasOngoingLiveRide =
       !!activeRideIdForPill &&
-      !["completed", "cancelled", "rejected"].includes(activeRideStatus);
+      !["completed", "cancelled", "rejected", "issue_flagged"].includes(activeRideStatus);
 
     const bookingStatusNorm = normalizeBookingListStatus(booking?.status);
     const bookingCardVisible =

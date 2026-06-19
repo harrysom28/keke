@@ -8,6 +8,8 @@ export const ACTIVE_RIDE_TERMINAL_STATUSES = [
   "failed",
   "expired",
   "done",
+  /** Trip ended for review (stale timeout, driver offline, etc.) — not an active ride. */
+  "issue_flagged",
 ] as const;
 
 export const ACTIVE_RIDE_RESTORABLE_STATUSES = [
@@ -20,7 +22,6 @@ export const ACTIVE_RIDE_RESTORABLE_STATUSES = [
   "started",
   "in-progress",
   "in_progress",
-  "issue_flagged",
 ] as const;
 
 export const STALE_ACTIVE_RIDE_MS = 2 * 60 * 60 * 1000;

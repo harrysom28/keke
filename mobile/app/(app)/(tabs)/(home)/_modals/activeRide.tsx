@@ -254,6 +254,29 @@ const ActiveRideSheet = ({
     };
   }, [currentView?.screen, summaryRideId, summaryPayload, setTemp]);
 
+  const handleTripFlagged = useCallback(
+    (rideId: string, reason?: string) => {
+      try {
+        cancelDriverRequestTimersRef.current();
+      } catch {
+        // ignore
+      }
+      showMessage({
+        type: "info",
+        message:
+          reason === "timeout"
+            ? "Your trip was flagged after a long delay. Support will review it."
+            : "This trip was flagged for review. Support will follow up shortly.",
+        duration: 6000,
+      });
+      handleDismissTripUI();
+    },
+    [handleDismissTripUI]
+  );
+
+  const handleTripFlaggedRef = useRef(handleTripFlagged);
+  handleTripFlaggedRef.current = handleTripFlagged;
+
   const handleTripResolvedRef = useRef(handleTripResolved);
   handleTripResolvedRef.current = handleTripResolved;
 
@@ -265,17 +288,29 @@ const ActiveRideSheet = ({
     const channel = `private.ride.${activeRideId}`;
     lastTripUpdateAtRef.current = Date.now();
 
-    const onAnyResolution = (payload: any) => {
+    const onTripFlagged = (payload: any) => {
+      lastTripUpdateAtRef.current = Date.now();
+      const rideIdFromPayload = String(payload?.rideId || payload?.ride_id || "").trim();
+      const id = rideIdFromPayload || activeRideId;
+      handleTripFlaggedRef.current(id, String(payload?.reason ?? ""));
+    };
+
+    const onTripCompleted = (payload: any) => {
       lastTripUpdateAtRef.current = Date.now();
       const rideIdFromPayload = String(payload?.rideId || payload?.ride_id || "").trim();
       const id = rideIdFromPayload || activeRideId;
       handleTripResolvedRef.current(id);
     };
 
-    const cleanup = pusherManager.subscribeMany(
+    const cleanupFlagged = pusherManager.subscribe(
       channel,
-      ["trip:force_completed", "trip:flagged", "trip:completed", "ride.completed"],
-      onAnyResolution
+      "trip:flagged",
+      onTripFlagged
+    );
+    const cleanupCompleted = pusherManager.subscribeMany(
+      channel,
+      ["trip:force_completed", "trip:completed", "ride.completed"],
+      onTripCompleted
     );
 
     const cleanupApproaching = pusherManager.subscribe(
@@ -292,7 +327,12 @@ const ActiveRideSheet = ({
 
     return () => {
       try {
-        cleanup();
+        cleanupFlagged();
+      } catch {
+        // ignore
+      }
+      try {
+        cleanupCompleted();
       } catch {
         // ignore
       }
@@ -327,8 +367,16 @@ const ActiveRideSheet = ({
           const nextStatus = String(res?.data?.data?.ride?.status ?? res?.data?.ride?.status ?? "").toLowerCase();
           lastTripUpdateAtRef.current = Date.now();
 
-          if (nextStatus && nextStatus !== "in-progress" && nextStatus !== "in_progress") {
-            handleTripResolved(activeRideId);
+          if (
+            nextStatus &&
+            nextStatus !== "in-progress" &&
+            nextStatus !== "in_progress"
+          ) {
+            if (nextStatus === "issue_flagged") {
+              handleTripFlaggedRef.current(activeRideId, "timeout");
+            } else {
+              handleTripResolvedRef.current(activeRideId);
+            }
             return;
           }
         } catch {
