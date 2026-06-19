@@ -281,6 +281,9 @@ PODS:
   - ExpoWebBrowser (15.0.10):
     - ExpoModulesCore
   - EXStructuredHeaders (5.0.0)
+  - EXTaskManager (14.0.9):
+    - ExpoModulesCore
+    - UMAppLoader
   - EXUpdates (29.0.16):
     - EASClient
     - EXManifests
@@ -2587,6 +2590,7 @@ PODS:
   - Sentry (9.13.0):
     - Sentry/Core (= 9.13.0)
   - Sentry/Core (9.13.0)
+  - UMAppLoader (6.0.8)
   - Yoga (0.0.0)
 
 DEPENDENCIES:
@@ -2623,6 +2627,7 @@ DEPENDENCIES:
   - ExpoSystemUI (from `../node_modules/expo-system-ui/ios`)
   - ExpoWebBrowser (from `../node_modules/expo-web-browser/ios`)
   - EXStructuredHeaders (from `../node_modules/expo-structured-headers/ios`)
+  - EXTaskManager (from `../node_modules/expo-task-manager/ios`)
   - EXUpdates (from `../node_modules/expo-updates/ios`)
   - EXUpdatesInterface (from `../node_modules/expo-updates-interface/ios`)
   - FBLazyVector (from `../node_modules/react-native/Libraries/FBLazyVector`)
@@ -2709,6 +2714,7 @@ DEPENDENCIES:
   - "RNSentry (from `../node_modules/@sentry/react-native`)"
   - RNSVG (from `../node_modules/react-native-svg`)
   - RNWorklets (from `../node_modules/react-native-worklets`)
+  - UMAppLoader (from `../node_modules/unimodules-app-loader/ios`)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
 SPEC REPOS:
@@ -2808,6 +2814,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-web-browser/ios"
   EXStructuredHeaders:
     :path: "../node_modules/expo-structured-headers/ios"
+  EXTaskManager:
+    :path: "../node_modules/expo-task-manager/ios"
   EXUpdates:
     :path: "../node_modules/expo-updates/ios"
   EXUpdatesInterface:
@@ -2979,6 +2987,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-svg"
   RNWorklets:
     :path: "../node_modules/react-native-worklets"
+  UMAppLoader:
+    :path: "../node_modules/unimodules-app-loader/ios"
   Yoga:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
@@ -3016,6 +3026,7 @@ SPEC CHECKSUMS:
   ExpoSystemUI: 2ad325f361a2fcd96a464e8574e19935c461c9cc
   ExpoWebBrowser: 17b064c621789e41d4816c95c93f429b84971f52
   EXStructuredHeaders: c951e77f2d936f88637421e9588c976da5827368
+  EXTaskManager: 6f1a66e4c8cc6df6e24c3d90928704bc3013eae5
   EXUpdates: f86d4af4362c2c83a7bf8531d777e9fba680e2d9
   EXUpdatesInterface: 5adf50cb41e079c861da6d9b4b954c3db9a50734
   FBLazyVector: e95a291ad2dadb88e42b06e0c5fb8262de53ec12
@@ -3128,6 +3139,7 @@ SPEC CHECKSUMS:
   SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf
   SDWebImageWebPCoder: 0e06e365080397465cc73a7a9b472d8a3bd0f377
   Sentry: 5c3f67235d4c16fcfab43158a8c1502a18fece9a
+  UMAppLoader: 145337733539f9af9b3dd97eeaa7f3bd97cacb23
   Yoga: 65431d43277b661ebc7289c6c5d82f64ce42cfe0
 
 PODFILE CHECKSUM: 8f10f2f8d5fabdd2d54794ec9e1a92aa1f5def1a
