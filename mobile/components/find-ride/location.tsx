@@ -355,25 +355,73 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
     }
   };
 
-  const handleQuickSelect = async (locationData: any, label: string) => {
-    // If pickup is already set, always set dropoff
-    // Otherwise set pickup
-    const target: "pickup" | "dropoff" = selected.pickup && selected.pickup !== "" ? "dropoff" : "pickup";
-    
-    console.log("🎯 Quick select:", { target, label, hasPickup: !!selected.pickup });
-    
-    setLocation(target, locationData, label);
-    
-    // Force update the display value
-    if (target === "dropoff") {
-      setSelected((prev) => ({
-        ...prev,
-        dropoff: label,
-      }));
+  const ensurePickupDraft = () => {
+    const rideData = ride?.data as IRide | undefined;
+    const reduxOrigin = rideData?.origin as
+      | { name?: string; lat?: string | number; long?: string | number; lng?: string | number; latitude?: string | number; longitude?: string | number }
+      | undefined;
+    const oLat = parseFloat(String(reduxOrigin?.lat ?? reduxOrigin?.latitude ?? ""));
+    const oLng = parseFloat(
+      String(reduxOrigin?.long ?? reduxOrigin?.lng ?? reduxOrigin?.longitude ?? "")
+    );
+    const hasOriginCoords =
+      Number.isFinite(oLat) && Number.isFinite(oLng) && oLat !== 0 && oLng !== 0;
+    const hasPickupLabel =
+      !!selected.pickup &&
+      selected.pickup !== "" &&
+      selected.pickup !== "Enter pick up location";
+
+    if (hasOriginCoords) {
+      if (!hasPickupLabel && reduxOrigin?.name) {
+        setSelected((prev) => ({ ...prev, pickup: reduxOrigin.name! }));
+      }
+      return;
     }
+    if (hasPickupLabel) return;
+    if (currentLocation.latitude === 0 || currentLocation.longitude === 0) return;
+
+    const fromHook =
+      currentAddress?.formattedAddress ||
+      (currentAddress?.street && currentAddress?.city
+        ? `${currentAddress.street}, ${currentAddress.city}`
+        : "");
+    const isBroadExpoAddress =
+      typeof fromHook === "string" && /^[^,]+,?\s*Nigeria\s*$/i.test(fromHook.trim());
+    const hasReadableName =
+      typeof fromHook === "string" &&
+      fromHook.length > 0 &&
+      !fromHook.includes("Current Location") &&
+      !isBroadExpoAddress;
+    const pickupName = hasReadableName ? fromHook : "Current location";
+
+    setEditingPickup(false);
+    setSelected((prev) => ({
+      ...prev,
+      pickup:
+        prev.pickup && prev.pickup !== "" && prev.pickup !== "Enter pick up location"
+          ? prev.pickup
+          : pickupName,
+    }));
+    dispatch(
+      setRideData({
+        origin: {
+          name: pickupName,
+          long: String(currentLocation.longitude),
+          lat: String(currentLocation.latitude),
+        },
+      })
+    );
+  };
+
+  const handleQuickSelect = async (locationData: any, label: string) => {
+    // Recent places are destinations. Picking pickup when GPS hasn't labeled yet caused
+    // intermittent "select location" errors (dropoff stayed empty).
+    ensurePickupDraft();
+    setLocation("dropoff", locationData, label);
+    setSelected((prev) => ({ ...prev, dropoff: label }));
 
     // Automatically save destination to recent places when selected
-    if (target === "dropoff" && locationData.lat && locationData.long && apiConfig) {
+    if (locationData.lat && locationData.long && apiConfig) {
       try {
         await apiClient.post(SAVE_RECENT_PLACE, {
           name: locationData.name || label,

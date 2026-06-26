@@ -66,6 +66,17 @@ import {
 } from "@/lib/driverBackgroundLocation";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { useDriverOnlineHeartbeat } from "@/hooks/useDriverOnlineHeartbeat";
+import { requestDriverOfferRefresh } from "@/utils/driverRideOffer";
+
+/** In-progress ride statuses (not pending offers). Mirrors home-map. */
+const DRIVER_ACCEPTED_ACTIVE_RIDE_STATUSES = new Set([
+  "accepted",
+  "driver_en_route",
+  "arrived",
+  "started",
+  "in-progress",
+  "in_progress",
+]);
 
 /** Map schedule/closest API shape (ride_id, nested pickup/dropoff, scheduled_at) to home card fields. */
 function mapClosestBookingForHome(raw: Record<string, unknown>): Partial<TBooking> & Record<string, unknown> {
@@ -111,7 +122,7 @@ const Home = () => {
   useEffect(() => {
     markInitialDriverRouteHandled();
   }, []);
-  const { subscription, unread_count, driverTimeOnlineFromPusher, driverTripEndedSeq } =
+  const { subscription, unread_count, driverTimeOnlineFromPusher, driverTripEndedSeq, driverPendingRideOffer } =
     useSelector(AppDetailsState);
   const [activeRide, setActiveRide] = useState<Partial<TDriverActiveRide>>({});
   const [booking, setBooking] = useState<Partial<TBooking>>({});
@@ -399,7 +410,7 @@ const Home = () => {
     }
   }, [isFocused, changed]);
 
-  const getActiveRide = () => {
+  const getActiveRide = useCallback(() => {
     axios
       .get(DRIVER_ACTIVE_RIDE, apiConfig)
       .then(({ data }) => {
@@ -414,18 +425,43 @@ const Home = () => {
         const rideId = getActiveRideId(record);
         if (Object.keys(normalized).length === 0 || !rideId) {
           setActiveRide({});
+          if (!driverPendingRideOffer) {
+            requestDriverOfferRefresh(dispatch);
+          }
           return;
         }
         if (isActiveRidePayloadStale(record)) {
           setActiveRide({});
+          if (!driverPendingRideOffer) {
+            requestDriverOfferRefresh(dispatch);
+          }
           return;
         }
         const st = getRideStatusLower(record);
         if (isTerminalRideStatus(st) || !isRestorableRideStatus(st)) {
           setActiveRide({});
+          if (!driverPendingRideOffer) {
+            requestDriverOfferRefresh(dispatch);
+          }
           return;
         }
+
+        const acceptedActiveRide =
+          record.accepted_by_driver === true ||
+          record.acceptedByDriver === true ||
+          DRIVER_ACCEPTED_ACTIVE_RIDE_STATUSES.has(st);
+
+        if (!acceptedActiveRide) {
+          // Pending offer — hand off to layout-level DriverRideOfferHost (same as home-map).
+          setActiveRide({});
+          if (!driverPendingRideOffer) {
+            requestDriverOfferRefresh(dispatch);
+          }
+          return;
+        }
+
         setActiveRide(normalized as Partial<TDriverActiveRide>);
+        dispatch(setAppData({ driverPendingRideOffer: false }));
       })
       .catch((err) => {
         console.log('Active ride error:', err?.response?.data);
@@ -442,6 +478,9 @@ const Home = () => {
         if (status === 404) {
           console.log('Resource not found (404) - silently handling');
           setActiveRide({});
+          if (!driverPendingRideOffer) {
+            requestDriverOfferRefresh(dispatch);
+          }
           return;
         }
         
@@ -453,15 +492,24 @@ const Home = () => {
         });
         setActiveRide({});
       });
-  };
+  }, [apiConfig, dispatch, driverPendingRideOffer]);
 
   useEffect(() => {
     if (isFocused) {
       Animate();
       getActiveRide();
-      // .finally(() => setLoading(false));
     }
-  }, [isFocused]);
+  }, [isFocused, getActiveRide]);
+
+  // Poll for pending offers on the dashboard (home-map already does this on focus;
+  // without it, missed Pusher events only surface after opening Passengers around you).
+  useEffect(() => {
+    if (!isFocused || !isAvailableForRides) return;
+    const intervalId = setInterval(() => {
+      getActiveRide();
+    }, 15_000);
+    return () => clearInterval(intervalId);
+  }, [isFocused, isAvailableForRides, getActiveRide]);
 
   const CancelBooking = (
     booking_id: string,

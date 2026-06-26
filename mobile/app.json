@@ -22,7 +22,8 @@
         "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to take photos for document and vehicle verification.",
         "NSPhotoLibraryUsageDescription": "Allow $(PRODUCT_NAME) to access your photos for document and vehicle verification.",
         "NSLocationWhenInUseUsageDescription": "Keke Ride uses your location to show your position on the map, find nearby drivers or passengers, and match you with rides.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "Keke Ride uses your location while you are online as a driver so riders can find you and you can receive trip requests."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Keke Ride uses your location while you are online as a driver so riders can find you and you can receive trip requests.",
+        "UIBackgroundModes": ["location", "remote-notification"]
       }
     },
     "android": {
