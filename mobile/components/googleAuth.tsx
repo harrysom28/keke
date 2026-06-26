@@ -23,7 +23,18 @@ const GoogleAuthButton = () => {
     if (accessToken) {
       setLoading(true);
       const device_id = await getUniqueId();
-      const device_token = await requestUserNotificationPermission();
+
+      // Push token is best-effort. Google auth must succeed even if this fails.
+      let device_token = "";
+      try {
+        device_token = await requestUserNotificationPermission();
+      } catch (tokenError) {
+        console.warn(
+          "Push token unavailable, continuing Google auth without it:",
+          tokenError
+        );
+      }
+
       axios
         .post(GOOGLE_AUTH, {
           access_token: accessToken,

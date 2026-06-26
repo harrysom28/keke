@@ -83,7 +83,18 @@ const Authenticate = () => {
     }
 
     const device_id = await getUniqueId();
-    const device_token = await requestUserNotificationPermission();
+
+    // Push token is best-effort. Signup completion must succeed even if this fails.
+    let device_token = "";
+    try {
+      device_token = await requestUserNotificationPermission();
+    } catch (tokenError) {
+      console.warn(
+        "Push token unavailable, continuing signup without it:",
+        tokenError
+      );
+    }
+
     const payload: Record<string, unknown> = {
       otp: String(otp).trim(),
       email_phone_number: String(email_phone_number).trim(),

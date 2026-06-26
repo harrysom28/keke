@@ -269,7 +269,18 @@ const SignUp = () => {
 
     try {
       const device_id = await getUniqueId().catch(() => "mobile");
-      const device_token = await requestUserNotificationPermission();
+
+      // Push token is best-effort. Registration must succeed even if this fails.
+      let device_token = "";
+      try {
+        device_token = await requestUserNotificationPermission();
+      } catch (tokenError) {
+        console.warn(
+          "Push token unavailable, continuing registration without it:",
+          tokenError
+        );
+      }
+
       const payload: Record<string, string> = {
         name,
         email,

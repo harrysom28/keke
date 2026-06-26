@@ -36,7 +36,17 @@ export const setupNotificationChannels = async () => {
  */
 export const requestUserNotificationPermission = async (): Promise<string> => {
   let token = "";
-  const { status } = await Notifications.requestPermissionsAsync();
+  let status: Notifications.PermissionStatus = "undetermined";
+  try {
+    const result = await Notifications.requestPermissionsAsync();
+    status = result.status;
+  } catch (permError) {
+    console.warn(
+      "Push permission request failed, continuing without token:",
+      permError
+    );
+    return token;
+  }
   let enabled = false;
   try {
     const authStatus = await messaging().requestPermission();
