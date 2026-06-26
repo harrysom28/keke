@@ -107,15 +107,17 @@ const OtpCode = () => {
     }
     confirmLockRef.current = true;
     setLoading(true);
-    let device_id = "mobile";
-    let device_token: string | null = null;
+    const device_id = await getUniqueId().catch(() => "mobile");
+
+    // Push token is best-effort. Login must succeed even if this fails.
+    let device_token = "";
     try {
-      device_id = await getUniqueId().catch(() => "mobile");
       device_token = await requestUserNotificationPermission();
-    } catch {
-      setLoading(false);
-      confirmLockRef.current = false;
-      return;
+    } catch (tokenError) {
+      console.warn(
+        "Push token unavailable, continuing login without it:",
+        tokenError
+      );
     }
     apiClient
       .post("auth/user/login-with-otp", {

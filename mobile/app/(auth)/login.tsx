@@ -127,7 +127,18 @@ const Login = () => {
     setLoading(true);
     try {
       const device_id = await getUniqueId().catch(() => "mobile");
-      const device_token = await requestUserNotificationPermission();
+
+      // Push token is best-effort. Login must succeed even if this fails.
+      let device_token = "";
+      try {
+        device_token = await requestUserNotificationPermission();
+      } catch (tokenError) {
+        console.warn(
+          "Push token unavailable, continuing login without it:",
+          tokenError
+        );
+      }
+
       const { data } = await apiClient.post("auth/email/login", {
         email: trimmedEmail,
         password,

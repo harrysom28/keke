@@ -57,8 +57,20 @@ export const requestUserNotificationPermission = async (): Promise<string> => {
     const expoToken = await Notifications.getExpoPushTokenAsync();
     token = expoToken?.data ?? "";
   } catch (_) {
-    // Fallback: native FCM/APNs token (backend will use FCM if FCM_SERVER_KEY is set)
-    token = (await Notifications.getDevicePushTokenAsync()).data ?? "";
+    try {
+      // Fallback: native FCM/APNs token (backend will use FCM if FCM_SERVER_KEY is set)
+      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      token = deviceToken?.data ?? "";
+    } catch (fallbackError) {
+      // Both Expo and native token fetch failed (e.g. FIS_AUTH_ERROR
+      // from an unregistered signing cert). Never let this block a
+      // caller's auth flow — return empty and move on.
+      console.warn(
+        "Push token fetch failed, continuing without token:",
+        fallbackError
+      );
+      token = "";
+    }
   }
 
   return token;
