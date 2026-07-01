@@ -17,13 +17,16 @@ import { DRIVER_CURRENT_RIDE_OFFER } from "@/constants";
 import NewRide from "@/app/(driver)/(tabs)/(dashboard)/_modals/newRide";
 import { AppDetailsState, setAppData } from "@/store/AppSlice";
 import { TDriverActiveRide } from "@/types";
-import { getErrorMessage } from "@/utils/errorHandler";
+import { getErrorMessage, isRateLimitError } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import {
   isPendingDriverOffer,
   mapApiOfferToRide,
-  mapPusherPayloadToOffer,
+  resolveOfferPayload,
 } from "@/utils/driverRideOffer";
+
+const OFFER_POLL_MS = 15_000;
+const MAX_EMPTY_OFFER_POLLS = 8;
 
 /**
  * Global driver ride-offer sheet — mounted at driver layout level so incoming
@@ -36,6 +39,7 @@ export default function DriverRideOfferHost() {
   const sheetRef = useRef<BottomSheetMethods>(null);
   const declinedOfferRideIdsRef = useRef<Set<string>>(new Set());
   const lastProcessedSeqRef = useRef(0);
+  const emptyOfferPollsRef = useRef(0);
   const openSheetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
@@ -106,15 +110,22 @@ export default function DriverRideOfferHost() {
       .then(({ data }) => {
         const offerRide = data?.data?.ride ?? null;
         if (!offerRide || typeof offerRide !== "object") {
-          if (!isPendingDriverOffer(ride)) {
-            clearOfferUI();
+          emptyOfferPollsRef.current += 1;
+          if (emptyOfferPollsRef.current >= MAX_EMPTY_OFFER_POLLS) {
+            emptyOfferPollsRef.current = 0;
+            if (!isPendingDriverOffer(ride)) {
+              clearOfferUI();
+            }
           }
           return;
         }
+        emptyOfferPollsRef.current = 0;
         showOffer(mapApiOfferToRide(offerRide as Record<string, unknown>));
       })
       .catch((err) => {
-        if (err?.response?.status === 404) return;
+        if (err?.response?.status === 404 || isRateLimitError(err)) {
+          return;
+        }
         const errorMessage = getErrorMessage(
           err,
           "An error occurred. Please try again."
@@ -148,10 +159,14 @@ export default function DriverRideOfferHost() {
 
     const payload = driverRideOfferPusherPayload;
     if (payload && typeof payload === "object") {
-      Vibration.vibrate([0, 400, 200, 400]);
-      showOffer(mapPusherPayloadToOffer(payload as Record<string, unknown>));
-      dispatch(setAppData({ driverRideOfferPusherPayload: null }));
-      return;
+      const offer = resolveOfferPayload(payload as Record<string, unknown>);
+      if (offer) {
+        Vibration.vibrate([0, 400, 200, 400]);
+        emptyOfferPollsRef.current = 0;
+        showOffer(offer);
+        dispatch(setAppData({ driverRideOfferPusherPayload: null }));
+        return;
+      }
     }
 
     if (driverPendingRideOffer) {
@@ -182,11 +197,14 @@ export default function DriverRideOfferHost() {
 
   // Notification-only path: pending flag without payload — poll until offer loads.
   useEffect(() => {
-    if (!driverPendingRideOffer) return;
+    if (!driverPendingRideOffer) {
+      emptyOfferPollsRef.current = 0;
+      return;
+    }
     if (String(ride?.ride_id ?? "").trim()) return;
 
     refreshCurrentOffer();
-    const interval = setInterval(refreshCurrentOffer, 4000);
+    const interval = setInterval(refreshCurrentOffer, OFFER_POLL_MS);
     return () => clearInterval(interval);
   }, [driverPendingRideOffer, ride?.ride_id, refreshCurrentOffer]);
 

@@ -69,7 +69,7 @@ import TripCompletedModal from "@/shared/modal/tripCompleted";
 import { getGreeting } from "@/lib/getGreeting";
 import { router, useLocalSearchParams } from "expo-router";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
-import { getErrorMessage } from "@/utils/errorHandler";
+import { getErrorMessage, isRateLimitError } from "@/utils/errorHandler";
 import logger from "@/utils/logger";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
@@ -247,7 +247,7 @@ export default function HomeScreen() {
   const getActiveRideLastStartRef = useRef(0);
   /** When Pusher/socket fires during an in-flight GET or inside the min-interval window, run again once. */
   const pendingGetActiveRideRef = useRef(false);
-  const GET_ACTIVE_RIDE_MIN_MS = 400;
+  const GET_ACTIVE_RIDE_MIN_MS = 2500;
   const locationRef = useRef({ latitude: 0, longitude: 0 });
   const {
     location,
@@ -1475,6 +1475,11 @@ export default function HomeScreen() {
           return;
         }
         
+        if (isRateLimitError(err)) {
+          logger.debug('Active ride rate limited (429) — keeping current ride state');
+          return;
+        }
+
         // Log other errors
         logger.error('Active ride error', err, { response: err?.response?.data });
         
@@ -2029,7 +2034,6 @@ export default function HomeScreen() {
           return;
         }
         applyPusherRideStatusPatchFn(payload);
-        setTimeout(() => getActiveRide(), 600);
         return;
       }
       if (
@@ -2086,7 +2090,6 @@ export default function HomeScreen() {
           return;
         }
         applyPusherRideStatusPatchFn(payload);
-        setTimeout(() => getActiveRide(), 600);
         return;
       }
 

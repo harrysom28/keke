@@ -183,6 +183,15 @@ export const isAuthError = (error: unknown): boolean => {
   );
 };
 
+export const isRateLimitError = (error: unknown): boolean => {
+  const err = error as ErrorLike;
+  return (
+    err?.response?.status === 429 ||
+    err?.status === 429 ||
+    err?.statusCode === 429
+  );
+};
+
 export const isNetworkError = (error: unknown): boolean => {
   const err = error as ErrorLike & { code?: string; message?: string };
   return (

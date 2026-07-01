@@ -932,7 +932,7 @@ const ActiveRideSheet = ({
       rideStatus !== "cancelled" &&
       rideStatus !== "rejected";
 
-    const pollMs = riderMatchedOrBeyond ? 25000 : 5000;
+    const pollMs = riderMatchedOrBeyond ? 25000 : 15000;
 
     if (shouldPoll) {
       pollingIntervalRef.current = setInterval(() => {

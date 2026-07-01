@@ -3,6 +3,7 @@ import { driverOfferPaymentUiKey } from "@/utils/paymentMethods";
 import { setAppData } from "@/store/AppSlice";
 import type { Dispatch } from "redux";
 
+/** @deprecated Prefer dispatchDriverOfferHint when offer data is already known. */
 export function requestDriverOfferRefresh(dispatch: Dispatch) {
   dispatch(
     setAppData({
@@ -80,6 +81,40 @@ export function mapApiOfferToRide(
     ),
     offer_expires_in: expiresSec,
   };
+}
+
+/** Resolve API or Pusher offer payloads into a single ride-offer shape. */
+export function resolveOfferPayload(
+  raw: Record<string, unknown>
+): Partial<TDriverActiveRide> | null {
+  const fromApi = mapApiOfferToRide(raw);
+  if (String(fromApi.ride_id ?? "").trim()) {
+    return fromApi;
+  }
+  const fromPusher = mapPusherPayloadToOffer(raw);
+  if (String(fromPusher.ride_id ?? "").trim()) {
+    return fromPusher;
+  }
+  return null;
+}
+
+/**
+ * Surface a pending offer once (Pusher / active-ride) without starting aggressive polling.
+ */
+export function dispatchDriverOfferHint(
+  dispatch: Dispatch,
+  raw: Record<string, unknown>
+) {
+  if (!resolveOfferPayload(raw)) {
+    return;
+  }
+  dispatch(
+    setAppData({
+      driverPendingRideOffer: true,
+      driverRideOfferPusherPayload: raw,
+      driverRideOfferPusherSeq: Date.now(),
+    })
+  );
 }
 
 export function isPendingDriverOffer(

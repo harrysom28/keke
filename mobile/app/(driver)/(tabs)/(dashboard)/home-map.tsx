@@ -57,11 +57,10 @@ import {
 } from "@/utils/activeRidePayload";
 import { getGreeting } from "@/lib/getGreeting";
 import { router } from "expo-router";
-import { getErrorMessage } from "@/utils/errorHandler";
+import { getErrorMessage, isRateLimitError } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
-import { useDriverOnlineHeartbeat } from "@/hooks/useDriverOnlineHeartbeat";
 import { useIsFocused } from "@react-navigation/native";
 import apiClient from "@/utils/apiClient";
 import usePusherChannel from "@/hooks/usePusherChannel";
@@ -72,7 +71,7 @@ import {
 } from "@/utils/driverInitialRoute";
 import { LocationPermissionBanner } from "@/components/LocationPermissionBanner";
 import { resolveLocationPermissionFromBanner } from "@/utils/locationPermission";
-import { requestDriverOfferRefresh } from "@/utils/driverRideOffer";
+import { dispatchDriverOfferHint } from "@/utils/driverRideOffer";
 
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
@@ -190,22 +189,7 @@ export default function HomeScreen() {
       .catch(() => setSessionOnline(false));
   }, [isFocused]);
 
-  useDriverOnlineHeartbeat(
-    sessionOnline,
-    isFocused,
-    location != null &&
-      location.latitude !== 0 &&
-      location.longitude !== 0 &&
-      !isNaN(location.latitude) &&
-      !isNaN(location.longitude)
-      ? {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          address: address?.formattedAddress ?? undefined,
-        }
-      : null
-  );
-
+  // Location heartbeats: useDriverSession in driver/_layout (background + 30s).
   const mapRegion = hasValidLocation && location
     ? {
         latitude: location.latitude,
@@ -364,7 +348,6 @@ export default function HomeScreen() {
               );
             }, 100);
           }
-          requestDriverOfferRefresh(dispatch);
         };
 
         // Backend: driver active-ride should mirror the rider contract — no finished trip should be returned as active.
@@ -414,8 +397,8 @@ export default function HomeScreen() {
           // already showing an offer, to avoid a redundant re-open/flicker).
           newRideSheetRef.current?.close();
           setRide({});
-          if (!driverPendingRideOffer) {
-            requestDriverOfferRefresh(dispatch);
+          if (!driverPendingRideOffer && rideId) {
+            dispatchDriverOfferHint(dispatch, rideRecord);
           }
           return;
         }
@@ -430,10 +413,11 @@ export default function HomeScreen() {
         // Silently handle 404 errors (driver profile not found, etc.)
         if (err?.response?.status === 404) {
           console.log('Resource not found (404) - silently handling');
-          requestDriverOfferRefresh(dispatch);
           return;
         }
-        // Use centralized error handler to extract safe string message
+        if (isRateLimitError(err)) {
+          return;
+        }
         const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
         safeShowMessage({
           type: "danger",
@@ -538,8 +522,12 @@ export default function HomeScreen() {
           setNearby([]);
           return;
         }
+
+        if (isRateLimitError(err)) {
+          setNearby([]);
+          return;
+        }
         
-        // Use centralized error handler to extract safe string message
         const errorMessage = getErrorMessage(err);
         safeShowMessage({
           type: "danger",
@@ -590,7 +578,9 @@ export default function HomeScreen() {
           console.log('Resource not found (404) - silently handling');
           return;
         }
-        // Use centralized error handler to extract safe string message
+        if (isRateLimitError(err)) {
+          return;
+        }
         const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
         safeShowMessage({
           type: "danger",
@@ -603,7 +593,7 @@ export default function HomeScreen() {
   const debouncedUpdateLocation = useMemo(
     () => debounce((loc: { name?: string; lat: number; long: number }) => {
       UpdateLocation(loc);
-    }, 5000), // Update location at most once every 5 seconds
+    }, 12_000),
     [UpdateLocation]
   );
 

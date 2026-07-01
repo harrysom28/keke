@@ -52,7 +52,7 @@ import {
 import { getGreeting } from "@/lib/getGreeting";
 import { router } from "expo-router";
 import { postAcceptScheduledBooking } from "@/utils/acceptScheduledBooking";
-import { getErrorMessage } from "@/utils/errorHandler";
+import { getErrorMessage, isRateLimitError } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
@@ -65,8 +65,7 @@ import {
   stopDriverBackgroundLocation,
 } from "@/lib/driverBackgroundLocation";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
-import { useDriverOnlineHeartbeat } from "@/hooks/useDriverOnlineHeartbeat";
-import { requestDriverOfferRefresh } from "@/utils/driverRideOffer";
+import { dispatchDriverOfferHint } from "@/utils/driverRideOffer";
 
 /** In-progress ride statuses (not pending offers). Mirrors home-map. */
 const DRIVER_ACCEPTED_ACTIVE_RIDE_STATUSES = new Set([
@@ -149,17 +148,7 @@ const Home = () => {
   const isVerified = activity?.verification_status === "approved" && activity?.documents_verified;
 
   const { location, address } = useCurrentLocation({ isFocused, purpose: "driver" });
-  useDriverOnlineHeartbeat(
-    sessionOnline,
-    isFocused,
-    location?.latitude != null && location?.longitude != null
-      ? {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          address: address?.formattedAddress,
-        }
-      : null
-  );
+  // Location heartbeats: useDriverSession in driver/_layout (background + 30s).
 
   const emergencySheetRef = useRef<BottomSheetMethods>(null);
   const bookingSheetRef = useRef<BottomSheetMethods>(null);
@@ -223,6 +212,10 @@ const Home = () => {
 
         if (status === 404) {
           console.log("Resource not found (404) - silently handling");
+          return;
+        }
+
+        if (isRateLimitError(err)) {
           return;
         }
 
@@ -394,8 +387,11 @@ const Home = () => {
           setBooking({});
           return;
         }
+
+        if (isRateLimitError(err)) {
+          return;
+        }
         
-        // Use centralized error handler to extract safe string message
         const errorMessage = getErrorMessage(err);
         safeShowMessage({
           type: "danger",
@@ -425,24 +421,15 @@ const Home = () => {
         const rideId = getActiveRideId(record);
         if (Object.keys(normalized).length === 0 || !rideId) {
           setActiveRide({});
-          if (!driverPendingRideOffer) {
-            requestDriverOfferRefresh(dispatch);
-          }
           return;
         }
         if (isActiveRidePayloadStale(record)) {
           setActiveRide({});
-          if (!driverPendingRideOffer) {
-            requestDriverOfferRefresh(dispatch);
-          }
           return;
         }
         const st = getRideStatusLower(record);
         if (isTerminalRideStatus(st) || !isRestorableRideStatus(st)) {
           setActiveRide({});
-          if (!driverPendingRideOffer) {
-            requestDriverOfferRefresh(dispatch);
-          }
           return;
         }
 
@@ -452,10 +439,9 @@ const Home = () => {
           DRIVER_ACCEPTED_ACTIVE_RIDE_STATUSES.has(st);
 
         if (!acceptedActiveRide) {
-          // Pending offer — hand off to layout-level DriverRideOfferHost (same as home-map).
           setActiveRide({});
-          if (!driverPendingRideOffer) {
-            requestDriverOfferRefresh(dispatch);
+          if (!driverPendingRideOffer && rideId) {
+            dispatchDriverOfferHint(dispatch, record);
           }
           return;
         }
@@ -478,13 +464,14 @@ const Home = () => {
         if (status === 404) {
           console.log('Resource not found (404) - silently handling');
           setActiveRide({});
-          if (!driverPendingRideOffer) {
-            requestDriverOfferRefresh(dispatch);
-          }
+          return;
+        }
+
+        if (isRateLimitError(err)) {
+          setActiveRide({});
           return;
         }
         
-        // Use centralized error handler to extract safe string message
         const errorMessage = getErrorMessage(err);
         safeShowMessage({
           type: "danger",
@@ -501,13 +488,12 @@ const Home = () => {
     }
   }, [isFocused, getActiveRide]);
 
-  // Poll for pending offers on the dashboard (home-map already does this on focus;
-  // without it, missed Pusher events only surface after opening Passengers around you).
+  // Poll for pending offers while available; Pusher is primary — keep HTTP light.
   useEffect(() => {
     if (!isFocused || !isAvailableForRides) return;
     const intervalId = setInterval(() => {
       getActiveRide();
-    }, 15_000);
+    }, 45_000);
     return () => clearInterval(intervalId);
   }, [isFocused, isAvailableForRides, getActiveRide]);
 
