@@ -145,7 +145,14 @@ router.get('/rides/:rideId', protect, validationRules.rideIdParam, validate, rid
 router.get('/drivers/nearby-count', protect, validationRules.nearbyDriverCountQuery, validate, driverController.getNearbyDriverCount);
 
 // Location routes (matching mobile app endpoints)
-router.patch('/update/locations/drivers-passengers', protect, validationRules.updateLocation, validate, driverController.updateLocation);
+router.patch(
+  '/update/locations/drivers-passengers',
+  protect,
+  limiters.locationUpdateLimiter,
+  validationRules.updateLocation,
+  validate,
+  driverController.updateLocation
+);
 router.get('/locations/drivers-passengers', protect, driverController.getLocations);
 
 // Tasks route (matching mobile app endpoint)

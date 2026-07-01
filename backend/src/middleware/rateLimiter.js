@@ -112,6 +112,8 @@ export function initRateLimiters() {
         '/api/health',
         '/api/config/public',
         '/api/driver/home',
+        // Location PATCH has its own limiter (see locationUpdateLimiter); exclude from global bucket.
+        '/api/update/locations/drivers-passengers',
       ];
       const requestUrl = req.originalUrl || req.url || '';
       if (req.user && pollingPaths.some((p) => requestUrl.includes(p))) {
@@ -334,5 +336,27 @@ export function initRateLimiters() {
     legacyHeaders: false,
     keyGenerator: (req) => req.user?._id?.toString() || req.ip || 'anon',
     skip: (req) => process.env.NODE_ENV === 'test',
+  });
+
+  /** Driver/rider GPS PATCH — high-frequency but legitimate; separate from global api bucket. */
+  limiters.locationUpdateLimiter = rateLimit({
+    windowMs,
+    max: parseInt(process.env.LOCATION_UPDATE_RATE_LIMIT_MAX || '500', 10),
+    store: makeRedisStore('rl:location:'),
+    keyGenerator: userOrIpKey,
+    message: {
+      status: 'error',
+      message: 'Too many location updates, please try again later.',
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => process.env.NODE_ENV === 'test',
+    handler: (req, res) => {
+      logger.warn(`Location update rate limit exceeded for ${userOrIpKey(req)}`);
+      res.status(429).json({
+        status: 'error',
+        message: 'Too many location updates, please try again later.',
+      });
+    },
   });
 }
