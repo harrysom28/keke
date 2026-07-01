@@ -34,9 +34,9 @@ const Index = () => {
       return;
     }
 
-    if (roleLoaded && user?.profile?.role) {
-      console.log(user?.profile?.role, "idx");
-      if (user?.profile?.role === "driver") {
+    // Login/signup often hydrates role before /auth/user/me returns — route immediately.
+    if (user?.profile?.role) {
+      if (user.profile.role === "driver") {
         markInitialDriverRouteHandled();
         router.replace("/(driver)/(tabs)/(dashboard)/home");
       } else {

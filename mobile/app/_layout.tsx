@@ -183,19 +183,29 @@ const NotificationBootstrap = () => {
       .catch(() => {});
   }, []);
 
-  // Android 13+ (API 33): POST_NOTIFICATIONS must be in the manifest and requested at runtime
-  // or notifications are dropped on many devices even when the user intends to allow them.
+  // Android 13+: request notification permission once after sign-in so we do not stack
+  // an OS dialog on cold launch before the user reaches login/home.
   useEffect(() => {
+    if (!token) return;
+
     (async () => {
       if (
-        Platform.OS === "android" &&
-        Device.osVersion &&
-        parseInt(Device.osVersion, 10) >= 13
+        Platform.OS !== "android" ||
+        !Device.osVersion ||
+        parseInt(Device.osVersion, 10) < 13
       ) {
-        await Notifications.requestPermissionsAsync();
+        return;
+      }
+      try {
+        const { status } = await Notifications.getPermissionsAsync();
+        if (status === "undetermined") {
+          await Notifications.requestPermissionsAsync();
+        }
+      } catch {
+        // Non-blocking — registerFcmToken retries later.
       }
     })();
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     const receivedSub = Notifications.addNotificationReceivedListener(

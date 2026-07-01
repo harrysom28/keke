@@ -253,7 +253,7 @@ export default function HomeScreen() {
     location,
     address,
     loading: locationLoading,
-    locationError,
+    locationBlocked,
     getLocation: refreshLocation,
   } = useCurrentLocation({ isFocused, purpose: "rider" });
 
@@ -2792,13 +2792,18 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {locationError ? (
+          {locationBlocked ? (
             <LocationPermissionBanner
               purpose="rider"
               loading={locationLoading}
               onEnable={async () => {
                 const ok = await resolveLocationPermissionFromBanner("rider");
-                if (ok) await refreshLocation({ showRationale: false });
+                if (ok) {
+                  await refreshLocation({
+                    showRationale: false,
+                    requestPermission: true,
+                  });
+                }
               }}
             />
           ) : locationLoading && !hasValidLocation ? (

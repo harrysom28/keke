@@ -1,6 +1,5 @@
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
-import { Alert } from "react-native";
 import messaging from "@react-native-firebase/messaging";
 
 /**
@@ -38,8 +37,17 @@ export const requestUserNotificationPermission = async (): Promise<string> => {
   let token = "";
   let status: Notifications.PermissionStatus = "undetermined";
   try {
-    const result = await Notifications.requestPermissionsAsync();
-    status = result.status;
+    const existing = await Notifications.getPermissionsAsync();
+    if (existing.status === "granted") {
+      status = "granted";
+    } else if (existing.status === "denied") {
+      // User already decided — do not re-prompt during login.
+      console.warn("Push notifications denied — continuing without token");
+      return token;
+    } else {
+      const result = await Notifications.requestPermissionsAsync();
+      status = result.status;
+    }
   } catch (permError) {
     console.warn(
       "Push permission request failed, continuing without token:",
@@ -47,19 +55,24 @@ export const requestUserNotificationPermission = async (): Promise<string> => {
     );
     return token;
   }
-  let enabled = false;
-  try {
-    const authStatus = await messaging().requestPermission();
-    enabled =
-      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-  } catch (_) {
-    enabled = status === "granted";
-  }
 
   if (status !== "granted") {
-    Alert.alert("Permission not granted for notifications");
+    console.warn("Push notifications not granted — continuing without token");
+    return token;
   }
+
+  let enabled = true;
+  if (Platform.OS === "ios") {
+    try {
+      const authStatus = await messaging().requestPermission();
+      enabled =
+        authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+        authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+    } catch (_) {
+      enabled = status === "granted";
+    }
+  }
+
   if (!enabled) return token;
 
   try {

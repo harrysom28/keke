@@ -1,6 +1,7 @@
 import * as Location from "expo-location";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState, type AppStateStatus } from "react-native";
 import {
   ensureForegroundLocationAccess,
   type LocationAccessPurpose,
@@ -35,7 +36,8 @@ function applyDevLocationOverride(coords: Location.LocationObjectCoords): Locati
 type SharedSnapshot = {
   location: Location.LocationObjectCoords;
   address: Location.LocationGeocodedAddress;
-  locationError: string;
+  /** True only when location services are off or foreground permission is denied. */
+  locationBlocked: boolean;
   loading: boolean;
 };
 
@@ -67,8 +69,8 @@ const EMPTY_ADDRESS: Location.LocationGeocodedAddress = {
 let sharedSnapshot: SharedSnapshot = {
   location: EMPTY_LOCATION,
   address: EMPTY_ADDRESS,
-  locationError: "",
-  loading: true,
+  locationBlocked: false,
+  loading: false,
 };
 
 let sharedBestAccuracy = Infinity;
@@ -80,6 +82,24 @@ const sharedListeners = new Set<(snapshot: SharedSnapshot) => void>();
 function publishSharedSnapshot(patch: Partial<SharedSnapshot>) {
   sharedSnapshot = { ...sharedSnapshot, ...patch };
   sharedListeners.forEach((listener) => listener(sharedSnapshot));
+}
+
+async function readLocationBlockedState(): Promise<boolean> {
+  const servicesEnabled = await Location.hasServicesEnabledAsync();
+  if (!servicesEnabled) {
+    return true;
+  }
+  const permission = await Location.getForegroundPermissionsAsync();
+  return permission.status === Location.PermissionStatus.DENIED;
+}
+
+function resetSharedLocationWatch() {
+  if (sharedWatchSubscription) {
+    sharedWatchSubscription.remove();
+    sharedWatchSubscription = null;
+  }
+  sharedBestAccuracy = Infinity;
+  sharedStartPromise = null;
 }
 
 async function reverseGeocodeAndPublish(coords: Location.LocationObjectCoords) {
@@ -96,33 +116,69 @@ async function reverseGeocodeAndPublish(coords: Location.LocationObjectCoords) {
   }
 }
 
+/**
+ * Start GPS watch only when foreground permission is already granted.
+ * Does NOT show the OS permission dialog — use getLocation({ requestPermission: true }).
+ */
 async function ensureSharedLocationStarted(
   purpose: LocationAccessPurpose = "rider",
-  showRationale = false
+  options: { requestPermission?: boolean; showRationale?: boolean } = {}
 ) {
-  if (sharedWatchSubscription || sharedStartPromise) {
-    if (sharedStartPromise) {
-      await sharedStartPromise;
-    }
+  const { requestPermission = false, showRationale = false } = options;
+
+  if (sharedWatchSubscription) {
+    publishSharedSnapshot({ locationBlocked: false, loading: false });
+    return;
+  }
+  if (sharedStartPromise) {
+    await sharedStartPromise;
     return;
   }
 
   sharedStartPromise = (async () => {
-    console.log("📍 Starting location watch");
-    publishSharedSnapshot({ loading: true, locationError: "" });
+    publishSharedSnapshot({ loading: true, locationBlocked: false });
 
-    const access = await ensureForegroundLocationAccess(purpose, {
-      showRationale,
-    });
-    if (!access.granted) {
-      publishSharedSnapshot({
-        locationError: access.servicesEnabled
-          ? "Permission to access location was denied"
-          : "Location services are turned off",
-        loading: false,
-      });
+    const servicesEnabled = await Location.hasServicesEnabledAsync();
+    if (!servicesEnabled) {
+      publishSharedSnapshot({ locationBlocked: true, loading: false });
       return;
     }
+
+    let permission = await Location.getForegroundPermissionsAsync();
+
+    if (
+      permission.status !== Location.PermissionStatus.GRANTED &&
+      requestPermission
+    ) {
+      const access = await ensureForegroundLocationAccess(purpose, {
+        showRationale,
+      });
+      if (!access.granted) {
+        publishSharedSnapshot({
+          locationBlocked:
+            access.status === Location.PermissionStatus.DENIED ||
+            access.status === "services_disabled",
+          loading: false,
+        });
+        return;
+      }
+      permission = await Location.getForegroundPermissionsAsync();
+    }
+
+    if (permission.status === Location.PermissionStatus.DENIED) {
+      publishSharedSnapshot({ locationBlocked: true, loading: false });
+      return;
+    }
+
+    if (permission.status !== Location.PermissionStatus.GRANTED) {
+      // Undetermined — user has not been asked yet; no banner, no OS dialog.
+      publishSharedSnapshot({ locationBlocked: false, loading: false });
+      return;
+    }
+
+    publishSharedSnapshot({ locationBlocked: false });
+
+    console.log("📍 Starting location watch");
 
     let bestLocation: Location.LocationObject | null = null;
     let attempts = 0;
@@ -154,8 +210,12 @@ async function ensureSharedLocationStarted(
         if (attempts < maxAttempts) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
-      } catch (getCurrentError: any) {
-        console.warn(`⚠️ Location attempt ${attempts + 1} failed:`, getCurrentError?.message || getCurrentError);
+      } catch (getCurrentError: unknown) {
+        const message =
+          getCurrentError instanceof Error
+            ? getCurrentError.message
+            : String(getCurrentError);
+        console.warn(`⚠️ Location attempt ${attempts + 1} failed:`, message);
         attempts++;
         if (attempts < maxAttempts) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -191,16 +251,15 @@ async function ensureSharedLocationStarted(
 
         sharedBestAccuracy = accuracy;
         const coordsToUse = applyDevLocationOverride(locationResult.coords);
-        publishSharedSnapshot({ location: coordsToUse });
+        publishSharedSnapshot({ location: coordsToUse, locationBlocked: false });
         await reverseGeocodeAndPublish(coordsToUse);
       }
     );
   })()
     .catch((err) => {
-      publishSharedSnapshot({
-        locationError: "Failed to start location watch",
-      });
       console.error("❌ Location error:", err);
+      // GPS/watch failures are not permission problems — do not show the banner.
+      publishSharedSnapshot({ locationBlocked: false });
     })
     .finally(() => {
       publishSharedSnapshot({ loading: false });
@@ -208,6 +267,25 @@ async function ensureSharedLocationStarted(
     });
 
   await sharedStartPromise;
+}
+
+async function syncLocationAccessOnFocus(
+  purpose: LocationAccessPurpose
+): Promise<void> {
+  const blocked = await readLocationBlockedState();
+  publishSharedSnapshot({ locationBlocked: blocked });
+
+  if (blocked) {
+    publishSharedSnapshot({ loading: false });
+    return;
+  }
+
+  const permission = await Location.getForegroundPermissionsAsync();
+  if (permission.status === Location.PermissionStatus.GRANTED) {
+    await ensureSharedLocationStarted(purpose, { requestPermission: false });
+  } else {
+    publishSharedSnapshot({ loading: false, locationBlocked: false });
+  }
 }
 
 function stopSharedLocationIfUnused() {
@@ -222,15 +300,15 @@ function stopSharedLocationIfUnused() {
 export function useCurrentLocation({
   isFocused,
   purpose = "rider",
-  /** Show in-app rationale before the OS dialog (e.g. driver going online). */
   showRationaleOnRequest = false,
 }: {
   isFocused: boolean;
   purpose?: LocationAccessPurpose;
+  /** Show in-app rationale before the OS dialog (e.g. driver going online). */
   showRationaleOnRequest?: boolean;
 }) {
   const [location, setLocation] = useState<Location.LocationObjectCoords>(sharedSnapshot.location);
-  const [locationError, setLocationError] = useState(sharedSnapshot.locationError);
+  const [locationBlocked, setLocationBlocked] = useState(sharedSnapshot.locationBlocked);
   const [address, setAddress] = useState<Location.LocationGeocodedAddress>(sharedSnapshot.address);
   const [loading, setLoading] = useState(sharedSnapshot.loading);
   const isSubscribedRef = useRef(false);
@@ -242,12 +320,18 @@ export function useCurrentLocation({
     rationaleRef.current = showRationaleOnRequest;
   }, [purpose, showRationaleOnRequest]);
 
-  const getLocation = useCallback(async (opts?: { showRationale?: boolean }) => {
-    await ensureSharedLocationStarted(
-      purposeRef.current,
-      opts?.showRationale ?? rationaleRef.current
-    );
-  }, []);
+  const getLocation = useCallback(
+    async (opts?: { showRationale?: boolean; requestPermission?: boolean }) => {
+      if (opts?.requestPermission) {
+        resetSharedLocationWatch();
+      }
+      await ensureSharedLocationStarted(purposeRef.current, {
+        requestPermission: opts?.requestPermission ?? false,
+        showRationale: opts?.showRationale ?? rationaleRef.current,
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     if (isSubscribedRef.current) return;
@@ -255,7 +339,7 @@ export function useCurrentLocation({
     const listener = (nextSnapshot: SharedSnapshot) => {
       setLocation(nextSnapshot.location);
       setAddress(nextSnapshot.address);
-      setLocationError(nextSnapshot.locationError);
+      setLocationBlocked(nextSnapshot.locationBlocked);
       setLoading(nextSnapshot.loading);
     };
     sharedListeners.add(listener);
@@ -266,18 +350,38 @@ export function useCurrentLocation({
     };
   }, []);
 
-  // Request location when this screen is focused (rider home, driver map, etc.)
   useEffect(() => {
     if (!isFocused) return;
 
     sharedConsumers += 1;
-    void getLocation();
+    void syncLocationAccessOnFocus(purposeRef.current);
 
     return () => {
       sharedConsumers = Math.max(0, sharedConsumers - 1);
       stopSharedLocationIfUnused();
     };
-  }, [getLocation, isFocused]);
+  }, [isFocused]);
 
-  return { location, address, locationError, loading, getLocation };
+  useEffect(() => {
+    if (!isFocused) return;
+    const onChange = (state: AppStateStatus) => {
+      if (state === "active") {
+        void syncLocationAccessOnFocus(purposeRef.current);
+      }
+    };
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
+  }, [isFocused]);
+
+  return {
+    location,
+    address,
+    /** @deprecated use locationBlocked — kept so callers migrating gradually still compile */
+    locationError: locationBlocked
+      ? "Permission to access location was denied"
+      : "",
+    locationBlocked,
+    loading,
+    getLocation,
+  };
 }

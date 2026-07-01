@@ -162,7 +162,7 @@ export default function HomeScreen() {
   const {
     location,
     address,
-    locationError: mapLocationError,
+    locationBlocked: mapLocationBlocked,
     loading: mapLocationLoading,
     getLocation: refreshMapLocation,
   } = useCurrentLocation({ isFocused, purpose: "driver" });
@@ -890,13 +890,18 @@ export default function HomeScreen() {
             marginTop: insets.top,
           })}
         >
-          {mapLocationError ? (
+          {mapLocationBlocked ? (
             <LocationPermissionBanner
               purpose="driver"
               loading={mapLocationLoading}
               onEnable={async () => {
                 const ok = await resolveLocationPermissionFromBanner("driver");
-                if (ok) await refreshMapLocation({ showRationale: false });
+                if (ok) {
+                  await refreshMapLocation({
+                    showRationale: false,
+                    requestPermission: true,
+                  });
+                }
               }}
             />
           ) : null}

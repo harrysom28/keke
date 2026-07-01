@@ -77,6 +77,8 @@ export type TDriverActiveRide = {
   payment_type: PaymentType;
   /** Backend sequential offer identifier for stale-accept protection */
   offer_id?: string;
+  /** Seconds until this driver offer expires (incoming-offer UI only) */
+  offer_expires_in?: number;
   ride_id: string;
   status: RideStatus;
   vehicle_id: number;

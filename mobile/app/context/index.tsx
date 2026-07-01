@@ -78,6 +78,7 @@ export default function GlobalContext({
   /** Coalesce /auth/user/me: avoids blowing the global API IP limiter (driver map + home tab + location PATCH). */
   const getCurrentUserInFlightRef = useRef(false);
   const getCurrentUserLastStartRef = useRef(0);
+  const pendingInitialRoleLoadRef = useRef(false);
   const GET_CURRENT_USER_MIN_MS = 8000;
 
   const apiConfig = {
@@ -201,7 +202,9 @@ export default function GlobalContext({
     getCurrentUserLastStartRef.current = now;
     getCurrentUserInFlightRef.current = true;
 
-    setRoleLoaded(false);
+    if (pendingInitialRoleLoadRef.current) {
+      setRoleLoaded(false);
+    }
     apiClient
       .get("auth/user/me")
       .then(({ data }) => {
@@ -226,6 +229,7 @@ export default function GlobalContext({
         setRoleLoaded(true);
       })
       .finally(() => {
+        pendingInitialRoleLoadRef.current = false;
         getCurrentUserInFlightRef.current = false;
       });
   }, [token, dispatch]);
@@ -337,7 +341,11 @@ export default function GlobalContext({
   useEffect(() => {
     if (token) {
       getCurrentUserLastStartRef.current = 0;
+      pendingInitialRoleLoadRef.current = true;
       getCurrentUser();
+    } else {
+      pendingInitialRoleLoadRef.current = false;
+      setRoleLoaded(false);
     }
   }, [token, getCurrentUser]);
 
