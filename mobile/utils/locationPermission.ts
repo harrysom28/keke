@@ -145,6 +145,35 @@ export async function ensureForegroundLocationAccess(
   };
 }
 
+/** Banner tap — OS dialog or Settings; no extra in-app Alert (banner is the prompt). */
+export async function requestLocationFromBanner(
+  purpose: LocationAccessPurpose
+): Promise<boolean> {
+  const servicesEnabled = await Location.hasServicesEnabledAsync();
+  if (!servicesEnabled) {
+    await showServicesDisabledAlert(purpose);
+    return false;
+  }
+
+  const current = await Location.getForegroundPermissionsAsync();
+  if (current.status === Location.PermissionStatus.GRANTED) {
+    return true;
+  }
+
+  if (
+    current.status === Location.PermissionStatus.DENIED &&
+    current.canAskAgain === false
+  ) {
+    await openLocationSettings();
+    return false;
+  }
+
+  const access = await ensureForegroundLocationAccess(purpose, {
+    showRationale: false,
+  });
+  return access.granted && access.servicesEnabled;
+}
+
 /** Rider/driver home banner action when location is blocked. */
 export async function resolveLocationPermissionFromBanner(
   purpose: LocationAccessPurpose

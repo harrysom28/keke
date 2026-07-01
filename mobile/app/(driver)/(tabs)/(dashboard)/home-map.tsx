@@ -70,7 +70,7 @@ import {
   markInitialDriverRouteHandled,
 } from "@/utils/driverInitialRoute";
 import { LocationPermissionBanner } from "@/components/LocationPermissionBanner";
-import { resolveLocationPermissionFromBanner } from "@/utils/locationPermission";
+import { requestLocationFromBanner } from "@/utils/locationPermission";
 import { dispatchDriverOfferHint } from "@/utils/driverRideOffer";
 
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
@@ -895,7 +895,7 @@ export default function HomeScreen() {
               purpose="driver"
               loading={mapLocationLoading}
               onEnable={async () => {
-                const ok = await resolveLocationPermissionFromBanner("driver");
+                const ok = await requestLocationFromBanner("driver");
                 if (ok) {
                   await refreshMapLocation({
                     showRationale: false,

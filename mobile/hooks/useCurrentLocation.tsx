@@ -36,7 +36,7 @@ function applyDevLocationOverride(coords: Location.LocationObjectCoords): Locati
 type SharedSnapshot = {
   location: Location.LocationObjectCoords;
   address: Location.LocationGeocodedAddress;
-  /** True only when location services are off or foreground permission is denied. */
+  /** Show in-app "Enable location" banner — permission denied or not yet granted. */
   locationBlocked: boolean;
   loading: boolean;
 };
@@ -78,19 +78,14 @@ let sharedWatchSubscription: Location.LocationSubscription | null = null;
 let sharedStartPromise: Promise<void> | null = null;
 let sharedConsumers = 0;
 const sharedListeners = new Set<(snapshot: SharedSnapshot) => void>();
+/** One OS location dialog per app session when a map/home screen first needs location. */
+let sharedLaunchPromptAttempted = false;
+/** Brief pause so notification permission (post sign-in) can finish before location OS dialog. */
+const LAUNCH_LOCATION_PROMPT_DEFER_MS = 1000;
 
 function publishSharedSnapshot(patch: Partial<SharedSnapshot>) {
   sharedSnapshot = { ...sharedSnapshot, ...patch };
   sharedListeners.forEach((listener) => listener(sharedSnapshot));
-}
-
-async function readLocationBlockedState(): Promise<boolean> {
-  const servicesEnabled = await Location.hasServicesEnabledAsync();
-  if (!servicesEnabled) {
-    return true;
-  }
-  const permission = await Location.getForegroundPermissionsAsync();
-  return permission.status === Location.PermissionStatus.DENIED;
 }
 
 function resetSharedLocationWatch() {
@@ -116,9 +111,18 @@ async function reverseGeocodeAndPublish(coords: Location.LocationObjectCoords) {
   }
 }
 
+async function refreshLocationBlockedFlag(): Promise<boolean> {
+  const servicesEnabled = await Location.hasServicesEnabledAsync();
+  if (!servicesEnabled) {
+    return true;
+  }
+  const permission = await Location.getForegroundPermissionsAsync();
+  return permission.status !== Location.PermissionStatus.GRANTED;
+}
+
 /**
- * Start GPS watch only when foreground permission is already granted.
- * Does NOT show the OS permission dialog — use getLocation({ requestPermission: true }).
+ * Start GPS watch when foreground permission is granted.
+ * Pass requestPermission: true to show the OS dialog (launch prompt or banner retry).
  */
 async function ensureSharedLocationStarted(
   purpose: LocationAccessPurpose = "rider",
@@ -127,7 +131,8 @@ async function ensureSharedLocationStarted(
   const { requestPermission = false, showRationale = false } = options;
 
   if (sharedWatchSubscription) {
-    publishSharedSnapshot({ locationBlocked: false, loading: false });
+    const blocked = await refreshLocationBlockedFlag();
+    publishSharedSnapshot({ locationBlocked: blocked, loading: false });
     return;
   }
   if (sharedStartPromise) {
@@ -136,7 +141,7 @@ async function ensureSharedLocationStarted(
   }
 
   sharedStartPromise = (async () => {
-    publishSharedSnapshot({ loading: true, locationBlocked: false });
+    publishSharedSnapshot({ loading: true });
 
     const servicesEnabled = await Location.hasServicesEnabledAsync();
     if (!servicesEnabled) {
@@ -155,9 +160,7 @@ async function ensureSharedLocationStarted(
       });
       if (!access.granted) {
         publishSharedSnapshot({
-          locationBlocked:
-            access.status === Location.PermissionStatus.DENIED ||
-            access.status === "services_disabled",
+          locationBlocked: true,
           loading: false,
         });
         return;
@@ -165,14 +168,8 @@ async function ensureSharedLocationStarted(
       permission = await Location.getForegroundPermissionsAsync();
     }
 
-    if (permission.status === Location.PermissionStatus.DENIED) {
-      publishSharedSnapshot({ locationBlocked: true, loading: false });
-      return;
-    }
-
     if (permission.status !== Location.PermissionStatus.GRANTED) {
-      // Undetermined — user has not been asked yet; no banner, no OS dialog.
-      publishSharedSnapshot({ locationBlocked: false, loading: false });
+      publishSharedSnapshot({ locationBlocked: true, loading: false });
       return;
     }
 
@@ -258,7 +255,6 @@ async function ensureSharedLocationStarted(
   })()
     .catch((err) => {
       console.error("❌ Location error:", err);
-      // GPS/watch failures are not permission problems — do not show the banner.
       publishSharedSnapshot({ locationBlocked: false });
     })
     .finally(() => {
@@ -272,20 +268,37 @@ async function ensureSharedLocationStarted(
 async function syncLocationAccessOnFocus(
   purpose: LocationAccessPurpose
 ): Promise<void> {
-  const blocked = await readLocationBlockedState();
-  publishSharedSnapshot({ locationBlocked: blocked });
-
-  if (blocked) {
-    publishSharedSnapshot({ loading: false });
+  const servicesEnabled = await Location.hasServicesEnabledAsync();
+  if (!servicesEnabled) {
+    publishSharedSnapshot({ locationBlocked: true, loading: false });
     return;
   }
 
   const permission = await Location.getForegroundPermissionsAsync();
+
   if (permission.status === Location.PermissionStatus.GRANTED) {
+    publishSharedSnapshot({ locationBlocked: false });
     await ensureSharedLocationStarted(purpose, { requestPermission: false });
-  } else {
-    publishSharedSnapshot({ loading: false, locationBlocked: false });
+    return;
   }
+
+  if (
+    permission.status === Location.PermissionStatus.UNDETERMINED &&
+    !sharedLaunchPromptAttempted
+  ) {
+    sharedLaunchPromptAttempted = true;
+    publishSharedSnapshot({ loading: true, locationBlocked: false });
+    await new Promise((resolve) =>
+      setTimeout(resolve, LAUNCH_LOCATION_PROMPT_DEFER_MS)
+    );
+    await ensureSharedLocationStarted(purpose, {
+      requestPermission: true,
+      showRationale: false,
+    });
+    return;
+  }
+
+  publishSharedSnapshot({ locationBlocked: true, loading: false });
 }
 
 function stopSharedLocationIfUnused() {
@@ -376,7 +389,6 @@ export function useCurrentLocation({
   return {
     location,
     address,
-    /** @deprecated use locationBlocked — kept so callers migrating gradually still compile */
     locationError: locationBlocked
       ? "Permission to access location was denied"
       : "",

@@ -75,7 +75,7 @@ import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import { LocationPermissionBanner } from "@/components/LocationPermissionBanner";
-import { resolveLocationPermissionFromBanner } from "@/utils/locationPermission";
+import { requestLocationFromBanner } from "@/utils/locationPermission";
 import { useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import usePusherChannel from "@/hooks/usePusherChannel";
@@ -2797,7 +2797,7 @@ export default function HomeScreen() {
               purpose="rider"
               loading={locationLoading}
               onEnable={async () => {
-                const ok = await resolveLocationPermissionFromBanner("rider");
+                const ok = await requestLocationFromBanner("rider");
                 if (ok) {
                   await refreshLocation({
                     showRationale: false,
