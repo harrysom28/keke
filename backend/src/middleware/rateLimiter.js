@@ -39,6 +39,13 @@ function makeRedisStore(prefix) {
   });
 }
 
+/** Authenticated requests get a per-user bucket; unauthenticated stay IP-keyed. */
+export function userOrIpKey(req) {
+  const userId = req.user?._id?.toString() || req.user?.id;
+  if (userId) return `user:${userId}`;
+  return `ip:${req.ip}`;
+}
+
 function otpRateLimitKey(req) {
   const body = req.body || {};
   const raw =
@@ -69,6 +76,7 @@ export function initRateLimiters() {
     windowMs,
     max: process.env.NODE_ENV === 'production' ? maxRequests : 10000,
     store: makeRedisStore('rl:api:'),
+    keyGenerator: userOrIpKey,
 
     skip: (req) => {
       if (process.env.NODE_ENV === 'test') {

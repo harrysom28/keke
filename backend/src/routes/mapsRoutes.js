@@ -4,12 +4,14 @@ import * as placeController from '../controllers/placeController.js';
 import { protect } from '../middleware/auth.js';
 import { validationRules, validate } from '../middleware/validation.js';
 import rateLimit from 'express-rate-limit';
+import { userOrIpKey } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
 const mapsRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: parseInt(process.env.MAPS_RATE_LIMIT_MAX || '200', 10),
+  keyGenerator: userOrIpKey,
   message: {
     status: 'error',
     message: 'Too many maps requests, please try again later.',
