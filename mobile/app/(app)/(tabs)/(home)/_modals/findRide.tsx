@@ -47,6 +47,8 @@ interface Props {
    *  grace-period guard and hydrate from the API payload (same shape as active-ride). */
   onRideBooked?: (confirmedRide?: Record<string, unknown> | null) => void;
   onSheetClose?: () => void;
+  /** True while the find-ride bottom sheet is open — gates GPS + keyboard focus. */
+  sheetOpen?: boolean;
   initialDropoff?: {
     name: string;
     lat: number | null;
@@ -54,7 +56,7 @@ interface Props {
   } | null;
 }
 
-const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClose, initialDropoff }: Props) => {
+const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClose, sheetOpen = false, initialDropoff }: Props) => {
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
@@ -93,6 +95,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   }, [dispatch]);
 
   const handleSheetClosed = useCallback(() => {
+    Keyboard.dismiss();
     contentHeightRef.current = 0;
     setHeight(Math.round(screenHeight * 0.6));
     setStep(1);
@@ -426,7 +429,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
             action={() => setStep(2)}
             back={() => handleBack()}
             initialDropoff={initialDropoff}
-            locationSheetActive
+            locationSheetActive={sheetOpen}
           />
         );
         
@@ -531,7 +534,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       default:
         return null;
     }
-  }, [step, handleBack, dispatch, bottomSheetRef, ride]);
+  }, [step, handleBack, dispatch, bottomSheetRef, ride, sheetOpen, initialDropoff]);
 
   // Ensure height is always a valid number (pixels)
   const getValidHeight = (): number => {
@@ -562,7 +565,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   };
 
   // Don't render the BottomSheet at all if there's no valid content
-  const content = useMemo(() => RenderView(), [step, handleBack, dispatch, bottomSheetRef, ride]);
+  const content = useMemo(() => RenderView(), [RenderView]);
   
   // If there's no content, don't render anything
   if (!content) return null;

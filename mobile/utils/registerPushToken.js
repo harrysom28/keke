@@ -28,7 +28,8 @@ function formatPushError(err) {
   }
 }
 
-export async function registerForPushNotifications() {
+export async function registerForPushNotifications(options = {}) {
+  const { requestPermission = false } = options;
   if (!Device.isDevice) {
     console.log("Push notifications only work on physical devices");
     return null;
@@ -36,10 +37,16 @@ export async function registerForPushNotifications() {
 
   await setupNotificationChannels();
 
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  const { status: existingStatus, canAskAgain } =
+    await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
 
-  if (existingStatus !== "granted") {
+  if (existingStatus === "granted") {
+    finalStatus = "granted";
+  } else if (existingStatus === "denied" && canAskAgain === false) {
+    // User permanently declined — never re-prompt.
+    return null;
+  } else if (requestPermission) {
     const { status } = await Notifications.requestPermissionsAsync({
       ios: {
         allowAlert: true,
@@ -48,6 +55,8 @@ export async function registerForPushNotifications() {
       },
     });
     finalStatus = status;
+  } else {
+    return null;
   }
 
   if (finalStatus !== "granted") {

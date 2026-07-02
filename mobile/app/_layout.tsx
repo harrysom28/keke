@@ -17,8 +17,8 @@ import { addIncomingNotification, setLatestNotification, setUnreadCount } from "
 import { setAuthData } from "@/store/AuthSlice";
 import { getStoredTokens, setStoredTokens } from "@/utils/secureTokenStorage";
 import React, { useContext, useEffect, useRef, useState } from "react";
-import * as Device from "expo-device";
-import { AppState, LogBox, Platform, type AppStateStatus } from "react-native";
+import { AppState, LogBox, type AppStateStatus } from "react-native";
+import { promptForPushNotificationsOnce, resetNotificationPermissionSession, notificationPermissionCanRequest, notificationPermissionIsGranted } from "@/utils/notifications";
 
 LogBox.ignoreLogs([
   "Location update failed",
@@ -183,28 +183,47 @@ const NotificationBootstrap = () => {
       .catch(() => {});
   }, []);
 
-  // Android 13+: request notification permission once after sign-in so we do not stack
-  // an OS dialog on cold launch before the user reaches login/home.
+  // One OS notification dialog per session after sign-in (before location prompt on home).
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      resetNotificationPermissionSession();
+      return;
+    }
 
-    (async () => {
-      if (
-        Platform.OS !== "android" ||
-        !Device.osVersion ||
-        parseInt(Device.osVersion, 10) < 13
-      ) {
-        return;
-      }
-      try {
-        const { status } = await Notifications.getPermissionsAsync();
-        if (status === "undetermined") {
-          await Notifications.requestPermissionsAsync();
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const perm = await Notifications.getPermissionsAsync();
+          if (cancelled) {
+            return;
+          }
+
+          if (notificationPermissionIsGranted(perm)) {
+            await notificationManager.registerFcmToken();
+            return;
+          }
+
+          if (!notificationPermissionCanRequest(perm)) {
+            return;
+          }
+
+          const granted = await promptForPushNotificationsOnce();
+          if (cancelled || !granted) {
+            return;
+          }
+
+          await notificationManager.registerFcmToken();
+        } catch {
+          // Non-blocking — user can enable notifications later from Settings.
         }
-      } catch {
-        // Non-blocking — registerFcmToken retries later.
-      }
-    })();
+      })();
+    }, 1200);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [token]);
 
   useEffect(() => {
@@ -234,20 +253,21 @@ const NotificationBootstrap = () => {
     };
   }, []);
 
-  useEffect(() => {
-    if (!token) {
-      return;
-    }
-    notificationManager.registerFcmToken();
-  }, [token]);
-
-  // Re-register when returning to foreground (permission/token can change; iOS may rotate FCM token).
+  // Re-register when returning to foreground only if permission is already granted.
   useEffect(() => {
     if (!token) return;
     const onChange = (state: AppStateStatus) => {
-      if (state === "active") {
-        notificationManager.registerFcmToken();
-      }
+      if (state !== "active") return;
+      void (async () => {
+        try {
+          const perm = await Notifications.getPermissionsAsync();
+          if (notificationPermissionIsGranted(perm)) {
+            await notificationManager.registerFcmToken();
+          }
+        } catch {
+          // Silent — denied/undetermined must not trigger permission or token loops.
+        }
+      })();
     };
     const sub = AppState.addEventListener("change", onChange);
     return () => sub.remove();

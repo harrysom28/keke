@@ -29,72 +29,120 @@ export const setupNotificationChannels = async () => {
   }
 };
 
+/** Serialize concurrent prompt attempts within one signed-in session. */
+let notificationPromptPromise: Promise<boolean> | null = null;
+
+export function resetNotificationPermissionSession(): void {
+  notificationPromptPromise = null;
+}
+
+export function notificationPermissionIsGranted(
+  perm: Notifications.NotificationPermissionsStatus
+): boolean {
+  return perm.granted === true || perm.status === "granted";
+}
+
 /**
- * Prefer Expo Push Token so the backend can use Expo Push API (no FCM key required).
- * Falls back to native device token if getExpoPushTokenAsync is not available (e.g. missing projectId).
+ * Android 13+ often reports status "denied" before the user has ever been asked
+ * (notifications not enabled yet). Only skip when canAskAgain is explicitly false.
  */
-export const requestUserNotificationPermission = async (): Promise<string> => {
-  let token = "";
-  let status: Notifications.PermissionStatus = "undetermined";
+export function notificationPermissionCanRequest(
+  perm: Notifications.NotificationPermissionsStatus
+): boolean {
+  if (notificationPermissionIsGranted(perm)) {
+    return false;
+  }
+  if (perm.status === "undetermined") {
+    return true;
+  }
+  return perm.canAskAgain !== false;
+}
+
+async function fetchPushTokenWhenGranted(): Promise<string> {
   try {
-    const existing = await Notifications.getPermissionsAsync();
-    if (existing.status === "granted") {
-      status = "granted";
-    } else if (existing.status === "denied") {
-      // User already decided — do not re-prompt during login.
-      console.warn("Push notifications denied — continuing without token");
-      return token;
-    } else {
-      const result = await Notifications.requestPermissionsAsync();
-      status = result.status;
-    }
-  } catch (permError) {
-    console.warn(
-      "Push permission request failed, continuing without token:",
-      permError
-    );
-    return token;
-  }
-
-  if (status !== "granted") {
-    console.warn("Push notifications not granted — continuing without token");
-    return token;
-  }
-
-  let enabled = true;
-  if (Platform.OS === "ios") {
-    try {
-      const authStatus = await messaging().requestPermission();
-      enabled =
-        authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-        authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-    } catch (_) {
-      enabled = status === "granted";
-    }
-  }
-
-  if (!enabled) return token;
-
-  try {
-    // Prefer Expo push token (ExponentPushToken[...]) so backend can use Expo Push API
     const expoToken = await Notifications.getExpoPushTokenAsync();
-    token = expoToken?.data ?? "";
-  } catch (_) {
+    return expoToken?.data ?? "";
+  } catch {
     try {
-      // Fallback: native FCM/APNs token (backend will use FCM if FCM_SERVER_KEY is set)
       const deviceToken = await Notifications.getDevicePushTokenAsync();
-      token = deviceToken?.data ?? "";
+      return deviceToken?.data ?? "";
     } catch (fallbackError) {
-      // Both Expo and native token fetch failed (e.g. FIS_AUTH_ERROR
-      // from an unregistered signing cert). Never let this block a
-      // caller's auth flow — return empty and move on.
       console.warn(
         "Push token fetch failed, continuing without token:",
         fallbackError
       );
-      token = "";
+      return "";
     }
   }
+}
 
-  return token;
-};
+/**
+ * Read push token only when permission is already granted — never shows the OS dialog.
+ * Use during login/signup; the post-sign-in bootstrap handles the one-time prompt.
+ */
+export async function getPushTokenIfGranted(): Promise<string> {
+  try {
+    const existing = await Notifications.getPermissionsAsync();
+    if (!notificationPermissionIsGranted(existing)) {
+      return "";
+    }
+    return fetchPushTokenWhenGranted();
+  } catch (permError) {
+    console.warn(
+      "Push permission check failed, continuing without token:",
+      permError
+    );
+    return "";
+  }
+}
+
+/**
+ * Show the OS notification permission dialog when we are allowed to ask.
+ * Returns true if notifications are allowed after the attempt.
+ */
+export async function promptForPushNotificationsOnce(): Promise<boolean> {
+  if (notificationPromptPromise) {
+    return notificationPromptPromise;
+  }
+
+  notificationPromptPromise = (async () => {
+    try {
+      const existing = await Notifications.getPermissionsAsync();
+      if (notificationPermissionIsGranted(existing)) {
+        return true;
+      }
+      if (!notificationPermissionCanRequest(existing)) {
+        return false;
+      }
+
+      const result = await Notifications.requestPermissionsAsync();
+      if (!notificationPermissionIsGranted(result)) {
+        return false;
+      }
+
+      if (Platform.OS === "ios") {
+        try {
+          const authStatus = await messaging().requestPermission();
+          return (
+            authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+            authStatus === messaging.AuthorizationStatus.PROVISIONAL
+          );
+        } catch {
+          return true;
+        }
+      }
+
+      return true;
+    } catch (permError) {
+      console.warn("Push permission request failed:", permError);
+      return false;
+    }
+  })();
+
+  return notificationPromptPromise;
+}
+
+/** @deprecated Use getPushTokenIfGranted — login must not prompt; _layout handles one post-sign-in ask. */
+export async function requestUserNotificationPermission(): Promise<string> {
+  return getPushTokenIfGranted();
+}

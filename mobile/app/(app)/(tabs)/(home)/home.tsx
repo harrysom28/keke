@@ -269,6 +269,7 @@ export default function HomeScreen() {
   const [trigger, setTrigger] = useState(0);
   const [dismissedBookingId, setDismissedBookingId] = useState<string | null>(null);
   const [bookRideOpenVersion, setBookRideOpenVersion] = useState(0);
+  const [findRideSheetOpen, setFindRideSheetOpen] = useState(false);
   const [nearby, setNearby] = useState<
     {
       location: {
@@ -710,6 +711,7 @@ export default function HomeScreen() {
     }
 
     setTimeout(() => {
+      setFindRideSheetOpen(true);
       rideSheetRef?.current?.open();
     }, 100);
   }, [dispatch]);
@@ -3280,8 +3282,12 @@ export default function HomeScreen() {
       <Portal>
         <FindRideSheet
           bottomSheetRef={rideSheetRef}
+          sheetOpen={findRideSheetOpen}
           getActiveRide={getActiveRide}
-          onSheetClose={() => setInitialDropoff(null)}
+          onSheetClose={() => {
+            setFindRideSheetOpen(false);
+            setInitialDropoff(null);
+          }}
           initialDropoff={initialDropoff}
           onRideBooked={(confirmedRide) => {
             justBookedRef.current = true;

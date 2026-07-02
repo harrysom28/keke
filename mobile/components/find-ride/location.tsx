@@ -814,7 +814,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
                   initialValue={selected.dropoff}
                   userLat={currentLocation.latitude}
                   userLng={currentLocation.longitude}
-                  autoFocus={editingDropoff || !selected.dropoff}
+                  autoFocus={locationSheetActive && (editingDropoff || !selected.dropoff)}
                   showClearButton={false}
                   onPlaceSelected={async (place) => {
                     Keyboard.dismiss();

@@ -81,7 +81,7 @@ const sharedListeners = new Set<(snapshot: SharedSnapshot) => void>();
 /** One OS location dialog per app session when a map/home screen first needs location. */
 let sharedLaunchPromptAttempted = false;
 /** Brief pause so notification permission (post sign-in) can finish before location OS dialog. */
-const LAUNCH_LOCATION_PROMPT_DEFER_MS = 1000;
+const LAUNCH_LOCATION_PROMPT_DEFER_MS = 1800;
 
 function publishSharedSnapshot(patch: Partial<SharedSnapshot>) {
   sharedSnapshot = { ...sharedSnapshot, ...patch };

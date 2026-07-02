@@ -59,6 +59,7 @@ let foregroundUnsubscribe: (() => void) | null = null;
 let backgroundOpenUnsubscribe: (() => void) | null = null;
 let firebaseInitialized = false;
 let pusherChannelName: string | null = null;
+let registerFcmTokenInFlight: Promise<void> | null = null;
 
 const pusher = Pusher.getInstance();
 
@@ -476,29 +477,40 @@ export const initFirebaseListeners = (): void => {
 };
 
 export const registerFcmToken = async (): Promise<void> => {
-  try {
-    const token = await registerForPushNotifications();
-    if (!token) {
-      logger.debug("Push token not available (likely simulator or permissions denied)");
-      return;
-    }
-
-    const isExpo = token.startsWith("ExponentPushToken[");
-    if (isExpo) {
-      await apiClient.post("auth/push-token", { token, type: "expo" });
-      logger.debug("Expo push token registered with backend");
-    } else {
-      // Single native FCM/APNs token — backend delivers via Firebase Admin only.
-      await apiClient.post("notifications/fcm-token", { token });
-      logger.debug("Native FCM/APNs token registered with backend");
-    }
-  } catch (error) {
-    logger.error(
-      "FCM token registration failed",
-      error instanceof Error ? error : undefined,
-      { detail: String(error) }
-    );
+  if (registerFcmTokenInFlight) {
+    await registerFcmTokenInFlight;
+    return;
   }
+
+  registerFcmTokenInFlight = (async () => {
+    try {
+      const token = await registerForPushNotifications({ requestPermission: false });
+      if (!token) {
+        logger.debug("Push token not available (likely simulator or permissions denied)");
+        return;
+      }
+
+      const isExpo = token.startsWith("ExponentPushToken[");
+      if (isExpo) {
+        await apiClient.post("auth/push-token", { token, type: "expo" });
+        logger.debug("Expo push token registered with backend");
+      } else {
+        // Single native FCM/APNs token — backend delivers via Firebase Admin only.
+        await apiClient.post("notifications/fcm-token", { token });
+        logger.debug("Native FCM/APNs token registered with backend");
+      }
+    } catch (error) {
+      logger.error(
+        "FCM token registration failed",
+        error instanceof Error ? error : undefined,
+        { detail: String(error) }
+      );
+    } finally {
+      registerFcmTokenInFlight = null;
+    }
+  })();
+
+  await registerFcmTokenInFlight;
 };
 
 export const cleanupNotificationListeners = (): void => {
