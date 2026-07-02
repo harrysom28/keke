@@ -61,7 +61,6 @@ import { getErrorMessage, isRateLimitError } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
-import { usePostSignInNotificationPrompt } from "@/hooks/usePostSignInNotificationPrompt";
 import { useIsFocused } from "@react-navigation/native";
 import apiClient from "@/utils/apiClient";
 import usePusherChannel from "@/hooks/usePusherChannel";
@@ -114,7 +113,6 @@ export default function HomeScreen() {
   const { getCurrentUser, apiConfig, notificationEvent } =
     useContext(AppContext);
   const isFocused = useIsFocused();
-  usePostSignInNotificationPrompt(isFocused);
   const emergencySheetRef = useRef<BottomSheetMethods>(null);
   const notificationEventMountGuardRef = useRef(false);
   const { user } = useSelector(AuthState);

@@ -17,8 +17,8 @@ import { addIncomingNotification, setLatestNotification, setUnreadCount } from "
 import { setAuthData } from "@/store/AuthSlice";
 import { getStoredTokens, setStoredTokens } from "@/utils/secureTokenStorage";
 import React, { useContext, useEffect, useRef, useState } from "react";
-import { AppState, LogBox, type AppStateStatus } from "react-native";
-import { promptForPushNotificationsOnce, resetNotificationPermissionSession, notificationPermissionIsGranted } from "@/utils/notifications";
+import { AppState, LogBox } from "react-native";
+import { promptForPushNotificationsOnce, resetNotificationPermissionSession, notificationPermissionCanRequest, notificationPermissionIsGranted } from "@/utils/notifications";
 
 LogBox.ignoreLogs([
   "Location update failed",
@@ -183,23 +183,69 @@ const NotificationBootstrap = () => {
       .catch(() => {});
   }, []);
 
-  // If already granted at sign-in, register silently. OS prompt runs on focused home/map.
+  // If already granted at sign-in, register silently. Otherwise show the OS dialog once
+  // the app is confirmed active — retried on AppState changes since a fixed timer can
+  // fire while the app is still transitioning between routes on cold start.
   useEffect(() => {
     if (!token) {
       resetNotificationPermissionSession();
       return;
     }
 
-    void (async () => {
+    let cancelled = false;
+    let settledTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const attempt = async () => {
+      if (cancelled || AppState.currentState !== "active") {
+        return;
+      }
       try {
         const perm = await Notifications.getPermissionsAsync();
+        if (cancelled) return;
+
         if (notificationPermissionIsGranted(perm)) {
           await notificationManager.registerFcmToken();
+          return;
         }
-      } catch {
-        // Non-blocking.
+
+        if (!notificationPermissionCanRequest(perm)) {
+          return;
+        }
+
+        const granted = await promptForPushNotificationsOnce();
+        if (cancelled || !granted) return;
+
+        await notificationManager.registerFcmToken();
+      } catch (error) {
+        if (__DEV__) {
+          console.warn("Notification permission bootstrap failed:", error);
+        }
       }
-    })();
+    };
+
+    const scheduleAttempt = (delayMs: number) => {
+      if (settledTimer) clearTimeout(settledTimer);
+      settledTimer = setTimeout(() => {
+        void attempt();
+      }, delayMs);
+    };
+
+    // Initial attempt once the JS thread + navigation have settled after sign-in.
+    scheduleAttempt(1500);
+
+    // Retry shortly after the app becomes active again (covers cold start still
+    // transitioning routes, or the app resuming from a permission dialog stack).
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        scheduleAttempt(500);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (settledTimer) clearTimeout(settledTimer);
+      sub.remove();
+    };
   }, [token]);
 
   useEffect(() => {
@@ -228,26 +274,6 @@ const NotificationBootstrap = () => {
       responseSub.remove();
     };
   }, []);
-
-  // Re-register when returning to foreground only if permission is already granted.
-  useEffect(() => {
-    if (!token) return;
-    const onChange = (state: AppStateStatus) => {
-      if (state !== "active") return;
-      void (async () => {
-        try {
-          const perm = await Notifications.getPermissionsAsync();
-          if (notificationPermissionIsGranted(perm)) {
-            await notificationManager.registerFcmToken();
-          }
-        } catch {
-          // Silent — denied/undetermined must not trigger permission or token loops.
-        }
-      })();
-    };
-    const sub = AppState.addEventListener("change", onChange);
-    return () => sub.remove();
-  }, [token]);
 
   useEffect(() => {
     if (!userId || !pusherReady) {
