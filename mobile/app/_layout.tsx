@@ -18,7 +18,7 @@ import { setAuthData } from "@/store/AuthSlice";
 import { getStoredTokens, setStoredTokens } from "@/utils/secureTokenStorage";
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { AppState, LogBox, type AppStateStatus } from "react-native";
-import { promptForPushNotificationsOnce, resetNotificationPermissionSession, notificationPermissionCanRequest, notificationPermissionIsGranted } from "@/utils/notifications";
+import { promptForPushNotificationsOnce, resetNotificationPermissionSession, notificationPermissionIsGranted } from "@/utils/notifications";
 
 LogBox.ignoreLogs([
   "Location update failed",
@@ -183,47 +183,23 @@ const NotificationBootstrap = () => {
       .catch(() => {});
   }, []);
 
-  // One OS notification dialog per session after sign-in (before location prompt on home).
+  // If already granted at sign-in, register silently. OS prompt runs on focused home/map.
   useEffect(() => {
     if (!token) {
       resetNotificationPermissionSession();
       return;
     }
 
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void (async () => {
-        try {
-          const perm = await Notifications.getPermissionsAsync();
-          if (cancelled) {
-            return;
-          }
-
-          if (notificationPermissionIsGranted(perm)) {
-            await notificationManager.registerFcmToken();
-            return;
-          }
-
-          if (!notificationPermissionCanRequest(perm)) {
-            return;
-          }
-
-          const granted = await promptForPushNotificationsOnce();
-          if (cancelled || !granted) {
-            return;
-          }
-
+    void (async () => {
+      try {
+        const perm = await Notifications.getPermissionsAsync();
+        if (notificationPermissionIsGranted(perm)) {
           await notificationManager.registerFcmToken();
-        } catch {
-          // Non-blocking — user can enable notifications later from Settings.
         }
-      })();
-    }, 1200);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
+      } catch {
+        // Non-blocking.
+      }
+    })();
   }, [token]);
 
   useEffect(() => {

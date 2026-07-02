@@ -82,6 +82,7 @@ import usePusherChannel from "@/hooks/usePusherChannel";
 import { useRoute } from "@/hooks/useRoute";
 import { haversineKm } from "@/utils/haversine";
 import { useFocusRefresh } from "@/hooks/useFocusRefresh";
+import { usePostSignInNotificationPrompt } from "@/hooks/usePostSignInNotificationPrompt";
 import { invalidateRecentPlacesCache } from "@/utils/recentPlacesCache";
 import { invalidateWalletCache } from "@/utils/walletCache";
 import { requestManager } from "@/utils/requestManager";
@@ -196,6 +197,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const TAB_BAR_HEIGHT = 88 + Math.max(insets.bottom, 0);
   const isFocused = useIsFocused();
+  usePostSignInNotificationPrompt(isFocused);
   const refreshActiveRideOnFocus = useFocusRefresh(15_000);
   const refreshActiveBookingOnFocus = useFocusRefresh(30_000);
   const refreshLocationsOnFocus = useFocusRefresh(60_000);

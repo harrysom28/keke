@@ -56,6 +56,7 @@ import { getErrorMessage, isRateLimitError } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
+import { usePostSignInNotificationPrompt } from "@/hooks/usePostSignInNotificationPrompt";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
 import { ensureForegroundLocationAccess, ensureDriverBackgroundLocationAccess } from "@/utils/locationPermission";
@@ -117,6 +118,7 @@ const Home = () => {
   const insets = useSafeAreaInsets();
   const { apiConfig, notificationEvent, getCurrentUser } = useContext(AppContext);
   const isFocused = useIsFocused();
+  usePostSignInNotificationPrompt(isFocused);
 
   useEffect(() => {
     markInitialDriverRouteHandled();

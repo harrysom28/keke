@@ -1,5 +1,5 @@
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
+import { PermissionsAndroid, Platform } from "react-native";
 import messaging from "@react-native-firebase/messaging";
 
 /**
@@ -56,6 +56,33 @@ export function notificationPermissionCanRequest(
     return true;
   }
   return perm.canAskAgain !== false;
+}
+
+async function requestNativeNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === "android" && Number(Platform.Version) >= 33) {
+    try {
+      const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
+      const alreadyGranted = await PermissionsAndroid.check(permission);
+      if (alreadyGranted) {
+        return true;
+      }
+
+      const result = await PermissionsAndroid.request(permission, {
+        title: "Enable notifications",
+        message:
+          "Keke Ride uses notifications for ride requests, driver updates, and trip alerts.",
+        buttonPositive: "Allow",
+        buttonNegative: "Not now",
+      });
+
+      return result === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (error) {
+      console.warn("Android POST_NOTIFICATIONS request failed:", error);
+    }
+  }
+
+  const result = await Notifications.requestPermissionsAsync();
+  return notificationPermissionIsGranted(result);
 }
 
 async function fetchPushTokenWhenGranted(): Promise<string> {
@@ -115,8 +142,8 @@ export async function promptForPushNotificationsOnce(): Promise<boolean> {
         return false;
       }
 
-      const result = await Notifications.requestPermissionsAsync();
-      if (!notificationPermissionIsGranted(result)) {
+      const result = await requestNativeNotificationPermission();
+      if (!result) {
         return false;
       }
 
