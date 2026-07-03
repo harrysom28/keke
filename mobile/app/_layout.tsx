@@ -18,7 +18,7 @@ import { setAuthData } from "@/store/AuthSlice";
 import { getStoredTokens, setStoredTokens } from "@/utils/secureTokenStorage";
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { AppState, LogBox } from "react-native";
-import { promptForPushNotificationsOnce, resetNotificationPermissionSession, notificationPermissionCanRequest, notificationPermissionIsGranted } from "@/utils/notifications";
+import { promptForPushNotificationsOnce, resetNotificationPermissionSession, notificationPermissionCanRequest, isNotificationPermissionGranted } from "@/utils/notifications";
 
 LogBox.ignoreLogs([
   "Location update failed",
@@ -200,13 +200,14 @@ const NotificationBootstrap = () => {
         return;
       }
       try {
-        const perm = await Notifications.getPermissionsAsync();
-        if (cancelled) return;
-
-        if (notificationPermissionIsGranted(perm)) {
+        if (await isNotificationPermissionGranted()) {
+          if (cancelled) return;
           await notificationManager.registerFcmToken();
           return;
         }
+
+        const perm = await Notifications.getPermissionsAsync();
+        if (cancelled) return;
 
         if (!notificationPermissionCanRequest(perm)) {
           return;
@@ -214,6 +215,8 @@ const NotificationBootstrap = () => {
 
         const granted = await promptForPushNotificationsOnce();
         if (cancelled || !granted) return;
+
+        if (!(await isNotificationPermissionGranted())) return;
 
         await notificationManager.registerFcmToken();
       } catch (error) {

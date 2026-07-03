@@ -4,7 +4,7 @@ import { Platform } from "react-native";
 import Constants from "expo-constants";
 import messaging from "@react-native-firebase/messaging";
 
-import { setupNotificationChannels } from "@/utils/notifications";
+import { setupNotificationChannels, isNotificationPermissionGranted } from "@/utils/notifications";
 
 /**
  * EAS project the Expo push token is minted against. This MUST match the project
@@ -37,16 +37,9 @@ export async function registerForPushNotifications(options = {}) {
 
   await setupNotificationChannels();
 
-  const { status: existingStatus, canAskAgain } =
-    await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
+  let hasPermission = await isNotificationPermissionGranted();
 
-  if (existingStatus === "granted") {
-    finalStatus = "granted";
-  } else if (existingStatus === "denied" && canAskAgain === false) {
-    // User permanently declined — never re-prompt.
-    return null;
-  } else if (requestPermission) {
+  if (!hasPermission && requestPermission) {
     const { status } = await Notifications.requestPermissionsAsync({
       ios: {
         allowAlert: true,
@@ -54,13 +47,17 @@ export async function registerForPushNotifications(options = {}) {
         allowSound: true,
       },
     });
-    finalStatus = status;
-  } else {
-    return null;
+    hasPermission =
+      status === "granted" || (await isNotificationPermissionGranted());
   }
 
-  if (finalStatus !== "granted") {
-    console.log("Push notification permission denied");
+  if (!hasPermission) {
+    const { canAskAgain } = await Notifications.getPermissionsAsync();
+    if (canAskAgain === false) {
+      console.log("Push notification permission permanently denied");
+    } else {
+      console.log("Push notification permission not granted yet");
+    }
     return null;
   }
 

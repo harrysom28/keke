@@ -42,6 +42,24 @@ export function notificationPermissionIsGranted(
   return perm.granted === true || perm.status === "granted";
 }
 
+/** Expo and Android native permission can disagree on API 33+ — trust either source. */
+export async function isNotificationPermissionGranted(): Promise<boolean> {
+  const perm = await Notifications.getPermissionsAsync();
+  if (notificationPermissionIsGranted(perm)) {
+    return true;
+  }
+  if (Platform.OS === "android" && Number(Platform.Version) >= 33) {
+    try {
+      return await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+      );
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 /**
  * Android 13+ often reports status "denied" before the user has ever been asked
  * (notifications not enabled yet). Only skip when canAskAgain is explicitly false.
@@ -109,8 +127,7 @@ async function fetchPushTokenWhenGranted(): Promise<string> {
  */
 export async function getPushTokenIfGranted(): Promise<string> {
   try {
-    const existing = await Notifications.getPermissionsAsync();
-    if (!notificationPermissionIsGranted(existing)) {
+    if (!(await isNotificationPermissionGranted())) {
       return "";
     }
     return fetchPushTokenWhenGranted();
