@@ -11,6 +11,7 @@ import {
 import { AntDesign } from "@expo/vector-icons";
 import { router } from "expo-router";
 import tw from "@/lib/tailwind";
+import { SUPPORT_EMAIL } from "@/constants";
 
 /**
  * Auth-level Terms & Privacy - accessible without login (e.g. from Sign Up)
@@ -198,7 +199,7 @@ const AuthTermsScreen = () => {
         </View>
 
         <TouchableOpacity
-          onPress={() => Linking.openURL("mailto:support@keke.app")}
+          onPress={() => Linking.openURL(`mailto:${SUPPORT_EMAIL}`)}
           style={tw`bg-base-green py-3.5 rounded-lg mt-4`}
         >
           <Text

@@ -18,6 +18,7 @@ import { showMessage } from "react-native-flash-message";
 import { Linking } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import apiClient from "@/utils/apiClient";
+import { SUPPORT_EMAIL } from "@/constants";
 
 const ContactScreen = () => {
   const { rideId, subject } = useLocalSearchParams<{ rideId?: string; subject?: string }>();
@@ -85,7 +86,7 @@ const ContactScreen = () => {
 
   const handleEmail = async () => {
     try {
-      const url = "mailto:support@keke.app";
+      const url = `mailto:${SUPPORT_EMAIL}`;
       const canOpen = await Linking.canOpenURL(url);
       if (canOpen) {
         await Linking.openURL(url);
@@ -94,10 +95,10 @@ const ContactScreen = () => {
         throw new Error("Cannot open mailto");
       }
     } catch {
-      await Clipboard.setStringAsync("support@keke.app");
+      await Clipboard.setStringAsync(SUPPORT_EMAIL);
       showMessage({
         type: "info",
-        message: "Email copied to clipboard. Contact support@keke.app",
+        message: `Email copied to clipboard. Contact ${SUPPORT_EMAIL}`,
       });
     }
   };
@@ -193,7 +194,7 @@ const ContactScreen = () => {
                   fontFamily: "RobotoRegular",
                 })}
               >
-                support@keke.app
+                {SUPPORT_EMAIL}
               </Text>
             </TouchableOpacity>
           </View>

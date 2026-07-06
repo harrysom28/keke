@@ -7,6 +7,7 @@ import * as SplashScreen from "expo-splash-screen";
 import AppStore, { persistor } from "@/store";
 import NotificationAlert from "@/components/NotificationAlert";
 import NotificationBanner from "@/components/NotificationBanner";
+import { LocationDisclosureHost } from "@/components/LocationDisclosureHost";
 import notificationManager, {
   NotificationPayload,
 } from "@/services/notificationManager";
@@ -443,6 +444,7 @@ function RootLayout() {
                 <BottomSheetModalProvider>
                   <PortalProvider>
                     <Navigation />
+                    <LocationDisclosureHost />
                     <NotificationBootstrap />
                   </PortalProvider>
                 </BottomSheetModalProvider>

@@ -170,3 +170,6 @@ export const RETRIEVE_CHAT = `${SERVER_URL}message/passenger/driver/`;
 export const CREATE_CHAT = `${SERVER_URL}message/passenger/driver/create`;
 
 export const PUSHER_AUTH = `${SERVER_URL}broadcasting/pusher/user-auth`;
+
+/** Public support / contact email shown in the app. */
+export const SUPPORT_EMAIL = "info@getkekeapp.com";

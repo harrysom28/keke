@@ -6,6 +6,7 @@ import {
   ensureForegroundLocationAccess,
   type LocationAccessPurpose,
 } from "@/utils/locationPermission";
+import { isLocationDisclosurePending } from "@/utils/locationDisclosure";
 
 // In dev/simulator, iOS/Android often report a fixed US location. Override to Abakaliki so the map shows your intended test region.
 const SIMULATOR_DEFAULT_COORDS = [
@@ -286,6 +287,11 @@ async function syncLocationAccessOnFocus(
     permission.status === Location.PermissionStatus.UNDETERMINED &&
     !sharedLaunchPromptAttempted
   ) {
+    if (await isLocationDisclosurePending()) {
+      publishSharedSnapshot({ locationBlocked: true, loading: false });
+      return;
+    }
+
     sharedLaunchPromptAttempted = true;
     publishSharedSnapshot({ loading: true, locationBlocked: false });
     await new Promise((resolve) =>
@@ -396,4 +402,24 @@ export function useCurrentLocation({
     loading,
     getLocation,
   };
+}
+
+/** Prevent the cold-start OS location dialog after the user declines disclosure. */
+export function skipAutoLocationPromptAfterDisclosureDeny(): void {
+  sharedLaunchPromptAttempted = true;
+  publishSharedSnapshot({ locationBlocked: true, loading: false });
+}
+
+/** Start GPS after the post-signup disclosure flow grants OS permission. */
+export async function resumeLocationAfterDisclosure(
+  purpose: LocationAccessPurpose = "rider"
+): Promise<void> {
+  sharedLaunchPromptAttempted = true;
+  const permission = await Location.getForegroundPermissionsAsync();
+  if (permission.status === Location.PermissionStatus.GRANTED) {
+    publishSharedSnapshot({ locationBlocked: false });
+    await ensureSharedLocationStarted(purpose, { requestPermission: false });
+    return;
+  }
+  publishSharedSnapshot({ locationBlocked: true, loading: false });
 }

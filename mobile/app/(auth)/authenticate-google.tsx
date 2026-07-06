@@ -14,6 +14,7 @@ import AuthForm from "@/components/AuthForm";
 import { AuthState } from "@/store/AuthSlice";
 import { Dropdown } from "react-native-element-dropdown";
 import { PROFILE_UPDATE } from "@/constants";
+import { markLocationDisclosurePending } from "@/utils/locationDisclosure";
 import PhoneInput from "@perttu/react-native-phone-number-input";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
@@ -137,12 +138,15 @@ const AuthenticateGoogle = () => {
     console.log(PROFILE_UPDATE, data);
     axios
       .post(PROFILE_UPDATE, data, apiConfig)
-      .then(({ data }) => {
+      .then(async ({ data }) => {
         // console.log(data, "done");
         showMessage({
           type: "success",
           message: data.message,
         });
+        if (registration?.type === "1") {
+          await markLocationDisclosurePending("rider");
+        }
         router.navigate(registration?.type === "1" ? "/" : "/driverinfo");
       })
       .catch((err) => {

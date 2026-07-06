@@ -6,7 +6,8 @@ import {
   View,
 } from "react-native";
 import React, { useRef, useState } from "react";
-import { AntDesign, MaterialIcons } from "@expo/vector-icons";
+import { AntDesign } from "@expo/vector-icons";
+import Checkbox from "expo-checkbox";
 import AuthForm from "@/components/AuthForm";
 import FormInput from "@/components/formInput";
 import { validators } from "@/utils/formValidators";
@@ -27,6 +28,7 @@ import {
   updateUser,
 } from "@/store/AuthSlice";
 import { getUniqueId } from "react-native-device-info";
+import { markLocationDisclosurePending } from "@/utils/locationDisclosure";
 import { requestUserNotificationPermission } from "@/utils/notifications";
 
 const SIGNUP_MODES = ["Phone OTP", "Email & Password"] as const;
@@ -61,10 +63,11 @@ const SignUp = () => {
     email: "",
     password: "",
   });
+  const [termsAccepted, setTermsAccepted] = useState(true);
 
   const role = registration?.type === "2" ? "driver" : "passenger";
 
-  const completeEmailSignup = (data: {
+  const completeEmailSignup = async (data: {
     message?: string;
     authorisation?: { token?: string; refresh_token?: string | null };
     data?: {
@@ -87,6 +90,7 @@ const SignUp = () => {
         params: { name: state.name.trim() },
       });
     } else {
+      await markLocationDisclosurePending("rider");
       router.replace("/");
     }
   };
@@ -295,7 +299,7 @@ const SignUp = () => {
       }
 
       const { data } = await apiClient.post("auth/email/register", payload);
-      completeEmailSignup(data);
+      await completeEmailSignup(data);
     } catch (err) {
       showErrorMessage(err);
     } finally {
@@ -305,6 +309,13 @@ const SignUp = () => {
   };
 
   const handleSubmit = () => {
+    if (!termsAccepted) {
+      return showMessage({
+        type: "warning",
+        message:
+          "Please accept the Terms of service and Privacy policy to continue.",
+      });
+    }
     if (mode === "Phone OTP") {
       void handlePhoneSubmit();
     } else {
@@ -313,8 +324,18 @@ const SignUp = () => {
   };
 
   const termsBlock = (
-    <View style={tw`flex-row gap-x-2`}>
-      <MaterialIcons name="check-circle" size={21} color="#43A048" />
+    <Pressable
+      onPress={() => setTermsAccepted((prev) => !prev)}
+      style={tw`flex-row gap-x-2 items-start`}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: termsAccepted }}
+    >
+      <Checkbox
+        value={termsAccepted}
+        onValueChange={setTermsAccepted}
+        color={termsAccepted ? tw.color("base-green") : undefined}
+        style={tw`mt-0.5 border border-[#D0D0D0]`}
+      />
       <Text
         style={tw.style(
           `flex-row items-center gap-x-1 basis-[95%] text-xs text-[#B8B8B8]`,
@@ -340,7 +361,7 @@ const SignUp = () => {
           Privacy policy
         </Text>
       </Text>
-    </View>
+    </Pressable>
   );
 
   return (
