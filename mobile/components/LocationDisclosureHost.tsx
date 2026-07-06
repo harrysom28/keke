@@ -12,6 +12,18 @@ import {
   type LocationAccessPurpose,
 } from "@/utils/locationPermission";
 import { resumeLocationAfterDisclosure, skipAutoLocationPromptAfterDisclosureDeny } from "@/hooks/useCurrentLocation";
+import notificationManager from "@/services/notificationManager";
+import { tryPromptAndRegisterNotifications } from "@/utils/notifications";
+
+const NOTIFICATION_PROMPT_AFTER_LOCATION_MS = 800;
+
+function scheduleNotificationPromptAfterLocationFlow(): void {
+  setTimeout(() => {
+    void tryPromptAndRegisterNotifications(() =>
+      notificationManager.registerFcmToken()
+    );
+  }, NOTIFICATION_PROMPT_AFTER_LOCATION_MS);
+}
 
 /**
  * Shows the location data usage disclosure immediately after signup, before the
@@ -52,7 +64,9 @@ export function LocationDisclosureHost() {
 
   const onDeny = useCallback(() => {
     skipAutoLocationPromptAfterDisclosureDeny();
-    void finish();
+    void finish().then(() => {
+      scheduleNotificationPromptAfterLocationFlow();
+    });
   }, [finish]);
 
   const onAllow = useCallback(async () => {
@@ -66,6 +80,7 @@ export function LocationDisclosureHost() {
     } finally {
       await clearLocationDisclosurePending();
       handlingRef.current = false;
+      scheduleNotificationPromptAfterLocationFlow();
     }
   }, [purpose]);
 

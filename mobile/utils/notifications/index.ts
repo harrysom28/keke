@@ -1,5 +1,5 @@
 import * as Notifications from "expo-notifications";
-import { PermissionsAndroid, Platform } from "react-native";
+import { AppState, PermissionsAndroid, Platform } from "react-native";
 import messaging from "@react-native-firebase/messaging";
 
 /**
@@ -29,11 +29,11 @@ export const setupNotificationChannels = async () => {
   }
 };
 
-/** Serialize concurrent prompt attempts within one signed-in session. */
-let notificationPromptPromise: Promise<boolean> | null = null;
+/** In-flight only — do not cache a failed result or retries never run. */
+let notificationPromptInFlight: Promise<boolean> | null = null;
 
 export function resetNotificationPermissionSession(): void {
-  notificationPromptPromise = null;
+  notificationPromptInFlight = null;
 }
 
 export function notificationPermissionIsGranted(
@@ -74,6 +74,65 @@ export function notificationPermissionCanRequest(
     return true;
   }
   return perm.canAskAgain !== false;
+}
+
+/**
+ * Whether we should show the OS notification dialog now.
+ * Some Android OEMs report canAskAgain:false before the user was ever asked.
+ */
+export async function shouldRequestNotificationPermission(): Promise<boolean> {
+  if (await isNotificationPermissionGranted()) {
+    return false;
+  }
+  const perm = await Notifications.getPermissionsAsync();
+  if (notificationPermissionCanRequest(perm)) {
+    return true;
+  }
+  if (Platform.OS === "android" && Number(Platform.Version) >= 33) {
+    try {
+      const granted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+      );
+      return !granted;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Prompt for notification permission (if needed) and register the device token.
+ * Skips while the post-signup location disclosure is showing.
+ */
+export async function tryPromptAndRegisterNotifications(
+  register: () => Promise<void>
+): Promise<void> {
+  const { isLocationDisclosurePending } = await import(
+    "@/utils/locationDisclosure"
+  );
+  if (await isLocationDisclosurePending()) {
+    return;
+  }
+  if (AppState.currentState !== "active") {
+    return;
+  }
+
+  if (await isNotificationPermissionGranted()) {
+    await register();
+    return;
+  }
+
+  if (!(await shouldRequestNotificationPermission())) {
+    return;
+  }
+
+  const granted = await promptForPushNotificationsOnce();
+  if (!granted || !(await isNotificationPermissionGranted())) {
+    return;
+  }
+
+  await register();
 }
 
 async function requestNativeNotificationPermission(): Promise<boolean> {
@@ -145,17 +204,17 @@ export async function getPushTokenIfGranted(): Promise<string> {
  * Returns true if notifications are allowed after the attempt.
  */
 export async function promptForPushNotificationsOnce(): Promise<boolean> {
-  if (notificationPromptPromise) {
-    return notificationPromptPromise;
+  if (notificationPromptInFlight) {
+    return notificationPromptInFlight;
   }
 
-  notificationPromptPromise = (async () => {
+  notificationPromptInFlight = (async () => {
     try {
       const existing = await Notifications.getPermissionsAsync();
       if (notificationPermissionIsGranted(existing)) {
         return true;
       }
-      if (!notificationPermissionCanRequest(existing)) {
+      if (!(await shouldRequestNotificationPermission())) {
         return false;
       }
 
@@ -180,10 +239,12 @@ export async function promptForPushNotificationsOnce(): Promise<boolean> {
     } catch (permError) {
       console.warn("Push permission request failed:", permError);
       return false;
+    } finally {
+      notificationPromptInFlight = null;
     }
   })();
 
-  return notificationPromptPromise;
+  return notificationPromptInFlight;
 }
 
 /** @deprecated Use getPushTokenIfGranted — login must not prompt; _layout handles one post-sign-in ask. */

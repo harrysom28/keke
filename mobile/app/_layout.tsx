@@ -19,7 +19,7 @@ import { setAuthData } from "@/store/AuthSlice";
 import { getStoredTokens, setStoredTokens } from "@/utils/secureTokenStorage";
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { AppState, LogBox } from "react-native";
-import { promptForPushNotificationsOnce, resetNotificationPermissionSession, notificationPermissionCanRequest, isNotificationPermissionGranted } from "@/utils/notifications";
+import { resetNotificationPermissionSession, tryPromptAndRegisterNotifications } from "@/utils/notifications";
 
 LogBox.ignoreLogs([
   "Location update failed",
@@ -201,25 +201,9 @@ const NotificationBootstrap = () => {
         return;
       }
       try {
-        if (await isNotificationPermissionGranted()) {
-          if (cancelled) return;
-          await notificationManager.registerFcmToken();
-          return;
-        }
-
-        const perm = await Notifications.getPermissionsAsync();
-        if (cancelled) return;
-
-        if (!notificationPermissionCanRequest(perm)) {
-          return;
-        }
-
-        const granted = await promptForPushNotificationsOnce();
-        if (cancelled || !granted) return;
-
-        if (!(await isNotificationPermissionGranted())) return;
-
-        await notificationManager.registerFcmToken();
+        await tryPromptAndRegisterNotifications(() =>
+          notificationManager.registerFcmToken()
+        );
       } catch (error) {
         if (__DEV__) {
           console.warn("Notification permission bootstrap failed:", error);
@@ -236,6 +220,10 @@ const NotificationBootstrap = () => {
 
     // Initial attempt once the JS thread + navigation have settled after sign-in.
     scheduleAttempt(1500);
+
+    // Fallback for devices where the first attempt races with location disclosure
+    // or another permission dialog and AppState does not fire again.
+    scheduleAttempt(5000);
 
     // Retry shortly after the app becomes active again (covers cold start still
     // transitioning routes, or the app resuming from a permission dialog stack).
