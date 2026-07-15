@@ -30,6 +30,7 @@ import * as Clipboard from "expo-clipboard";
 import * as WebBrowser from "expo-web-browser";
 import { Linking } from "react-native";
 import { useKeyboardInset } from "@/hooks/useKeyboardInset";
+import { WithdrawalSuccessModal } from "@/components/WithdrawalSuccessModal";
 
 interface Transaction {
   payment_id: string;
@@ -58,6 +59,8 @@ const WalletScreen = () => {
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [withdrawLoading, setWithdrawLoading] = useState(false);
   const [withdrawDetails, setWithdrawDetails] = useState<any>({});
+  const [showWithdrawSuccess, setShowWithdrawSuccess] = useState(false);
+  const [withdrawSuccessAmount, setWithdrawSuccessAmount] = useState(0);
   const topupAmountRef = useRef<TextInput>(null);
   const withdrawAmountRef = useRef<TextInput>(null);
   const topupKeyboardInset = useKeyboardInset(topupModal);
@@ -111,10 +114,11 @@ const WalletScreen = () => {
     }
     setWithdrawLoading(true);
     try {
-      const { data } = await apiClient.post("user/balance/withdraw", { amount: numAmount });
-      showMessage({ type: "success", message: data?.message ?? "Withdrawal submitted" });
+      await apiClient.post("user/balance/withdraw", { amount: numAmount });
       setWithdrawAmount("");
       closeWithdrawModal();
+      setWithdrawSuccessAmount(numAmount);
+      setShowWithdrawSuccess(true);
       await Promise.all([fetchWithdrawDetails(), fetchTransactions(), getCurrentUser()]);
     } catch (error: unknown) {
       showMessage({
@@ -992,6 +996,14 @@ const WalletScreen = () => {
           </View>
         </View>
       </Modal>
+      <WithdrawalSuccessModal
+        visible={showWithdrawSuccess}
+        amount={withdrawSuccessAmount}
+        onClose={() => {
+          setShowWithdrawSuccess(false);
+          getCurrentUser?.();
+        }}
+      />
     </ImageBackground>
   );
 };

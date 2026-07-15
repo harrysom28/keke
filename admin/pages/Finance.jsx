@@ -13,11 +13,13 @@ const FINANCE_TABS = [
 ];
 
 function FinancePage({ showToast }) {
-  const [tab, setTab] = useState('payments');
+  const [tab, setTab] = useState('withdrawals');
   const [payments, setPayments] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, pages: 1 });
   const [withdrawals, setWithdrawals] = useState([]);
   const [withdrawalPagination, setWithdrawalPagination] = useState({ page: 1, limit: 20, total: 0, pages: 1 });
+  const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState('pending');
+  const [withdrawalRefresh, setWithdrawalRefresh] = useState(0);
   const [walletTransactions, setWalletTransactions] = useState([]);
   const [walletPagination, setWalletPagination] = useState({ page: 1, limit: 20, total: 0, pages: 1 });
   const [walletSummary, setWalletSummary] = useState(null);
@@ -29,6 +31,7 @@ function FinancePage({ showToast }) {
   const [loading, setLoading] = useState(true);
   const [refundModal, setRefundModal] = useState({ open: false, id: null, amount: '', reason: '', paymentAmount: null });
   const [rejectPayoutModal, setRejectPayoutModal] = useState({ open: false, id: null, reason: '' });
+  const [rejectWithdrawalModal, setRejectWithdrawalModal] = useState({ open: false, id: null, reason: '', amount: null });
   const [period, setPeriod] = useState('30d');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -51,6 +54,7 @@ function FinancePage({ showToast }) {
       }).finally(() => setLoading(false));
     } else if (tab === 'withdrawals') {
       const params = new URLSearchParams({ page: withdrawalPagination.page, limit: withdrawalPagination.limit });
+      if (withdrawalStatusFilter) params.set('status', withdrawalStatusFilter);
       Api.get('/api/admin/withdrawals?' + params).then((res) => {
         if (res.error) {
           showToast(res.error, 'error');
@@ -107,19 +111,48 @@ function FinancePage({ showToast }) {
     } else {
       setLoading(false);
     }
-  }, [tab, pagination.page, withdrawalPagination.page, walletPagination.page, payoutPagination.page, payoutStatusFilter, dateFrom, dateTo, statusFilter, methodFilter, period]);
+  }, [tab, pagination.page, withdrawalPagination.page, withdrawalStatusFilter, withdrawalRefresh, walletPagination.page, payoutPagination.page, payoutStatusFilter, dateFrom, dateTo, statusFilter, methodFilter, period]);
 
-  const approveWithdrawal = (id) => {
+  const reloadWithdrawals = () => setWithdrawalRefresh((n) => n + 1);
+
+  const bankLine = (row) => {
+    const parts = [row.bank_name, row.account_name, row.account_number].filter(Boolean);
+    return parts.length ? parts.join(' · ') : 'No bank details on file';
+  };
+
+  const approveWithdrawal = (row) => {
+    const id = row.withdrawal_id || row._id;
+    const ok = window.confirm(
+      'Approve withdrawal of ' +
+        Utils.formatCurrency(row.amount) +
+        '?\n\nPay to: ' +
+        bankLine(row) +
+        '\n\nApproving marks this request complete. You must still transfer the money to the driver bank (manual transfer or Paystack). Funds are already reserved from the driver wallet.'
+    );
+    if (!ok) return;
     Api.patch('/api/admin/withdrawals/' + id + '/approve').then((r) => {
       if (r.error) showToast(r.error, 'error');
-      else { showToast('Withdrawal approved'); setWithdrawals((list) => list.filter((w) => (w.withdrawal_id || w._id) !== id)); }
+      else {
+        const msg =
+          (r.data && r.data.message) ||
+          'Withdrawal approved — send funds to the driver bank.';
+        showToast(msg);
+        reloadWithdrawals();
+      }
     });
   };
 
-  const rejectWithdrawal = (id) => {
-    Api.patch('/api/admin/withdrawals/' + id + '/reject').then((r) => {
+  const rejectWithdrawal = () => {
+    if (!rejectWithdrawalModal.id) return;
+    Api.patch('/api/admin/withdrawals/' + rejectWithdrawalModal.id + '/reject', {
+      reason: rejectWithdrawalModal.reason || 'Rejected by admin',
+    }).then((r) => {
       if (r.error) showToast(r.error, 'error');
-      else { showToast('Withdrawal rejected'); setWithdrawals((list) => list.filter((w) => (w.withdrawal_id || w._id) !== id)); }
+      else {
+        showToast('Withdrawal rejected — funds returned to driver wallet.');
+        setRejectWithdrawalModal({ open: false, id: null, reason: '', amount: null });
+        reloadWithdrawals();
+      }
     });
   };
 
@@ -169,20 +202,48 @@ function FinancePage({ showToast }) {
 
   const withdrawalColumns = [
     { key: 'withdrawal_id', label: 'ID', render: (v) => (v || '').slice(-8) },
-    { key: 'amount', label: 'Amount', render: (v, row) => Utils.formatCurrency(row.amount != null ? Math.abs(row.amount) : row.amount) },
+    { key: 'driver_name', label: 'Driver', render: (v, row) => (
+      <div>
+        <div className="font-medium text-gray-900 dark:text-white">{v || '—'}</div>
+        {row.driver_phone || row.driver_email ? (
+          <div className="text-xs text-gray-500 dark:text-gray-400">{row.driver_phone || row.driver_email}</div>
+        ) : null}
+      </div>
+    ) },
+    { key: 'amount', label: 'Amount', render: (v) => Utils.formatCurrency(v != null ? Math.abs(v) : 0) },
+    {
+      key: 'bank_name',
+      label: 'Bank',
+      render: (_v, row) => (
+        <div className="text-sm max-w-[220px]">
+          <div className="text-gray-900 dark:text-white">{row.bank_name || '—'}</div>
+          {row.account_name ? <div className="text-xs text-gray-500 dark:text-gray-400">{row.account_name}</div> : null}
+          {row.account_number ? <div className="text-xs font-mono text-gray-600 dark:text-gray-300">{row.account_number}</div> : null}
+        </div>
+      ),
+    },
     { key: 'status', label: 'Status' },
-    { key: 'created_at', label: 'Date', render: (v) => Utils.formatDate(v) },
+    { key: 'created_at', label: 'Requested', render: (v) => Utils.formatDate(v) },
     {
       key: 'withdrawal_id',
       label: 'Action',
       render: (v, row) => row.status === 'pending' ? (
         <div className="flex gap-3">
-          <button type="button" onClick={() => approveWithdrawal(v)} className="text-green-600 hover:underline">Approve</button>
-          <button type="button" onClick={() => rejectWithdrawal(v)} className="text-red-600 hover:underline">Reject</button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); approveWithdrawal(row); }} className="text-green-600 hover:underline">Approve</button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setRejectWithdrawalModal({ open: true, id: v, reason: '', amount: row.amount });
+            }}
+            className="text-red-600 hover:underline"
+          >
+            Reject
+          </button>
         </div>
       ) : '—',
     },
-  ];
+  ].map((col, idx) => (col.label === 'Action' ? { ...col, key: 'withdrawal_action_' + idx } : col));
 
   const walletColumns = [
     { key: 'reference', label: 'Reference', render: (v) => (v || '').slice(-12) },
@@ -231,6 +292,10 @@ function FinancePage({ showToast }) {
 
       {tab === 'payments' && (
         <>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Ride and wallet payments only. Driver cash-out requests live under{' '}
+            <button type="button" className="text-blue-600 hover:underline" onClick={() => setTab('withdrawals')}>Withdrawals</button>.
+          </p>
           <div className="flex flex-wrap gap-2 items-center">
             <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600" title="From date" />
             <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600" title="To date" />
@@ -260,11 +325,53 @@ function FinancePage({ showToast }) {
       )}
 
       {tab === 'withdrawals' && (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
-          <C.DataTable columns={withdrawalColumns} rows={withdrawals} keyField="withdrawal_id" loading={loading} emptyMessage="No withdrawals" />
-          <div className="px-4 py-2 border-t dark:border-gray-700 flex justify-between items-center">
-            <button type="button" onClick={() => Utils.exportToCSV(withdrawals, 'withdrawals.csv')} className="text-sm text-blue-600 hover:underline">Export CSV</button>
-            <C.Pagination page={withdrawalPagination.page} totalPages={withdrawalPagination.pages} onPageChange={(p) => setWithdrawalPagination((prev) => ({ ...prev, page: p }))} />
+        <div className="space-y-3">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 px-4 py-3 text-sm text-amber-900 dark:text-amber-100">
+            <p className="font-medium">How driver withdrawals work</p>
+            <ol className="list-decimal ml-4 mt-1 space-y-1 text-amber-800 dark:text-amber-200">
+              <li>Driver requests a withdrawal in the app — wallet balance is reserved immediately.</li>
+              <li>You review bank details here, then <strong>Approve</strong> (or Reject to return funds).</li>
+              <li>After Approve, send NGN to the driver’s bank yourself (bank app or Paystack Transfer). The app does not push money automatically yet.</li>
+            </ol>
+          </div>
+          <div className="flex flex-wrap gap-2 items-center">
+            <select
+              value={withdrawalStatusFilter}
+              onChange={(e) => {
+                setWithdrawalStatusFilter(e.target.value);
+                setWithdrawalPagination((p) => ({ ...p, page: 1 }));
+              }}
+              className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600"
+            >
+              <option value="">All status</option>
+              <option value="pending">Pending</option>
+              <option value="completed">Completed (approved)</option>
+              <option value="cancelled">Rejected</option>
+            </select>
+            <button
+              type="button"
+              onClick={reloadWithdrawals}
+              className="px-3 py-2 text-sm border rounded-lg dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+            <C.DataTable
+              columns={withdrawalColumns}
+              rows={withdrawals}
+              keyField="withdrawal_id"
+              loading={loading}
+              emptyMessage={
+                withdrawalStatusFilter === 'pending'
+                  ? 'No pending withdrawal requests'
+                  : 'No withdrawals for this filter'
+              }
+            />
+            <div className="px-4 py-2 border-t dark:border-gray-700 flex justify-between items-center">
+              <button type="button" onClick={() => Utils.exportToCSV(withdrawals, 'withdrawals.csv')} className="text-sm text-blue-600 hover:underline">Export CSV</button>
+              <C.Pagination page={withdrawalPagination.page} totalPages={withdrawalPagination.pages} onPageChange={(p) => setWithdrawalPagination((prev) => ({ ...prev, page: p }))} />
+            </div>
           </div>
         </div>
       )}
@@ -331,6 +438,11 @@ function FinancePage({ showToast }) {
 
       {tab === 'payouts' && (
         <>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Legacy <code className="text-xs">/driver/payout/request</code> queue. The mobile app uses{' '}
+            <button type="button" className="text-blue-600 hover:underline" onClick={() => setTab('withdrawals')}>Withdrawals</button>
+            {' '}for driver cash-outs — check that tab for pending requests.
+          </p>
           <select value={payoutStatusFilter} onChange={(e) => { setPayoutStatusFilter(e.target.value); setPayoutPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600">
             <option value="">All status</option>
             <option value="pending">Pending</option>
@@ -338,7 +450,7 @@ function FinancePage({ showToast }) {
             <option value="rejected">Rejected</option>
           </select>
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
-            <C.DataTable columns={payoutColumns} rows={payoutRequests} keyField="payout_request_id" loading={loading} emptyMessage="No payout requests" />
+            <C.DataTable columns={payoutColumns} rows={payoutRequests} keyField="payout_request_id" loading={loading} emptyMessage="No payout requests (driver withdrawals appear under Withdrawals)" />
             <div className="px-4 py-2 border-t dark:border-gray-700 flex justify-end">
               <C.Pagination page={payoutPagination.page} totalPages={payoutPagination.pages} onPageChange={(p) => setPayoutPagination((prev) => ({ ...prev, page: p }))} />
             </div>
@@ -371,6 +483,28 @@ function FinancePage({ showToast }) {
       <C.Modal open={rejectPayoutModal.open} onClose={() => setRejectPayoutModal({ open: false, id: null, reason: '' })} title="Reject payout request">
         <input type="text" placeholder="Reason (optional)" value={rejectPayoutModal.reason} onChange={(e) => setRejectPayoutModal((m) => ({ ...m, reason: e.target.value }))} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 mb-2" />
         <button type="button" onClick={rejectPayout} className="mt-2 px-3 py-1.5 bg-red-600 text-white rounded-lg">Reject payout</button>
+      </C.Modal>
+
+      <C.Modal
+        open={rejectWithdrawalModal.open}
+        onClose={() => setRejectWithdrawalModal({ open: false, id: null, reason: '', amount: null })}
+        title="Reject withdrawal"
+      >
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+          {rejectWithdrawalModal.amount != null
+            ? 'Funds (' + Utils.formatCurrency(rejectWithdrawalModal.amount) + ') will be returned to the driver wallet.'
+            : 'Funds will be returned to the driver wallet.'}
+        </p>
+        <input
+          type="text"
+          placeholder="Reason (optional)"
+          value={rejectWithdrawalModal.reason}
+          onChange={(e) => setRejectWithdrawalModal((m) => ({ ...m, reason: e.target.value }))}
+          className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 mb-2"
+        />
+        <button type="button" onClick={rejectWithdrawal} className="mt-2 px-3 py-1.5 bg-red-600 text-white rounded-lg">
+          Reject withdrawal
+        </button>
       </C.Modal>
     </div>
   );

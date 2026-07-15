@@ -31,6 +31,7 @@ import { ClipPath, Defs, G, Mask, Path, Rect, Svg } from "react-native-svg";
 import { DRIVER_EARNINGS, WITHDRAWAL, INITIATE_WALLET_TOPUP } from "@/constants";
 import apiClient from "@/utils/apiClient";
 import { PaymentWebViewModal } from "@/components/PaymentWebViewModal";
+import { WithdrawalSuccessModal } from "@/components/WithdrawalSuccessModal";
 import React, {
   useCallback,
   useContext,
@@ -190,6 +191,8 @@ const SharedProfileScreen = ({ type }: Props) => {
     topup_reference?: string;
   }>({});
   const [showPaymentReceived, setShowPaymentReceived] = useState(false);
+  const [showWithdrawSuccess, setShowWithdrawSuccess] = useState(false);
+  const [withdrawSuccessAmount, setWithdrawSuccessAmount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [bottomSheetError, setBottomSheetError] = useState(false);
   const walletModalKeyboardInset = useKeyboardInset(modal);
@@ -448,11 +451,13 @@ const SharedProfileScreen = ({ type }: Props) => {
       .then(({ data }) => {
         setAmount("");
         setModal(false);
-        safeShowMessage({ type: "success", message: data?.message ?? "Withdrawal submitted" });
+        setWithdrawSuccessAmount(numAmount);
+        setShowWithdrawSuccess(true);
         // Refresh earnings so balance and withdraw details are up to date
         if (type === "driver") {
           apiClient.get("driver/earnings").then(({ data: res }) => setWithdrawDetails(res?.data)).catch(() => {});
         }
+        getCurrentUser?.();
       })
       .catch((err) => {
         safeShowMessage({
@@ -471,6 +476,14 @@ const SharedProfileScreen = ({ type }: Props) => {
         onClose={() => {
           setShowPaymentReceived(false);
           getCurrentUser();
+        }}
+      />
+      <WithdrawalSuccessModal
+        visible={showWithdrawSuccess}
+        amount={withdrawSuccessAmount}
+        onClose={() => {
+          setShowWithdrawSuccess(false);
+          getCurrentUser?.();
         }}
       />
       <ImageBackground

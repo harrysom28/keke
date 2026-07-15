@@ -2072,7 +2072,10 @@ export const listPayments = asyncHandler(async (req, res) => {
   const { status, method, paymentType, dateFrom, dateTo } = req.query;
   const { pageNum, limitNum, skip } = parseAdminPagination(req.query);
 
-  const filter = {};
+  const filter = {
+    // Driver withdrawals are negative amounts — handle them in Finance → Withdrawals.
+    amount: { $gte: 0 },
+  };
 
   if (status) {
     filter.status = status;
@@ -2341,14 +2344,18 @@ export const processRefund = asyncHandler(async (req, res) => {
 
 /**
  * List withdrawals - GET /api/admin/withdrawals
+ * Driver app submits via POST /user/balance/withdraw (Payment rows with amount < 0).
  */
 export const listWithdrawals = asyncHandler(async (req, res) => {
   const { status } = req.query;
   const { pageNum, limitNum, skip } = parseAdminPagination(req.query);
 
   const filter = {
-    amount: { $lt: 0 }, // Withdrawals are negative amounts
-    'metadata.type': 'withdrawal',
+    $or: [
+      { 'metadata.type': 'withdrawal' },
+      // Fallback for older rows that may lack metadata.type
+      { amount: { $lt: 0 }, method: 'bank_transfer' },
+    ],
   };
 
   if (status) {
@@ -2363,17 +2370,54 @@ export const listWithdrawals = asyncHandler(async (req, res) => {
 
   const total = await Payment.countDocuments(filter);
 
+  // Attach driver bank + name when available
+  const userIds = withdrawals.map((p) => p.user?._id).filter(Boolean);
+  const drivers = userIds.length
+    ? await Driver.find({ user: { $in: userIds } })
+        .select('user bankAccount')
+        .lean()
+    : [];
+  const driverByUserId = new Map(
+    drivers.map((d) => [String(d.user), d])
+  );
+
   res.json({
     status: 'success',
     data: {
-      withdrawals: withdrawals.map((payment) => ({
-        withdrawal_id: payment._id.toString(),
-        user: formatAdminPaymentUser(payment.user),
-        amount: Math.abs(payment.amount),
-        status: payment.status,
-        created_at: payment.createdAt,
-        metadata: payment.metadata ? Object.fromEntries(payment.metadata) : {},
-      })),
+      withdrawals: withdrawals.map((payment) => {
+        const meta = payment.metadata
+          ? payment.metadata instanceof Map
+            ? Object.fromEntries(payment.metadata)
+            : { ...payment.metadata }
+          : {};
+        const driver = payment.user?._id
+          ? driverByUserId.get(String(payment.user._id))
+          : null;
+        const bankName =
+          meta.bankName || driver?.bankAccount?.bankName || null;
+        const accountNumber =
+          meta.accountNumber || driver?.bankAccount?.accountNumber || null;
+        const accountName =
+          meta.accountName || driver?.bankAccount?.accountName || null;
+
+        return {
+          withdrawal_id: payment._id.toString(),
+          user: formatAdminPaymentUser(payment.user),
+          driver_name: payment.user?.name || '—',
+          driver_email: payment.user?.email || null,
+          driver_phone: payment.user?.phone || null,
+          amount: Math.abs(payment.amount),
+          status: payment.status,
+          method: payment.method,
+          bank_name: bankName,
+          account_number: accountNumber,
+          account_name: accountName,
+          created_at: payment.createdAt,
+          paid_at: payment.paidAt,
+          failure_reason: payment.failureReason || null,
+          metadata: meta,
+        };
+      }),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -2400,6 +2444,8 @@ export const approveWithdrawal = asyncHandler(async (req, res) => {
   }
 
   // Wallet funds were already reserved via debitForPayout when the request was created.
+  // Approving marks the request complete — send NGN to the driver's bank outside
+  // the app (manual transfer or Paystack Transfer) using bank details on the record.
   payment.status = 'completed';
   payment.paidAt = new Date();
   await payment.save();
@@ -2415,12 +2461,23 @@ export const approveWithdrawal = asyncHandler(async (req, res) => {
   });
   logger.info(`Withdrawal ${id} approved by admin ${req.user._id}`);
 
+  const meta = payment.metadata
+    ? payment.metadata instanceof Map
+      ? Object.fromEntries(payment.metadata)
+      : { ...payment.metadata }
+    : {};
+
   res.json({
     status: 'success',
-    message: 'Withdrawal approved successfully',
+    message:
+      'Withdrawal approved. Send the funds to the driver bank account, then keep your transfer receipt.',
     data: {
       withdrawal_id: payment._id.toString(),
       status: payment.status,
+      amount: Math.abs(payment.amount),
+      bank_name: meta.bankName || null,
+      account_number: meta.accountNumber || null,
+      account_name: meta.accountName || null,
     },
   });
 });
