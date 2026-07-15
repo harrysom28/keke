@@ -97,6 +97,18 @@ const WalletScreen = () => {
       showMessage({ type: "warning", message: "Enter a valid amount" });
       return;
     }
+    const available = Number(
+      withdrawDetails?.withdrawable_balance ??
+        withdrawDetails?.wallet?.withdrawableBalance ??
+        0
+    );
+    if (Number.isFinite(available) && numAmount > available) {
+      showMessage({
+        type: "danger",
+        message: `You can withdraw up to ₦${available.toLocaleString()}.`,
+      });
+      return;
+    }
     setWithdrawLoading(true);
     try {
       const { data } = await apiClient.post("user/balance/withdraw", { amount: numAmount });
@@ -104,9 +116,11 @@ const WalletScreen = () => {
       setWithdrawAmount("");
       closeWithdrawModal();
       await Promise.all([fetchWithdrawDetails(), fetchTransactions(), getCurrentUser()]);
-    } catch (error: any) {
-      const errorMessage = getErrorMessage(error, "Withdrawal failed");
-      showMessage({ type: "danger", message: errorMessage });
+    } catch (error: unknown) {
+      showMessage({
+        type: "danger",
+        message: getErrorMessage(error, "Withdrawal failed"),
+      });
     } finally {
       setWithdrawLoading(false);
     }

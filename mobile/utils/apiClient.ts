@@ -270,6 +270,21 @@ apiClient.interceptors.response.use(
         // 400 on driver/availability = expected when driver not yet verified (show as warn, not error)
         if (status === 400 && typeof url === 'string' && url.includes('driver/availability')) {
           if (__DEV__) console.warn('📥 Response 400 driver/availability (driver may need to be verified to go online)');
+        } else if (
+          // Expected business/validation failures (e.g. withdraw over limit).
+          // UI already shows response.message — console.error would surface as a LogBox toast.
+          status === 400 &&
+          typeof rawData === 'object' &&
+          rawData != null &&
+          typeof (rawData as { message?: unknown }).message === 'string'
+        ) {
+          if (__DEV__) {
+            console.warn(
+              '📥 Response 400:',
+              stripApiUrlForLog(url),
+              (rawData as { message: string }).message
+            );
+          }
         } else if (status === 404 && typeof url === 'string' && url.includes('config/public')) {
           // Not a fatal error; hook falls back to bundled config
           if (__DEV__) console.warn('📥 Response 404 config/public (using fallback public config)');

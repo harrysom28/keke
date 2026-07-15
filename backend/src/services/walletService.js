@@ -401,6 +401,51 @@ async function debitForPayout(driverId, amount, reference, session = null) {
 }
 
 /**
+ * Restore available balance when a pending withdrawal is rejected.
+ * Opposite of debitForPayout (without going through pending-hold again).
+ */
+async function creditWithdrawalRejection(driverId, amount, reference, session = null) {
+  if (amount <= 0) throw new Error('Refund amount must be positive');
+
+  const opts = session ? { session } : {};
+  await getOrCreateWallet(driverId);
+  const wallet = await DriverWallet.findOne({ driverId }).session(session || null);
+  if (!wallet) throw new Error('Wallet not found');
+
+  const balanceBefore = wallet.availableBalance;
+  const updated = await DriverWallet.findOneAndUpdate(
+    { driverId },
+    {
+      $inc: {
+        availableBalance: amount,
+        totalWithdrawn: -Math.min(amount, Number(wallet.totalWithdrawn) || 0),
+      },
+    },
+    { new: true, ...opts }
+  );
+  if (!updated) throw new Error('Wallet not found');
+
+  const txnId = generateTransactionId('WTR');
+  await Transaction.create(
+    [
+      {
+        transactionId: txnId,
+        driverId,
+        type: 'refund',
+        amount,
+        currency: updated.currency,
+        balanceBefore,
+        balanceAfter: updated.availableBalance,
+        metadata: { reference, reason: 'withdrawal_rejected' },
+      },
+    ],
+    opts
+  );
+
+  return { wallet: updated, transactionId: txnId };
+}
+
+/**
  * Refund: deduct from driver wallet if already credited (pending or available).
  * Creates refund transaction.
  */
@@ -542,6 +587,7 @@ export {
   releasePendingForDriver,
   releaseAllPendingBalances,
   debitForPayout,
+  creditWithdrawalRejection,
   debitRefund,
   PENDING_HOURS,
   COMMISSION_DEBT_CEILING,

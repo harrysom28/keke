@@ -428,6 +428,20 @@ const SharedProfileScreen = ({ type }: Props) => {
       safeShowMessage({ type: "danger", message: "Enter a valid amount" });
       return;
     }
+    const available = Number(
+      withdrawDetails?.withdrawable_balance ??
+        withdrawDetails?.wallet?.withdrawableBalance ??
+        (user?.profile as Record<string, unknown>)?.withdrawable_balance ??
+        user?.profile?.balance ??
+        0
+    );
+    if (Number.isFinite(available) && numAmount > available) {
+      safeShowMessage({
+        type: "danger",
+        message: `You can withdraw up to ₦${available.toLocaleString()}.`,
+      });
+      return;
+    }
     setWloading(true);
     apiClient
       .post("user/balance/withdraw", { amount: numAmount })
@@ -441,8 +455,10 @@ const SharedProfileScreen = ({ type }: Props) => {
         }
       })
       .catch((err) => {
-        const errorMessage = getErrorMessage(err);
-        safeShowMessage({ type: "danger", message: errorMessage });
+        safeShowMessage({
+          type: "danger",
+          message: getErrorMessage(err, "Withdrawal failed"),
+        });
       })
       .finally(() => setWloading(false));
   };

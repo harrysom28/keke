@@ -5,7 +5,7 @@ import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import DriverWallet from '../models/DriverWallet.js';
-import { getOrCreateWallet, getWithdrawableBalance, releasePendingForDriver } from '../services/walletService.js';
+import { getOrCreateWallet, getWithdrawableBalance, releasePendingForDriver, debitForPayout } from '../services/walletService.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
@@ -568,20 +568,14 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
     );
   }
 
-  // Legacy check retained for the legacy earnings ledger.
-  if (driver.earnings.total < amount) {
-    throw new ValidationError('Insufficient earnings balance');
-  }
-
   // Require bank account (verified optional until verification flow exists)
   if (!driver.bankAccount || !driver.bankAccount.accountNumber || !driver.bankAccount.bankName) {
     throw new ValidationError('Add your bank account in profile to withdraw earnings');
   }
 
-  // Deduct from driver earnings immediately (reserve); refund on reject
-  driver.earnings.total -= amount;
-  await driver.save();
-
+  // DriverWallet is the canonical balance (shown in-app). Create the pending
+  // withdrawal, then reserve funds from available balance. Do not gate on the
+  // legacy driver.earnings.total field — it is not kept in sync with credits.
   const payment = await Payment.create({
     user: userId,
     amount: -amount,
@@ -596,8 +590,32 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
     },
   });
 
+  try {
+    await debitForPayout(driver._id, amount, payment._id.toString());
+  } catch (err) {
+    payment.status = 'cancelled';
+    payment.failureReason = err.message || 'Could not reserve wallet funds';
+    await payment.save();
+    const available = Math.round(getWithdrawableBalance(await DriverWallet.findOne({ driverId: driver._id }).lean()));
+    throw new ValidationError(
+      `You can withdraw up to ₦${available.toLocaleString()}.`
+    );
+  }
+
+  // Best-effort sync of legacy earnings ledger for older admin views.
+  try {
+    const remaining = Math.max(0, (Number(driver.earnings?.total) || 0) - amount);
+    driver.earnings = driver.earnings || {};
+    driver.earnings.total = remaining;
+    driver.earnings.lastUpdated = new Date();
+    await driver.save();
+  } catch (err) {
+    logger.warn(`Legacy earnings.total sync failed after withdraw for driver ${driver._id}: ${err.message}`);
+  }
+
   logger.info(`Withdrawal request created for driver ${driver._id}: ₦${amount}`);
 
+  const walletAfter = await DriverWallet.findOne({ driverId: driver._id }).lean();
   res.json({
     status: 'success',
     message: 'Withdrawal request submitted. It will be processed after admin approval.',
@@ -605,7 +623,7 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
       withdrawal_id: payment._id.toString(),
       amount,
       status: payment.status,
-      remaining_earnings: driver.earnings.total,
+      remaining_earnings: Math.round(getWithdrawableBalance(walletAfter)),
     },
   });
 });

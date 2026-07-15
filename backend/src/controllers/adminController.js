@@ -2399,7 +2399,7 @@ export const approveWithdrawal = asyncHandler(async (req, res) => {
     throw new ValidationError('Can only approve pending withdrawals');
   }
 
-  // Earnings were already deducted when withdrawal was created; just mark completed
+  // Wallet funds were already reserved via debitForPayout when the request was created.
   payment.status = 'completed';
   payment.paidAt = new Date();
   await payment.save();
@@ -2443,10 +2443,20 @@ export const rejectWithdrawal = asyncHandler(async (req, res) => {
 
   const withdrawalAmount = Math.abs(payment.amount);
 
-  // Refund driver earnings (deducted when withdrawal was created)
+  // Refund wallet funds reserved when the withdrawal was created (DriverWallet
+  // is canonical). Also restore the legacy earnings.total field for older UIs.
   const driver = await Driver.findOne({ user: payment.user._id });
   if (driver) {
-    driver.earnings.total += withdrawalAmount;
+    try {
+      const { creditWithdrawalRejection } = await import('../services/walletService.js');
+      await creditWithdrawalRejection(driver._id, withdrawalAmount, payment._id.toString());
+    } catch (err) {
+      logger.error(
+        `Failed to restore DriverWallet after withdrawal reject ${id}: ${err.message}`
+      );
+    }
+    driver.earnings = driver.earnings || {};
+    driver.earnings.total = (Number(driver.earnings.total) || 0) + withdrawalAmount;
     await driver.save();
   }
 
