@@ -143,7 +143,10 @@ function FinancePage({ showToast }) {
   };
 
   const rejectWithdrawal = () => {
-    if (!rejectWithdrawalModal.id) return;
+    if (!rejectWithdrawalModal.id) {
+      showToast('Missing withdrawal id — close and try again', 'error');
+      return;
+    }
     Api.patch('/api/admin/withdrawals/' + rejectWithdrawalModal.id + '/reject', {
       reason: rejectWithdrawalModal.reason || 'Rejected by admin',
     }).then((r) => {
@@ -197,7 +200,7 @@ function FinancePage({ showToast }) {
     { key: 'method', label: 'Method' },
     { key: 'status', label: 'Status' },
     { key: 'created_at', label: 'Date', render: (v) => Utils.formatDate(v) },
-    { key: 'payment_id', label: 'Action', render: (v, row) => row.status === 'completed' ? <button type="button" onClick={(e) => { e.stopPropagation(); setRefundModal({ open: true, id: v, amount: String(row.amount ?? ''), reason: '', paymentAmount: row.amount }); }} className="text-amber-600 hover:underline text-sm">Refund</button> : '—' },
+    { key: 'payment_id', label: 'Action', render: (_v, row) => row.status === 'completed' ? <button type="button" onClick={(e) => { e.stopPropagation(); setRefundModal({ open: true, id: row.payment_id || row._id, amount: String(row.amount ?? ''), reason: '', paymentAmount: row.amount }); }} className="text-amber-600 hover:underline text-sm">Refund</button> : '—' },
   ].map((col, idx) => (col.label === 'Action' ? { ...col, key: 'payment_action_' + idx } : col));
 
   const withdrawalColumns = [
@@ -227,14 +230,19 @@ function FinancePage({ showToast }) {
     {
       key: 'withdrawal_id',
       label: 'Action',
-      render: (v, row) => row.status === 'pending' ? (
+      render: (_v, row) => row.status === 'pending' ? (
         <div className="flex gap-3">
           <button type="button" onClick={(e) => { e.stopPropagation(); approveWithdrawal(row); }} className="text-green-600 hover:underline">Approve</button>
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setRejectWithdrawalModal({ open: true, id: v, reason: '', amount: row.amount });
+              setRejectWithdrawalModal({
+                open: true,
+                id: row.withdrawal_id || row._id,
+                reason: '',
+                amount: row.amount,
+              });
             }}
             className="text-red-600 hover:underline"
           >
