@@ -576,29 +576,50 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
   // DriverWallet is the canonical balance (shown in-app). Create the pending
   // withdrawal, then reserve funds from available balance. Do not gate on the
   // legacy driver.earnings.total field — it is not kept in sync with credits.
-  const payment = await Payment.create({
-    user: userId,
-    amount: -amount,
-    method: 'bank_transfer',
-    status: 'pending',
-    metadata: {
-      type: 'withdrawal',
-      driverId: driver._id.toString(),
-      bankName: driver.bankAccount.bankName || '',
-      accountNumber: driver.bankAccount.accountNumber || '',
-      accountName: driver.bankAccount.accountName || '',
-    },
-  });
+  let payment;
+  try {
+    payment = await Payment.create({
+      user: userId,
+      amount: -amount,
+      method: 'bank_transfer',
+      status: 'pending',
+      metadata: {
+        type: 'withdrawal',
+        driverId: driver._id.toString(),
+        bankName: driver.bankAccount.bankName || '',
+        accountNumber: driver.bankAccount.accountNumber || '',
+        accountName: driver.bankAccount.accountName || '',
+      },
+    });
+  } catch (err) {
+    if (err?.code === 11000) {
+      throw new ValidationError(
+        'This withdrawal could not be started. Please wait a moment and try again.'
+      );
+    }
+    throw err;
+  }
 
   try {
     await debitForPayout(driver._id, amount, payment._id.toString());
   } catch (err) {
     payment.status = 'cancelled';
     payment.failureReason = err.message || 'Could not reserve wallet funds';
-    await payment.save();
-    const available = Math.round(getWithdrawableBalance(await DriverWallet.findOne({ driverId: driver._id }).lean()));
+    await payment.save().catch(() => {});
+    if (err?.code === 11000) {
+      throw new ValidationError(
+        'This request was already processed. Please refresh and try again.'
+      );
+    }
+    const msg = String(err?.message || '');
+    if (msg.toLowerCase().includes('insufficient') || msg.toLowerCase().includes('balance')) {
+      const available = Math.round(
+        getWithdrawableBalance(await DriverWallet.findOne({ driverId: driver._id }).lean())
+      );
+      throw new ValidationError(`You can withdraw up to ₦${available.toLocaleString()}.`);
+    }
     throw new ValidationError(
-      `You can withdraw up to ₦${available.toLocaleString()}.`
+      'Withdrawal could not be completed. Please try again in a moment.'
     );
   }
 

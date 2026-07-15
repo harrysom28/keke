@@ -82,6 +82,17 @@ const DUPLICATE_FIELD_LABELS = {
   phone: 'Phone number',
   username: 'Username',
   referralCode: 'Referral code',
+  // Internal uniqueness collisions — never phrase these as "already in use"
+  // for end users (common on withdraw / wallet writes).
+  transactionId: null,
+  reference: null,
+  driverId: null,
+};
+
+const DUPLICATE_FIELD_MESSAGES = {
+  transactionId: 'This request was already processed. Please refresh and try again.',
+  reference: 'This payment was already submitted. Please wait a moment and try again.',
+  driverId: 'Wallet is busy. Please try again in a moment.',
 };
 
 const CAST_PATH_LABELS = {
@@ -150,6 +161,13 @@ export const errorHandler = (err, req, res, next) => {
   // Mongoose duplicate key
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue || {})[0] || '';
+    const friendly = DUPLICATE_FIELD_MESSAGES[field];
+    if (friendly) {
+      return res.status(409).json({
+        status: 'fail',
+        message: friendly,
+      });
+    }
     const label = DUPLICATE_FIELD_LABELS[field] || 'This value';
     return res.status(409).json({
       status: 'fail',

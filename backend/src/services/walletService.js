@@ -32,7 +32,7 @@ function isDriverOverCommissionCeiling(commissionOwed) {
 }
 
 function generateTransactionId(prefix = 'TXN') {
-  return `${prefix}-${Date.now()}-${new mongoose.Types.ObjectId().toString().slice(-8)}`;
+  return `${prefix}-${Date.now()}-${new mongoose.Types.ObjectId().toString()}`;
 }
 
 const utcDayKey = () => new Date().toISOString().slice(0, 10);

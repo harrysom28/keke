@@ -267,24 +267,18 @@ apiClient.interceptors.response.use(
           dataStr.includes('is offline') ||
           (dataStr.includes('Tunnel') && dataStr.includes('not found'));
 
-        // 400 on driver/availability = expected when driver not yet verified (show as warn, not error)
-        if (status === 400 && typeof url === 'string' && url.includes('driver/availability')) {
-          if (__DEV__) console.warn('📥 Response 400 driver/availability (driver may need to be verified to go online)');
-        } else if (
-          // Expected business/validation failures (e.g. withdraw over limit).
-          // UI already shows response.message — console.error would surface as a LogBox toast.
-          status === 400 &&
+        // Client (4xx) failures are shown to the user via flash messages /
+        // getErrorMessage. Never console.error them — in RN that surfaces a
+        // LogBox toast with raw "Response body: {JSON…}" which looks like a crash.
+        const clientMessage =
           typeof rawData === 'object' &&
           rawData != null &&
           typeof (rawData as { message?: unknown }).message === 'string'
-        ) {
-          if (__DEV__) {
-            console.warn(
-              '📥 Response 400:',
-              stripApiUrlForLog(url),
-              (rawData as { message: string }).message
-            );
-          }
+            ? (rawData as { message: string }).message
+            : '';
+
+        if (status === 400 && typeof url === 'string' && url.includes('driver/availability')) {
+          if (__DEV__) console.warn('📥 Response 400 driver/availability (driver may need to be verified to go online)');
         } else if (status === 404 && typeof url === 'string' && url.includes('config/public')) {
           // Not a fatal error; hook falls back to bundled config
           if (__DEV__) console.warn('📥 Response 404 config/public (using fallback public config)');
@@ -295,7 +289,6 @@ apiClient.interceptors.response.use(
           (dataStr.toLowerCase().includes('active ride') ||
             dataStr.toLowerCase().includes('already have an active ride'))
         ) {
-          // Expected path: user already has an active ride. Do NOT log as error (it triggers redbox).
           if (__DEV__) console.warn('📥 Response 409 booking/confirm-ride (active ride already exists)');
         } else if (
           typeof url === 'string' &&
@@ -304,7 +297,6 @@ apiClient.interceptors.response.use(
           rawData != null &&
           (rawData as { code?: string }).code === 'INSUFFICIENT_BALANCE'
         ) {
-          // Expected business rule — wallet below rider total. Client shows flash message; not an app bug.
           if (__DEV__) {
             console.warn('📥 booking/confirm-ride INSUFFICIENT_BALANCE (user needs top-up)');
           }
@@ -314,7 +306,6 @@ apiClient.interceptors.response.use(
           typeof url === 'string' &&
           !url.includes('config/public')
         ) {
-          // Relative `url` never contains "ngrok"; use baseURL / API_BASE_URL (fixed above).
           if (__DEV__) {
             const detail = ngrokBodySuggestsTunnelIssue
               ? ' (ngrok error page in response body)'
@@ -327,14 +318,20 @@ apiClient.interceptors.response.use(
                 `   Base: ${baseFromConfig} | Path: ${url}`
             );
           }
-        } else if (status === 404 && __DEV__) {
-          console.warn('📥 HTTP 404:', stripApiUrlForLog(url));
-        } else {
-          console.error('📥 Response Error:', status, stripApiUrlForLog(url));
-          if (__DEV__ && typeof status === 'number' && status >= 400 && status < 500 && dataStr) {
-            const clipped = dataStr.length > 1200 ? `${dataStr.slice(0, 1200)}…` : dataStr;
-            console.error('   Response body:', clipped);
+        } else if (typeof status === 'number' && status >= 400 && status < 500) {
+          if (__DEV__) {
+            console.warn(
+              '📥 HTTP',
+              status,
+              stripApiUrlForLog(url),
+              clientMessage || (dataStr ? dataStr.slice(0, 200) : '')
+            );
           }
+        } else if (typeof status === 'number' && status >= 500) {
+          // Server faults: log once without dumping JSON (Sentry already captures).
+          console.warn('📥 Server Error:', status, stripApiUrlForLog(url));
+        } else if (__DEV__) {
+          console.warn('📥 Response Error:', status, stripApiUrlForLog(url));
         }
       }
 
