@@ -423,49 +423,53 @@ const WalletScreen = () => {
             }
           )}
         >
-          <Text
-            style={tw.style(`text-white text-sm mb-2`, {
-              fontFamily: "RobotoRegular",
-            })}
-          >
-            Available Balance
-          </Text>
-          <Text
-            style={tw.style(`text-white text-4xl mb-4`, {
-              fontFamily: "RobotoBold",
-            })}
-          >
-            ₦{(
-              withdrawDetails?.wallet?.totalBalance ??
-              withdrawDetails?.total_earnings ??
-              withdrawDetails?.earnings?.total ??
-              user?.profile?.balance ??
-              0
-            ).toLocaleString()}
-          </Text>
-
           {(() => {
             const withdrawable = Number(
               withdrawDetails?.withdrawable_balance ??
                 withdrawDetails?.wallet?.withdrawableBalance ??
+                withdrawDetails?.wallet?.totalBalance ??
+                withdrawDetails?.total_earnings ??
+                withdrawDetails?.earnings?.total ??
+                user?.profile?.balance ??
                 0
             );
+            const pending = Number(withdrawDetails?.wallet?.pendingBalance ?? 0);
             const owed = Number(
               withdrawDetails?.commission_owed ??
                 withdrawDetails?.wallet?.commissionOwed ??
                 0
             );
             return (
-              <View style={tw`mb-4`}>
-                <Text style={tw.style(`text-white/90 text-sm`, { fontFamily: "RobotoMedium" })}>
-                  Available to withdraw: ₦{withdrawable.toLocaleString()}
+              <>
+                <Text
+                  style={tw.style(`text-white text-sm mb-2`, {
+                    fontFamily: "RobotoRegular",
+                  })}
+                >
+                  Available Balance
                 </Text>
-                {owed > 0 ? (
-                  <Text style={tw.style(`text-white/90 text-sm mt-1`, { fontFamily: "RobotoMedium" })}>
-                    Commission owed: ₦{owed.toLocaleString()}
-                  </Text>
+                <Text
+                  style={tw.style(`text-white text-4xl mb-4`, {
+                    fontFamily: "RobotoBold",
+                  })}
+                >
+                  ₦{withdrawable.toLocaleString()}
+                </Text>
+                {pending > 0 || owed > 0 ? (
+                  <View style={tw`mb-4`}>
+                    {pending > 0 ? (
+                      <Text style={tw.style(`text-white/90 text-sm`, { fontFamily: "RobotoMedium" })}>
+                        Pending clearance: ₦{pending.toLocaleString()}
+                      </Text>
+                    ) : null}
+                    {owed > 0 ? (
+                      <Text style={tw.style(`text-white/90 text-sm mt-1`, { fontFamily: "RobotoMedium" })}>
+                        Commission owed: ₦{owed.toLocaleString()}
+                      </Text>
+                    ) : null}
+                  </View>
                 ) : null}
-              </View>
+              </>
             );
           })()}
           <View style={tw`flex-row gap-x-3`}>

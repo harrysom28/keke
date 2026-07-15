@@ -508,6 +508,10 @@ const startServer = async () => {
       logger.info('✅ Learning pipeline cron jobs registered');
     }
 
+    // Wallet pending-balance release (all environments — drivers' earnings
+    // must clear after the 24h hold regardless of deploy target).
+    await import('./cron/walletJobs.js');
+
     // Preload places + pickup points into memory for 1–3ms autocomplete
     schedulePreloadRefresh();
 

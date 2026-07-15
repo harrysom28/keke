@@ -5,7 +5,7 @@ import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import DriverWallet from '../models/DriverWallet.js';
-import { getOrCreateWallet, getWithdrawableBalance } from '../services/walletService.js';
+import { getOrCreateWallet, getWithdrawableBalance, releasePendingForDriver } from '../services/walletService.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
@@ -553,6 +553,9 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
   // commission debt. Withdrawable = available − commissionOwed (from DriverWallet,
   // the canonical balance shown in-app).
   await getOrCreateWallet(driver._id);
+  // Clear any overdue pending credits first so drivers can withdraw earnings
+  // whose 24h hold has elapsed, even if the release cron hasn't run yet.
+  await releasePendingForDriver(driver._id);
   const driverWallet = await DriverWallet.findOne({ driverId: driver._id }).lean();
   const withdrawable = getWithdrawableBalance(driverWallet);
   if (withdrawable < amount) {

@@ -27,6 +27,7 @@ import {
   getOrCreateWallet,
   getWithdrawableBalance,
   isDriverOverCommissionCeiling,
+  releasePendingForDriver,
   COMMISSION_DEBT_CEILING,
 } from '../services/walletService.js';
 import { formatOnlineDurationMs } from '../utils/driverOnlineTime.js';
@@ -1094,6 +1095,14 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
 
   await getOrCreateWallet(driver._id);
   await ensureWalletDayStats(driver._id);
+  // Lazy safety net alongside the release cron: clear any overdue pending
+  // credits so the dashboard always shows current balances. Best-effort —
+  // a release failure must not break the earnings read.
+  try {
+    await releasePendingForDriver(driver._id);
+  } catch (err) {
+    logger.error(`releasePendingForDriver failed in earnings read for driver ${driver._id}: ${err.message}`);
+  }
   const walletDoc = await DriverWallet.findOne({ driverId: driver._id }).lean();
 
   const earnedToday = Math.round(Number(walletDoc?.todayEarnings) || 0);

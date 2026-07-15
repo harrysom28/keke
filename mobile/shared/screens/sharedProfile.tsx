@@ -169,6 +169,8 @@ const SharedProfileScreen = ({ type }: Props) => {
   const [withdrawDetails, setWithdrawDetails] = useState<{
     driver_bank_name?: string;
     driver_account_number?: string;
+    withdrawable_balance?: number;
+    wallet?: { withdrawableBalance?: number };
   }>({});
   const { user } = useSelector(AuthState);
   const [displayType, setDisplayType] = useState<"withdraw" | "topup">("topup");
@@ -915,7 +917,7 @@ const SharedProfileScreen = ({ type }: Props) => {
                     fontFamily: "RobotoRegular",
                   })}
                 >
-                  Total Balance
+                  Available to withdraw
                 </Text>
                 <Text
                   style={tw.style(`text-[24px] text-black`, {
@@ -923,7 +925,13 @@ const SharedProfileScreen = ({ type }: Props) => {
                   })}
                   numberOfLines={1}
                 >
-                  ₦{user?.profile?.balance}
+                  ₦{Number(
+                    withdrawDetails?.withdrawable_balance ??
+                      withdrawDetails?.wallet?.withdrawableBalance ??
+                      (user?.profile as Record<string, unknown>)?.withdrawable_balance ??
+                      user?.profile?.balance ??
+                      0
+                  ).toLocaleString()}
                 </Text>
               </View>
               <View
