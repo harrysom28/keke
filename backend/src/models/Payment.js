@@ -41,7 +41,8 @@ const paymentSchema = new mongoose.Schema(
     /** Paystack reference (set when initializing checkout; used for idempotency) */
     reference: {
       type: String,
-      default: null,
+      // Do not default to null — sparse unique indexes treat null as a value and
+      // reject a second document with reference: null.
       sparse: true,
     },
     /** Paystack access_code (returned from initialize, used by frontend) */
@@ -60,7 +61,7 @@ const paymentSchema = new mongoose.Schema(
     },
     transactionId: {
       type: String,
-      default: null,
+      // Unique + sparse: omit the field until a real id exists (never store null).
       unique: true,
       sparse: true,
     },
@@ -112,7 +113,7 @@ const paymentSchema = new mongoose.Schema(
 paymentSchema.index({ user: 1, createdAt: -1 });
 paymentSchema.index({ ride: 1 });
 paymentSchema.index({ status: 1 });
-paymentSchema.index({ transactionId: 1 });
+// transactionId unique/sparse is declared on the field — do not add a second non-unique index
 paymentSchema.index({ stripePaymentIntentId: 1 });
 paymentSchema.index({ createdAt: -1 });
 paymentSchema.index({ user: 1, 'metadata.type': 1, createdAt: -1 });

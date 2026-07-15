@@ -9,6 +9,7 @@ import { getOrCreateWallet, getWithdrawableBalance, releasePendingForDriver, deb
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
+import mongoose from 'mongoose';
 import Stripe from 'stripe';
 import {
   initializeTransaction,
@@ -576,6 +577,8 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
   // DriverWallet is the canonical balance (shown in-app). Create the pending
   // withdrawal, then reserve funds from available balance. Do not gate on the
   // legacy driver.earnings.total field — it is not kept in sync with credits.
+  // Always set a real transactionId: Payment.transactionId is unique+sparse, and
+  // storing null caused every second withdrawal to 409 as a duplicate key.
   let payment;
   try {
     payment = await Payment.create({
@@ -583,6 +586,7 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
       amount: -amount,
       method: 'bank_transfer',
       status: 'pending',
+      transactionId: `WDR-${new mongoose.Types.ObjectId().toString()}`,
       metadata: {
         type: 'withdrawal',
         driverId: driver._id.toString(),
@@ -592,9 +596,16 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
       },
     });
   } catch (err) {
+    logger.error(`Withdrawal Payment.create failed for driver ${driver._id}: ${err.message}`, {
+      code: err.code,
+      keyValue: err.keyValue,
+    });
     if (err?.code === 11000) {
-      throw new ValidationError(
-        'This withdrawal could not be started. Please wait a moment and try again.'
+      const field = Object.keys(err.keyValue || {})[0] || 'transactionId';
+      throw new ConflictError(
+        field === 'reference'
+          ? 'This payment was already submitted. Please wait a moment and try again.'
+          : 'A withdrawal with this reference already exists. Please try again.'
       );
     }
     throw err;
@@ -606,9 +617,13 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
     payment.status = 'cancelled';
     payment.failureReason = err.message || 'Could not reserve wallet funds';
     await payment.save().catch(() => {});
+    logger.error(`Withdrawal debit failed for driver ${driver._id}: ${err.message}`, {
+      code: err.code,
+      paymentId: payment._id.toString(),
+    });
     if (err?.code === 11000) {
-      throw new ValidationError(
-        'This request was already processed. Please refresh and try again.'
+      throw new ConflictError(
+        'This withdrawal was already reserved. Please refresh your wallet and try again.'
       );
     }
     const msg = String(err?.message || '');
@@ -618,8 +633,12 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
       );
       throw new ValidationError(`You can withdraw up to ₦${available.toLocaleString()}.`);
     }
+    // Surface the real operational message when we have one; avoid opaque generics.
+    if (msg && msg.length < 180 && !msg.includes('E11000')) {
+      throw new ValidationError(msg);
+    }
     throw new ValidationError(
-      'Withdrawal could not be completed. Please try again in a moment.'
+      'Could not reserve funds for this withdrawal. Please try again in a moment.'
     );
   }
 
