@@ -59,6 +59,11 @@ import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
 import { ensureForegroundLocationAccess, ensureDriverBackgroundLocationAccess } from "@/utils/locationPermission";
+import { isLocationDisclosureRequired } from "@/utils/locationDisclosure";
+import {
+  getDriverPrefersOffline,
+  setDriverPrefersOffline,
+} from "@/utils/driverAvailabilityPreference";
 import { syncDriverLocationToServer } from "@/utils/driverLocationSync";
 import {
   startDriverBackgroundLocation,
@@ -305,7 +310,10 @@ const Home = () => {
           {
             text: "Go offline",
             style: "destructive",
-            onPress: () => patchAvailability(false),
+            onPress: () => {
+              void setDriverPrefersOffline(true);
+              patchAvailability(false);
+            },
           },
         ]
       );
@@ -328,9 +336,63 @@ const Home = () => {
             "You can go online now, but allow background location in Settings to stay visible to riders when the app is not open.",
         });
       }
+      await setDriverPrefersOffline(false);
       patchAvailability(true);
     })();
   };
+
+  // Drivers default to online: auto-enable availability once the dashboard
+  // loads, unless they voluntarily went offline last time.
+  const autoOnlineAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (!isFocused || availabilityLoading || autoOnlineAttemptedRef.current) {
+      return;
+    }
+    if (Object.keys(activity).length === 0) {
+      return; // dashboard not loaded yet
+    }
+    if (isAvailableForRides || sessionOnline || !isVerified) {
+      autoOnlineAttemptedRef.current = true;
+      return;
+    }
+    void (async () => {
+      if (await getDriverPrefersOffline()) {
+        autoOnlineAttemptedRef.current = true;
+        return;
+      }
+      // The prominent disclosure modal owns the first permission flow; retry
+      // on a later dashboard poll once the user has responded to it.
+      if (await isLocationDisclosureRequired()) {
+        return;
+      }
+      const access = await ensureForegroundLocationAccess("driver", {
+        showRationale: false,
+      });
+      autoOnlineAttemptedRef.current = true;
+      if (!access.granted) {
+        return;
+      }
+      const bg = await ensureDriverBackgroundLocationAccess({
+        showRationale: false,
+      });
+      if (!bg.granted) {
+        safeShowMessage({
+          type: "info",
+          message:
+            "You're online. Allow background location in Settings to stay visible to riders when the app is not open.",
+        });
+      }
+      patchAvailability(true);
+    })();
+  }, [
+    isFocused,
+    activity,
+    isAvailableForRides,
+    sessionOnline,
+    isVerified,
+    availabilityLoading,
+    patchAvailability,
+  ]);
 
   useEffect(() => {
     if (!isFocused) return;

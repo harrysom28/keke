@@ -9,13 +9,18 @@ import {
 import tw from "@/lib/tailwind";
 import type { LocationAccessPurpose } from "@/utils/locationPermission";
 
-const BULLETS = [
+const BULLETS_COMMON = [
   "Real-time driver-passenger matching",
-  "Sharing your location with drivers during active rides",
   "Providing navigation and route optimization",
   "Safety and emergency services",
-  "Location tracking while the app is in use and in the background during active rides",
 ] as const;
+
+const BACKGROUND_BULLET: Record<LocationAccessPurpose, string> = {
+  rider:
+    "Location tracking during active rides, even when the app is closed or not in use, so your driver and trip progress stay accurate",
+  driver:
+    "Location tracking while you are online or on a trip, even when the app is closed or not in use, so riders can find you and you can receive trip requests",
+};
 
 type Props = {
   visible: boolean;
@@ -31,6 +36,13 @@ export function LocationDisclosureModal({
   onDeny,
 }: Props) {
   const counterparty = purpose === "driver" ? "riders" : "drivers";
+  const bullets = [
+    BULLETS_COMMON[0],
+    `Sharing your location with ${counterparty} during active rides`,
+    BULLETS_COMMON[1],
+    BULLETS_COMMON[2],
+    BACKGROUND_BULLET[purpose],
+  ];
 
   return (
     <Modal
@@ -44,10 +56,10 @@ export function LocationDisclosureModal({
         accessibilityViewIsModal
       >
         <View
-          style={tw`w-full max-w-[360px] bg-white rounded-2xl overflow-hidden`}
+          style={tw`w-full max-w-[360px] max-h-[85%] bg-white rounded-2xl overflow-hidden`}
         >
           <ScrollView
-            style={tw`max-h-[80%]`}
+            style={tw`flex-shrink`}
             contentContainerStyle={tw`px-5 pt-6 pb-4`}
             bounces={false}
             showsVerticalScrollIndicator={false}
@@ -70,7 +82,7 @@ export function LocationDisclosureModal({
               purposes:
             </Text>
 
-            {BULLETS.map((item) => (
+            {bullets.map((item) => (
               <View key={item} style={tw`flex-row items-start mb-2 pl-1`}>
                 <Text
                   style={tw.style(`text-[15px] text-[#262628] mr-2`, {
@@ -84,9 +96,7 @@ export function LocationDisclosureModal({
                     fontFamily: "RobotoRegular",
                   })}
                 >
-                  {item === BULLETS[1]
-                    ? `Sharing your location with ${counterparty} during active rides`
-                    : item}
+                  {item}
                 </Text>
               </View>
             ))}
@@ -97,9 +107,10 @@ export function LocationDisclosureModal({
                 { fontFamily: "RobotoRegular" }
               )}
             >
-              Your location data is collected continuously when you have an
-              active ride to ensure accurate tracking and safety. Location access
-              is required to use Keke Ride's core features.
+              Your location data is collected continuously during an active
+              ride, even when the app is closed or not in use, to ensure
+              accurate tracking and safety. Location access is required to use
+              Keke Ride's core features.
             </Text>
 
             <Text

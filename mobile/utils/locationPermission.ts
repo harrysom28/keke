@@ -114,6 +114,21 @@ export async function ensureForegroundLocationAccess(
   let permission = await Location.getForegroundPermissionsAsync();
 
   if (permission.status === Location.PermissionStatus.UNDETERMINED) {
+    // Play "Prominent Disclosure" policy: the in-app disclosure must be shown
+    // and accepted before the OS location dialog ever appears. Defer to the
+    // disclosure modal (LocationDisclosureHost) if the user hasn't accepted it.
+    const { isLocationDisclosureRequired, requestLocationDisclosure } =
+      await import("@/utils/locationDisclosure");
+    if (await isLocationDisclosureRequired()) {
+      await requestLocationDisclosure(purpose);
+      return {
+        granted: false,
+        servicesEnabled: true,
+        canAskAgain: true,
+        status: permission.status,
+      };
+    }
+
     if (showRationale) {
       const proceed = await showRationaleAlert(purpose);
       if (!proceed) {
@@ -216,20 +231,21 @@ export async function ensureDriverBackgroundLocationAccess(
   }
 
   if (permission.status === Location.PermissionStatus.UNDETERMINED) {
-    if (options.showRationale) {
-      const proceed = await new Promise<boolean>((resolve) => {
-        Alert.alert(
-          "Background location",
-          "Allow Keke Ride to access your location in the background while you are online so riders can find you and you can receive trip requests when the app is not open.",
-          [
-            { text: "Not now", style: "cancel", onPress: () => resolve(false) },
-            { text: "Continue", onPress: () => resolve(true) },
-          ]
-        );
-      });
-      if (!proceed) {
-        return { ...foreground, granted: false, canAskAgain: true };
-      }
+    // Play "Prominent Disclosure" policy: always disclose background collection
+    // (with the required "even when the app is closed or not in use" wording)
+    // before the OS background permission dialog.
+    const proceed = await new Promise<boolean>((resolve) => {
+      Alert.alert(
+        "Background location",
+        "Keke Ride collects location data while you are online as a driver to enable rider-driver matching, trip requests, and ride tracking, even when the app is closed or not in use. Your location is shared with riders only while you are online or on an active trip.",
+        [
+          { text: "Not now", style: "cancel", onPress: () => resolve(false) },
+          { text: "Continue", onPress: () => resolve(true) },
+        ]
+      );
+    });
+    if (!proceed) {
+      return { ...foreground, granted: false, canAskAgain: true };
     }
     permission = await Location.requestBackgroundPermissionsAsync();
   }

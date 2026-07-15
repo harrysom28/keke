@@ -6,7 +6,10 @@ import {
   ensureForegroundLocationAccess,
   type LocationAccessPurpose,
 } from "@/utils/locationPermission";
-import { isLocationDisclosurePending } from "@/utils/locationDisclosure";
+import {
+  isLocationDisclosurePending,
+  shouldAutoShowLocationDisclosure,
+} from "@/utils/locationDisclosure";
 
 // In dev/simulator, iOS/Android often report a fixed US location. Override to Abakaliki so the map shows your intended test region.
 const SIMULATOR_DEFAULT_COORDS = [
@@ -287,7 +290,12 @@ async function syncLocationAccessOnFocus(
     permission.status === Location.PermissionStatus.UNDETERMINED &&
     !sharedLaunchPromptAttempted
   ) {
-    if (await isLocationDisclosurePending()) {
+    // The prominent disclosure modal (LocationDisclosureHost) owns the first
+    // permission flow — never race it with the OS dialog.
+    if (
+      (await isLocationDisclosurePending()) ||
+      (await shouldAutoShowLocationDisclosure())
+    ) {
       publishSharedSnapshot({ locationBlocked: true, loading: false });
       return;
     }

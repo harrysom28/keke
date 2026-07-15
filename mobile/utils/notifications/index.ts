@@ -108,10 +108,12 @@ export async function shouldRequestNotificationPermission(): Promise<boolean> {
 export async function tryPromptAndRegisterNotifications(
   register: () => Promise<void>
 ): Promise<void> {
-  const { isLocationDisclosurePending } = await import(
-    "@/utils/locationDisclosure"
-  );
-  if (await isLocationDisclosurePending()) {
+  const { isLocationDisclosurePending, shouldAutoShowLocationDisclosure } =
+    await import("@/utils/locationDisclosure");
+  if (
+    (await isLocationDisclosurePending()) ||
+    (await shouldAutoShowLocationDisclosure())
+  ) {
     return;
   }
   if (AppState.currentState !== "active") {
