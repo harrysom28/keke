@@ -556,7 +556,13 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
   const driverWallet = await DriverWallet.findOne({ driverId: driver._id }).lean();
   const withdrawable = getWithdrawableBalance(driverWallet);
   if (withdrawable < amount) {
-    throw new ValidationError('Insufficient withdrawable balance (commission owed reserved)');
+    const owed = Math.round(Number(driverWallet?.commissionOwed) || 0);
+    const available = Math.round(withdrawable);
+    throw new ValidationError(
+      owed > 0
+        ? `You can withdraw up to ₦${available.toLocaleString()}. ₦${owed.toLocaleString()} of your balance is reserved for platform commission from cash rides.`
+        : `You can withdraw up to ₦${available.toLocaleString()}.`
+    );
   }
 
   // Legacy check retained for the legacy earnings ledger.

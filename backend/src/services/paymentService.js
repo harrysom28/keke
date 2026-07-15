@@ -251,8 +251,17 @@ export const processRidePayment = async (ride) => {
         if (driver) {
           // Cash is collected directly by the driver, so it is NOT credited to
           // the in-app wallet. Instead the platform commission becomes driver
-          // debt (swept from future wallet credits).
-          await accrueCashCommissionDebt(ride);
+          // debt (settled immediately from available balance, or swept from
+          // future wallet credits). Best-effort: the cash payment is already
+          // recorded, so a debt-accrual failure must not fail the request —
+          // the accrual is idempotent per ride and retried on reconciliation.
+          try {
+            await accrueCashCommissionDebt(ride);
+          } catch (err) {
+            logger.error(
+              `Cash commission accrual failed for ride ${ride._id}: ${err.message}`
+            );
+          }
           driver.totalRides += 1;
           await driver.save();
         }

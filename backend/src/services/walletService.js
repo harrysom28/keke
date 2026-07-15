@@ -219,7 +219,21 @@ async function accrueCommissionDebt(driverId, commissionAmount, rideId, currency
     opts
   );
 
-  return { wallet, accrued: commissionAmount, transactionId: txnId };
+  // Settle the new debt from any balance the driver already has, so the wallet
+  // shows only their own money. Best-effort: the debt is recorded above, so a
+  // sweep failure must never break the payment flow — it will be repaid by the
+  // next sweep on a future credit.
+  let swept = 0;
+  try {
+    const sweepResult = await sweepCommissionOwed(driverId, session);
+    swept = sweepResult?.swept || 0;
+  } catch (err) {
+    logger.error(
+      `accrueCommissionDebt: immediate sweep failed for driver ${driverId} (ride ${rideId}): ${err.message}`
+    );
+  }
+
+  return { wallet, accrued: commissionAmount, swept, transactionId: txnId };
 }
 
 /**

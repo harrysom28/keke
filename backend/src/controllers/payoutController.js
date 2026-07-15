@@ -30,8 +30,15 @@ export const requestPayout = asyncHandler(async (req, res) => {
   await releasePendingForDriver(driver._id);
   const walletRefreshed = await getOrCreateWallet(driver._id);
   // Funds reserved for outstanding commission debt are not withdrawable.
-  if (getWithdrawableBalance(walletRefreshed) < numAmount) {
-    throw new ValidationError('Insufficient withdrawable balance (commission owed reserved)');
+  const payoutWithdrawable = getWithdrawableBalance(walletRefreshed);
+  if (payoutWithdrawable < numAmount) {
+    const owed = Math.round(Number(walletRefreshed?.commissionOwed) || 0);
+    const available = Math.round(payoutWithdrawable);
+    throw new ValidationError(
+      owed > 0
+        ? `You can withdraw up to ₦${available.toLocaleString()}. ₦${owed.toLocaleString()} of your balance is reserved for platform commission from cash rides.`
+        : `You can withdraw up to ₦${available.toLocaleString()}.`
+    );
   }
 
   const payout = await PayoutRequest.create({
