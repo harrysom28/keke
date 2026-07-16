@@ -52,7 +52,7 @@ import {
 import { getGreeting } from "@/lib/getGreeting";
 import { router } from "expo-router";
 import { postAcceptScheduledBooking } from "@/utils/acceptScheduledBooking";
-import { getErrorMessage, isRateLimitError } from "@/utils/errorHandler";
+import { getErrorMessage, isNetworkError, isRateLimitError } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
@@ -200,14 +200,17 @@ const Home = () => {
     getCurrentUserRef.current = getCurrentUser;
   }, [getCurrentUser]);
 
+  const earningsInFlightRef = useRef(false);
+
   const fetchDriverDashboard = useCallback(() => {
+    if (earningsInFlightRef.current) return;
+    earningsInFlightRef.current = true;
     apiClient
       .get("driver/earnings")
       .then(({ data }) => {
         setActivity(normalizeDriverDashboard(data?.data) as typeof activity);
       })
       .catch((err) => {
-        console.log("Driver earnings error:", err?.response?.data);
         const status = err?.response?.status || err?.status;
 
         if (status === 401) {
@@ -224,11 +227,21 @@ const Home = () => {
           return;
         }
 
-        const errorMessage = getErrorMessage(err);
+        // Background poll — never spam timeout/network toasts while API is flaky.
+        if (isNetworkError(err)) {
+          if (__DEV__) {
+            console.warn("Driver earnings unreachable (timeout/network); will retry on next poll");
+          }
+          return;
+        }
+
         safeShowMessage({
           type: "danger",
-          message: errorMessage,
+          message: getErrorMessage(err),
         });
+      })
+      .finally(() => {
+        earningsInFlightRef.current = false;
       });
   }, [normalizeDriverDashboard]);
 

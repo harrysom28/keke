@@ -194,15 +194,18 @@ export const isRateLimitError = (error: unknown): boolean => {
 
 export const isNetworkError = (error: unknown): boolean => {
   const err = error as ErrorLike & { code?: string; message?: string };
+  const code = err?.code;
+  const msg = String(err?.message || '');
   return (
     !err?.response &&
-    (err?.message?.includes("Network") ||
-      err?.message?.includes("network") ||
-      err?.message?.includes("timeout") ||
-      err?.message?.includes("ECONNREFUSED") ||
-      err?.code === "ECONNREFUSED" ||
-      err?.code === "ETIMEDOUT" ||
-      err?.code === "ERR_NETWORK")
+    (code === 'ECONNABORTED' ||
+      code === 'ECONNREFUSED' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ERR_NETWORK' ||
+      msg.includes('Network') ||
+      msg.includes('network') ||
+      msg.toLowerCase().includes('timeout') ||
+      msg.includes('ECONNREFUSED'))
   );
 };
 

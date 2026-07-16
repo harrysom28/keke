@@ -45,7 +45,7 @@ import { AppContext } from "@/app/context";
 import { Portal } from "@gorhom/portal";
 import axios from "axios";
 import { router } from "expo-router";
-import { getErrorMessage } from "@/utils/errorHandler";
+import { getErrorMessage, isNetworkError } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
@@ -381,7 +381,6 @@ const SharedProfileScreen = ({ type }: Props) => {
             setWithdrawDetails(data?.data);
           })
           .catch((err) => {
-            console.log("Driver earnings error:", err?.response?.data);
             const status = err?.response?.status || err?.status;
 
             // Silently handle 401 errors - token refresh should happen automatically via API client
@@ -396,11 +395,17 @@ const SharedProfileScreen = ({ type }: Props) => {
               return;
             }
 
-            // Use centralized error handler to extract safe string message
-            const errorMessage = getErrorMessage(err);
+            // Focus refresh — don't spam timeout banners when API is flaky.
+            if (isNetworkError(err)) {
+              if (__DEV__) {
+                console.warn("Driver earnings unreachable on profile focus");
+              }
+              return;
+            }
+
             safeShowMessage({
               type: "danger",
-              message: errorMessage,
+              message: getErrorMessage(err),
             });
           });
       }
