@@ -2467,6 +2467,30 @@ export const approveWithdrawal = asyncHandler(async (req, res) => {
       : { ...payment.metadata }
     : {};
 
+  const approvedAmount = Math.abs(payment.amount);
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    const userId = payment.user?._id || payment.user;
+    if (userId) {
+      await sendToUser(userId, 'driver', {
+        title: 'Withdrawal approved',
+        message: `Your withdrawal of ₦${approvedAmount.toLocaleString()} was approved. Funds will be sent to your bank account.`,
+        type: 'alert',
+        priority: 'high',
+        screen: 'wallet',
+        event_key: 'withdrawal_approved',
+        relatedPayment: payment._id,
+        data: {
+          subType: 'withdrawal_approved',
+          withdrawal_id: payment._id.toString(),
+          amount: String(approvedAmount),
+        },
+      });
+    }
+  } catch (notificationError) {
+    logger.error(`Withdrawal approve notification failed for ${id}: ${notificationError.message}`);
+  }
+
   res.json({
     status: 'success',
     message:
@@ -2474,7 +2498,7 @@ export const approveWithdrawal = asyncHandler(async (req, res) => {
     data: {
       withdrawal_id: payment._id.toString(),
       status: payment.status,
-      amount: Math.abs(payment.amount),
+      amount: approvedAmount,
       bank_name: meta.bankName || null,
       account_number: meta.accountNumber || null,
       account_name: meta.accountName || null,
@@ -2531,6 +2555,31 @@ export const rejectWithdrawal = asyncHandler(async (req, res) => {
     req,
   });
   logger.info(`Withdrawal ${id} rejected by admin ${req.user._id}`);
+
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    const userId = payment.user?._id || payment.user;
+    const rejectReason = reason || 'Rejected by admin';
+    if (userId) {
+      await sendToUser(userId, 'driver', {
+        title: 'Withdrawal rejected',
+        message: `Your withdrawal of ₦${withdrawalAmount.toLocaleString()} was rejected. Funds were returned to your wallet. Reason: ${rejectReason}`,
+        type: 'alert',
+        priority: 'high',
+        screen: 'wallet',
+        event_key: 'withdrawal_rejected',
+        relatedPayment: payment._id,
+        data: {
+          subType: 'withdrawal_rejected',
+          withdrawal_id: payment._id.toString(),
+          amount: String(withdrawalAmount),
+          reason: rejectReason,
+        },
+      });
+    }
+  } catch (notificationError) {
+    logger.error(`Withdrawal reject notification failed for ${id}: ${notificationError.message}`);
+  }
 
   res.json({
     status: 'success',

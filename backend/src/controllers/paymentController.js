@@ -655,6 +655,45 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
 
   logger.info(`Withdrawal request created for driver ${driver._id}: ₦${amount}`);
 
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    await sendToUser(userId, 'driver', {
+      title: 'Withdrawal requested',
+      message: `Your withdrawal of ₦${Number(amount).toLocaleString()} is pending admin approval.`,
+      type: 'alert',
+      priority: 'high',
+      screen: 'wallet',
+      event_key: 'withdrawal_requested',
+      relatedPayment: payment._id,
+      data: {
+        subType: 'withdrawal_requested',
+        withdrawal_id: payment._id.toString(),
+        amount: String(amount),
+      },
+    });
+  } catch (notificationError) {
+    logger.error(`Withdrawal request notification failed: ${notificationError.message}`);
+  }
+
+  // Best-effort email to admins so Finance can act without polling.
+  try {
+    const { sendEmail } = await import('../services/notificationService.js');
+    const admins = await User.find({ role: 'admin' }).select('email name').lean();
+    const subject = `Withdrawal request: ₦${Number(amount).toLocaleString()}`;
+    const body =
+      `Driver ${user?.name || userId} requested a withdrawal of ₦${Number(amount).toLocaleString()}.\n` +
+      `Bank: ${driver.bankAccount?.bankName || '—'} · ${driver.bankAccount?.accountName || '—'} · ${driver.bankAccount?.accountNumber || '—'}\n` +
+      `Withdrawal ID: ${payment._id.toString()}\n` +
+      `Review in Admin → Finance → Withdrawals.`;
+    await Promise.allSettled(
+      admins
+        .filter((a) => a.email)
+        .map((a) => sendEmail(a.email, subject, body))
+    );
+  } catch (emailError) {
+    logger.warn(`Withdrawal admin email failed: ${emailError.message}`);
+  }
+
   const walletAfter = await DriverWallet.findOne({ driverId: driver._id }).lean();
   res.json({
     status: 'success',
