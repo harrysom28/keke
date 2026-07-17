@@ -42,9 +42,18 @@ export async function clearLocationDisclosurePending(): Promise<void> {
   }
 }
 
+/**
+ * In-memory only, so a backup-restored AsyncStorage value can never satisfy
+ * it. Set when the user accepts the disclosure in the current app session.
+ */
+let acceptedThisSession = false;
+
 export async function setLocationDisclosureResponse(
   response: LocationDisclosureResponse
 ): Promise<void> {
+  if (response === "accepted") {
+    acceptedThisSession = true;
+  }
   try {
     await AsyncStorage.setItem(RESPONSE_KEY, response);
   } catch (e) {
@@ -75,23 +84,27 @@ async function isForegroundPermissionUndetermined(): Promise<boolean> {
 
 /**
  * Play policy: the prominent disclosure must be shown (and accepted) before the
- * OS location permission dialog. Required while the OS permission is still
- * undetermined and the user has not accepted the disclosure.
+ * OS location permission dialog. Required whenever the OS permission is still
+ * undetermined and the disclosure wasn't accepted in this app session. A
+ * stored "accepted" from a previous install (restored by Android Auto Backup
+ * while the OS permission reset to undetermined) does NOT count — only the
+ * in-memory session flag does.
  */
 export async function isLocationDisclosureRequired(): Promise<boolean> {
-  if ((await getLocationDisclosureResponse()) === "accepted") {
+  if (acceptedThisSession) {
     return false;
   }
   return isForegroundPermissionUndetermined();
 }
 
 /**
- * Auto-show on launch (e.g. after login) only when the user has never answered
- * the disclosure, so a user who tapped Deny is not nagged every session.
+ * Auto-show on launch (e.g. after login) unless the user tapped Deny, so they
+ * are not nagged every session. A restored "accepted" response with an
+ * undetermined OS permission still auto-shows (backup-restore case).
  * Permission flows re-trigger it explicitly via requestLocationDisclosure().
  */
 export async function shouldAutoShowLocationDisclosure(): Promise<boolean> {
-  if ((await getLocationDisclosureResponse()) != null) {
+  if ((await getLocationDisclosureResponse()) === "denied") {
     return false;
   }
   return isForegroundPermissionUndetermined();
