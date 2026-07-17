@@ -245,8 +245,7 @@ const WalletScreen = () => {
         } finally {
           subscription?.remove();
         }
-        getCurrentUser();
-        onRefresh();
+        // Do not refresh on cancel/dismiss — success path is handled by the deep-link listener.
       } else {
         showMessage({
           type: "danger",

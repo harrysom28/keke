@@ -1,6 +1,8 @@
 /**
  * PaymentWebViewModal – Paystack payment in a smaller modal that auto-closes on success.
  * Uses WebView so we control height (~60%) and detect success URL to close and verify.
+ *
+ * Incomplete / cancelled payments do a single silent verify and never start balance polling.
  */
 import React, { useRef, useCallback, useEffect } from "react";
 import {
@@ -22,6 +24,8 @@ const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const MODAL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.6);
 
 const SUCCESS_URL_MARKERS = ["wallet-topup-success", "wallet-topup-redirect"];
+const MAX_POLLS = 6;
+const POLL_INTERVAL_MS = 3000;
 
 function isSuccessUrl(url: string): boolean {
   return SUCCESS_URL_MARKERS.some((m) => url.includes(m));
@@ -58,19 +62,14 @@ export function PaymentWebViewModal({
   onClose,
   paymentUrl,
   referenceFromInit,
-  initialBalance,
+  initialBalance: _initialBalance,
   getCurrentUser,
   onRefresh,
   showMessage,
 }: PaymentWebViewModalProps) {
   const handledSuccess = useRef(false);
+  const sessionClosed = useRef(false);
   const pollInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (!visible) {
-      handledSuccess.current = false;
-    }
-  }, [visible]);
 
   const stopPolling = useCallback(() => {
     if (pollInterval.current) {
@@ -79,13 +78,47 @@ export function PaymentWebViewModal({
     }
   }, []);
 
+  // Reset only when a new payment session opens — not when the sheet closes mid-handler.
+  useEffect(() => {
+    if (visible) {
+      handledSuccess.current = false;
+      sessionClosed.current = false;
+      stopPolling();
+    }
+  }, [visible, stopPolling]);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const verifyPayment = useCallback(async (reference: string | null): Promise<boolean> => {
+    if (!reference) return false;
+    try {
+      await apiClient.post("payment/verify-wallet-topup", { reference });
+      invalidateWalletCache();
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const refreshAfterSuccess = useCallback(async () => {
+    await getCurrentUser();
+    if (onRefresh) await onRefresh();
+  }, [getCurrentUser, onRefresh]);
+
   const startBalancePolling = useCallback(() => {
+    stopPolling();
     let pollCount = 0;
-    const MAX_POLLS = 20;
     pollInterval.current = setInterval(async () => {
       pollCount++;
-      await getCurrentUser();
-      if (onRefresh) await onRefresh();
+      try {
+        // Prefer a light user refresh; hit full wallet refresh only every other tick.
+        await getCurrentUser();
+        if (onRefresh && pollCount % 2 === 0) {
+          await onRefresh();
+        }
+      } catch {
+        // Ignore transient errors (including rate limits) during polling.
+      }
       if (pollCount >= MAX_POLLS) {
         stopPolling();
         showMessage({
@@ -93,31 +126,39 @@ export function PaymentWebViewModal({
           message: "Payment processing. Please check your balance in a moment.",
         });
       }
-    }, 2000);
+    }, POLL_INTERVAL_MS);
   }, [getCurrentUser, onRefresh, showMessage, stopPolling]);
 
+  const onPaymentConfirmed = useCallback(async () => {
+    showMessage({
+      type: "success",
+      message: "Payment successful! Updating your balance…",
+      duration: 4000,
+    });
+    await refreshAfterSuccess();
+    startBalancePolling();
+  }, [refreshAfterSuccess, showMessage, startBalancePolling]);
+
+  /** Success URL / confirmed Paystack page — verify then poll only if credit succeeded. */
   const verifyAndClose = useCallback(
     async (reference: string | null) => {
-      if (handledSuccess.current) return;
+      if (handledSuccess.current || sessionClosed.current) return;
       handledSuccess.current = true;
+      sessionClosed.current = true;
       stopPolling();
       onClose();
-      if (reference) {
-        try {
-          await apiClient.post("payment/verify-wallet-topup", { reference });
-          invalidateWalletCache();
-        } catch (_) {}
+
+      const verified = await verifyPayment(reference);
+      if (!verified) {
+        showMessage({
+          type: "info",
+          message: "Payment was not completed.",
+        });
+        return;
       }
-      await getCurrentUser();
-      if (onRefresh) await onRefresh();
-      showMessage({
-        type: "success",
-        message: "Payment successful! Updating your balance…",
-        duration: 4000,
-      });
-      startBalancePolling();
+      await onPaymentConfirmed();
     },
-    [onClose, getCurrentUser, onRefresh, showMessage, startBalancePolling, stopPolling]
+    [onClose, onPaymentConfirmed, showMessage, stopPolling, verifyPayment]
   );
 
   const handleNavigationStateChange = useCallback(
@@ -173,15 +214,37 @@ export function PaymentWebViewModal({
     true;
   `;
 
-  const handleUserClose = useCallback(() => {
+  /** User closed the sheet — one silent verify, no polling unless payment actually succeeded. */
+  const handleUserClose = useCallback(async () => {
+    if (sessionClosed.current) {
+      onClose();
+      return;
+    }
+    sessionClosed.current = true;
     stopPolling();
     onClose();
+
+    if (handledSuccess.current) return;
+
+    const verified = await verifyPayment(referenceFromInit ?? null);
+    if (verified) {
+      handledSuccess.current = true;
+      await onPaymentConfirmed();
+      return;
+    }
+
     showMessage({
       type: "info",
-      message: "Checking payment status…",
+      message: "Payment cancelled.",
     });
-    verifyAndClose(referenceFromInit ?? null);
-  }, [onClose, referenceFromInit, showMessage, stopPolling, verifyAndClose]);
+  }, [
+    onClose,
+    onPaymentConfirmed,
+    referenceFromInit,
+    showMessage,
+    stopPolling,
+    verifyPayment,
+  ]);
 
   if (!visible) return null;
 
