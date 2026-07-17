@@ -122,6 +122,24 @@ const EmergencyModal = ({ bottomSheetRef }: Props) => {
             </Pressable>
             <Pressable
               onPress={() => {
+                Linking.openURL("tel:122").catch(() => {});
+              }}
+              hitSlop={EMERGENCY_ACTION_HIT_SLOP}
+              style={({ pressed }) => [
+                tw`min-h-[52px] w-full flex-row items-center justify-center rounded-[12px] bg-[#C45C00] px-4 py-3.5`,
+                { opacity: pressed ? 0.85 : 1 },
+              ]}
+            >
+              <Text
+                style={tw.style(`text-center text-base text-white`, {
+                  fontFamily: "RobotoBold",
+                })}
+              >
+                Call FRSC
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
                 bottomSheetRef?.current?.close();
                 setShow(false);
                 router.push("/(app)/setEmergencyContact");

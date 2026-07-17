@@ -545,8 +545,8 @@ const DailyActivities = () => {
           source={require("@images/pattern-bg.png")}
         >
           <StatusBar barStyle="light-content" />
-          <View style={tw.style(`bg-[#3C8F7CE6] mb-1 px-4 pt-14 pb-5 h-[188px]`)}>
-            <View style={tw`flex-row items-center justify-between w-[75%]`}>
+          <View style={tw.style(`bg-[#3C8F7CE6] mb-1 px-4 pt-14 pb-5`)}>
+            <View style={tw`flex-row items-center justify-between`}>
               <TouchableOpacity
                 onPress={() => router.back()}
                 style={tw`bg-black p-1 rounded-full`}
@@ -560,6 +560,7 @@ const DailyActivities = () => {
               >
                 Daily Activities
               </Text>
+              <View style={tw`w-10`} />
             </View>
           </View>
           <ScrollView
@@ -573,7 +574,7 @@ const DailyActivities = () => {
                 <ActivityIndicator color={tw.color("base-green")} size={"large"} />
               </View>
             ) : (
-          <View style={tw.style(`-mt-20 z-50 pt-4 pb-8 px-6`)}>
+          <View style={tw.style(`z-50 pt-4 pb-8 px-6`)}>
             <View
               style={tw.style(`flex-col px-3.5 py-10 bg-white rounded-[10px]`, {
                 elevation: 4,
