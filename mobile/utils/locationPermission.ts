@@ -113,7 +113,12 @@ export async function ensureForegroundLocationAccess(
 
   let permission = await Location.getForegroundPermissionsAsync();
 
-  if (permission.status === Location.PermissionStatus.UNDETERMINED) {
+  const osCanPrompt =
+    permission.status === Location.PermissionStatus.UNDETERMINED ||
+    (permission.status === Location.PermissionStatus.DENIED &&
+      permission.canAskAgain !== false);
+
+  if (osCanPrompt) {
     // Play "Prominent Disclosure" policy: the in-app disclosure must be shown
     // and accepted before the OS location dialog ever appears. Defer to the
     // disclosure modal (LocationDisclosureHost) if the user hasn't accepted it.

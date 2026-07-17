@@ -38,8 +38,12 @@ class LocationEngineClass {
   async start(): Promise<boolean> {
     if (this.isWatching) return true;
 
-    let { status } = await Location.getForegroundPermissionsAsync();
-    if (status === Location.PermissionStatus.UNDETERMINED) {
+    let permission = await Location.getForegroundPermissionsAsync();
+    const osCanPrompt =
+      permission.status === Location.PermissionStatus.UNDETERMINED ||
+      (permission.status === Location.PermissionStatus.DENIED &&
+        permission.canAskAgain !== false);
+    if (osCanPrompt) {
       // Play "Prominent Disclosure" policy: never trigger the OS location
       // dialog before the in-app disclosure has been accepted.
       const { isLocationDisclosureRequired } = await import(
@@ -48,9 +52,9 @@ class LocationEngineClass {
       if (await isLocationDisclosureRequired()) {
         return false;
       }
-      status = (await Location.requestForegroundPermissionsAsync()).status;
+      permission = await Location.requestForegroundPermissionsAsync();
     }
-    if (status !== "granted") return false;
+    if (permission.status !== Location.PermissionStatus.GRANTED) return false;
     this.subscription = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.BestForNavigation,

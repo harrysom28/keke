@@ -73,10 +73,23 @@ export async function getLocationDisclosureResponse(): Promise<LocationDisclosur
   return null;
 }
 
-async function isForegroundPermissionUndetermined(): Promise<boolean> {
+/**
+ * True when the OS can still show its location permission dialog.
+ * Covers UNDETERMINED and DENIED+canAskAgain (common after Settings → "Not
+ * allowed", OEM ROMs that never report undetermined, and first-ask states).
+ * False when already granted, or permanently denied (must use Settings).
+ */
+export async function canPromptOsLocationPermission(): Promise<boolean> {
   try {
     const permission = await Location.getForegroundPermissionsAsync();
-    return permission.status === Location.PermissionStatus.UNDETERMINED;
+    if (permission.status === Location.PermissionStatus.GRANTED) {
+      return false;
+    }
+    if (permission.status === Location.PermissionStatus.UNDETERMINED) {
+      return true;
+    }
+    // DENIED: Android still shows the dialog when canAskAgain is true.
+    return permission.canAskAgain !== false;
   } catch {
     return false;
   }
@@ -84,30 +97,27 @@ async function isForegroundPermissionUndetermined(): Promise<boolean> {
 
 /**
  * Play policy: the prominent disclosure must be shown (and accepted) before the
- * OS location permission dialog. Required whenever the OS permission is still
- * undetermined and the disclosure wasn't accepted in this app session. A
- * stored "accepted" from a previous install (restored by Android Auto Backup
- * while the OS permission reset to undetermined) does NOT count — only the
- * in-memory session flag does.
+ * OS location permission dialog. Required whenever the OS can still prompt and
+ * the disclosure wasn't accepted in this app session. A stored "accepted" from
+ * a previous install (Auto Backup) does NOT count — only the in-memory flag.
  */
 export async function isLocationDisclosureRequired(): Promise<boolean> {
   if (acceptedThisSession) {
     return false;
   }
-  return isForegroundPermissionUndetermined();
+  return canPromptOsLocationPermission();
 }
 
 /**
  * Auto-show on launch (e.g. after login) unless the user tapped Deny, so they
- * are not nagged every session. A restored "accepted" response with an
- * undetermined OS permission still auto-shows (backup-restore case).
- * Permission flows re-trigger it explicitly via requestLocationDisclosure().
+ * are not nagged every session. Also covers DENIED+canAskAgain (e.g. user set
+ * Location to "Not allowed" in Settings, or OEM never reports undetermined).
  */
 export async function shouldAutoShowLocationDisclosure(): Promise<boolean> {
   if ((await getLocationDisclosureResponse()) === "denied") {
     return false;
   }
-  return isForegroundPermissionUndetermined();
+  return canPromptOsLocationPermission();
 }
 
 type DisclosureListener = (purpose: LocationAccessPurpose) => void;

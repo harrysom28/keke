@@ -286,10 +286,12 @@ async function syncLocationAccessOnFocus(
     return;
   }
 
-  if (
-    permission.status === Location.PermissionStatus.UNDETERMINED &&
-    !sharedLaunchPromptAttempted
-  ) {
+  const osCanPrompt =
+    permission.status === Location.PermissionStatus.UNDETERMINED ||
+    (permission.status === Location.PermissionStatus.DENIED &&
+      permission.canAskAgain !== false);
+
+  if (osCanPrompt && !sharedLaunchPromptAttempted) {
     // The prominent disclosure modal (LocationDisclosureHost) owns the first
     // permission flow — never race it with the OS dialog.
     if (
