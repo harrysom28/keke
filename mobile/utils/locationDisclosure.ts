@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
+import { Platform } from "react-native";
 
 import type { LocationAccessPurpose } from "@/utils/locationPermission";
 
@@ -73,11 +74,24 @@ export async function getLocationDisclosureResponse(): Promise<LocationDisclosur
   return null;
 }
 
+async function clearLocationDisclosureResponse(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(RESPONSE_KEY);
+  } catch (e) {
+    console.warn("Could not clear location disclosure response:", e);
+  }
+}
+
 /**
- * True when the OS can still show its location permission dialog.
- * Covers UNDETERMINED and DENIED+canAskAgain (common after Settings → "Not
- * allowed", OEM ROMs that never report undetermined, and first-ask states).
- * False when already granted, or permanently denied (must use Settings).
+ * True when we should still run the disclosure → OS permission flow.
+ *
+ * Covers:
+ * - UNDETERMINED
+ * - DENIED + canAskAgain (Settings "Not allowed", first ask on many devices)
+ * - Android DENIED + canAskAgain:false before the user was ever asked (OEM quirk;
+ *   same class of bug we already handle for notification permission)
+ *
+ * False only when already granted, or iOS permanently denied.
  */
 export async function canPromptOsLocationPermission(): Promise<boolean> {
   try {
@@ -88,8 +102,16 @@ export async function canPromptOsLocationPermission(): Promise<boolean> {
     if (permission.status === Location.PermissionStatus.UNDETERMINED) {
       return true;
     }
-    // DENIED: Android still shows the dialog when canAskAgain is true.
-    return permission.canAskAgain !== false;
+    if (permission.canAskAgain !== false) {
+      return true;
+    }
+    // Some Android OEMs report canAskAgain:false before the first ask.
+    // Still attempt disclosure + request; if the OS won't show a dialog,
+    // the permission helpers fall through to Settings.
+    if (Platform.OS === "android") {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -97,9 +119,8 @@ export async function canPromptOsLocationPermission(): Promise<boolean> {
 
 /**
  * Play policy: the prominent disclosure must be shown (and accepted) before the
- * OS location permission dialog. Required whenever the OS can still prompt and
- * the disclosure wasn't accepted in this app session. A stored "accepted" from
- * a previous install (Auto Backup) does NOT count — only the in-memory flag.
+ * OS location permission dialog. Required whenever we can still prompt and the
+ * disclosure wasn't accepted in this app session.
  */
 export async function isLocationDisclosureRequired(): Promise<boolean> {
   if (acceptedThisSession) {
@@ -109,15 +130,53 @@ export async function isLocationDisclosureRequired(): Promise<boolean> {
 }
 
 /**
- * Auto-show on launch (e.g. after login) unless the user tapped Deny, so they
- * are not nagged every session. Also covers DENIED+canAskAgain (e.g. user set
- * Location to "Not allowed" in Settings, or OEM never reports undetermined).
+ * Auto-show on launch unless the user tapped Deny on the disclosure.
+ * If they previously accepted but OS permission was reset to undetermined
+ * (reinstall / backup), re-show so the OS dialog is never skipped.
  */
 export async function shouldAutoShowLocationDisclosure(): Promise<boolean> {
-  if ((await getLocationDisclosureResponse()) === "denied") {
+  const response = await getLocationDisclosureResponse();
+  if (response === "denied") {
     return false;
   }
+
+  const permission = await Location.getForegroundPermissionsAsync().catch(
+    () => null
+  );
+  if (!permission || permission.status === Location.PermissionStatus.GRANTED) {
+    return false;
+  }
+
+  if (response === "accepted") {
+    // Only re-show when OS permission was wiped back to undetermined.
+    return permission.status === Location.PermissionStatus.UNDETERMINED;
+  }
+
   return canPromptOsLocationPermission();
+}
+
+/**
+ * Call after successful login/signup so the disclosure host always has a
+ * pending flag to show, independent of racey auto-show checks.
+ */
+export async function queueLocationDisclosureIfNeeded(
+  purpose: LocationAccessPurpose
+): Promise<void> {
+  if (!(await canPromptOsLocationPermission())) {
+    return;
+  }
+  // New auth session: clear a prior Deny so login can present disclosure again.
+  await clearLocationDisclosureResponse();
+  await markLocationDisclosurePending(purpose);
+  try {
+    const { resetAutoLocationPromptGate } = await import(
+      "@/hooks/useCurrentLocation"
+    );
+    resetAutoLocationPromptGate();
+  } catch {
+    // optional — host still shows from pending flag
+  }
+  disclosureListeners.forEach((listener) => listener(purpose));
 }
 
 type DisclosureListener = (purpose: LocationAccessPurpose) => void;

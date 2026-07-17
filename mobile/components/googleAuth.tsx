@@ -13,6 +13,7 @@ import tw from "@/lib/tailwind";
 import { updateToken } from "@/store/AuthSlice";
 import { useDispatch } from "react-redux";
 import { useState } from "react";
+import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 
 const GoogleAuthButton = () => {
   const [loading, setLoading] = useState(false);
@@ -41,7 +42,7 @@ const GoogleAuthButton = () => {
           device_id,
           device_token,
         })
-        .then(({ data }) => {
+        .then(async ({ data }) => {
           console.log(data);
           dispatch(updateToken(data?.authorisation?.token));
 
@@ -54,6 +55,10 @@ const GoogleAuthButton = () => {
               },
             });
           } else if (data?.message === "login") {
+            const role = data?.profile?.role ?? data?.data?.user?.role;
+            await queueLocationDisclosureIfNeeded(
+              role === "driver" ? "driver" : "rider"
+            );
             router.navigate("/");
           }
         })

@@ -23,6 +23,7 @@ import { requestUserNotificationPermission } from "@/utils/notifications";
 import { useDispatch } from "react-redux";
 import { updateRefreshToken, updateToken, updateUser } from "@/store/AuthSlice";
 import { validators } from "@/utils/formValidators";
+import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 
 const LOGIN_MODES = ["Phone OTP", "Email & Password"] as const;
 type LoginMode = (typeof LOGIN_MODES)[number];
@@ -55,7 +56,7 @@ const Login = () => {
     if (isFocused) return () => {};
   }, [isFocused]);
 
-  const completeAuthSession = (data: {
+  const completeAuthSession = async (data: {
     message?: string;
     authorisation?: { token?: string; refresh_token?: string | null };
     data?: { user?: Record<string, unknown>; needs_onboarding?: boolean };
@@ -66,8 +67,12 @@ const Login = () => {
     if (data?.data?.user) {
       dispatch(updateUser({ profile: data.data.user }));
     }
+    const role = data?.data?.user?.role;
+    const purpose = role === "driver" ? "driver" : "rider";
+    if (!data?.data?.needs_onboarding) {
+      await queueLocationDisclosureIfNeeded(purpose);
+    }
     if (data?.data?.needs_onboarding) {
-      const role = data?.data?.user?.role;
       if (role === "driver") {
         router.replace("/driverinfo");
       } else {

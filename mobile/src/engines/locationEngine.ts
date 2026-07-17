@@ -1,4 +1,5 @@
 import * as Location from "expo-location";
+import { Platform } from "react-native";
 
 import { bearingBetweenDegrees, haversineMeters } from "@/utils/haversine";
 
@@ -41,8 +42,8 @@ class LocationEngineClass {
     let permission = await Location.getForegroundPermissionsAsync();
     const osCanPrompt =
       permission.status === Location.PermissionStatus.UNDETERMINED ||
-      (permission.status === Location.PermissionStatus.DENIED &&
-        permission.canAskAgain !== false);
+      (permission.status !== Location.PermissionStatus.GRANTED &&
+        (permission.canAskAgain !== false || Platform.OS === "android"));
     if (osCanPrompt) {
       // Play "Prominent Disclosure" policy: never trigger the OS location
       // dialog before the in-app disclosure has been accepted.

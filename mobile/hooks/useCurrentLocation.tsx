@@ -1,7 +1,7 @@
 import * as Location from "expo-location";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import {
   ensureForegroundLocationAccess,
   type LocationAccessPurpose,
@@ -288,8 +288,8 @@ async function syncLocationAccessOnFocus(
 
   const osCanPrompt =
     permission.status === Location.PermissionStatus.UNDETERMINED ||
-    (permission.status === Location.PermissionStatus.DENIED &&
-      permission.canAskAgain !== false);
+    (permission.status !== Location.PermissionStatus.GRANTED &&
+      (permission.canAskAgain !== false || Platform.OS === "android"));
 
   if (osCanPrompt && !sharedLaunchPromptAttempted) {
     // The prominent disclosure modal (LocationDisclosureHost) owns the first
@@ -418,6 +418,11 @@ export function useCurrentLocation({
 export function skipAutoLocationPromptAfterDisclosureDeny(): void {
   sharedLaunchPromptAttempted = true;
   publishSharedSnapshot({ locationBlocked: true, loading: false });
+}
+
+/** Allow a new login/session to run the disclosure → permission flow again. */
+export function resetAutoLocationPromptGate(): void {
+  sharedLaunchPromptAttempted = false;
 }
 
 /** Start GPS after the post-signup disclosure flow grants OS permission. */

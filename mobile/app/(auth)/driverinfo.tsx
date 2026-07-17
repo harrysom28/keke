@@ -33,7 +33,7 @@ import { Dropdown } from "react-native-element-dropdown";
 import FormInput from "@/components/formInput";
 import { ScrollView } from "react-native-gesture-handler";
 import apiClient from "@/utils/apiClient";
-import { markLocationDisclosurePending } from "@/utils/locationDisclosure";
+import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
@@ -709,7 +709,7 @@ const DriverInfo = () => {
         type: "success",
         message: "Driver registration completed successfully",
       });
-      await markLocationDisclosurePending("driver");
+      await queueLocationDisclosureIfNeeded("driver");
       router.navigate("/");
     } catch (err: unknown) {
       const e = err as {
@@ -787,7 +787,7 @@ const DriverInfo = () => {
             type: "success",
             message: "Driver registration already completed",
           });
-          await markLocationDisclosurePending("driver");
+          await queueLocationDisclosureIfNeeded("driver");
           router.navigate("/");
           return;
         }

@@ -12,7 +12,7 @@ import { validators } from "@/utils/formValidators";
 import axios from "axios";
 import apiClient from "@/utils/apiClient";
 import { getUniqueId } from "react-native-device-info";
-import { markLocationDisclosurePending } from "@/utils/locationDisclosure";
+import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 import { requestUserNotificationPermission } from "@/utils/notifications";
 import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
@@ -122,7 +122,7 @@ const Authenticate = () => {
             params: { name: state.name },
           });
         } else {
-          await markLocationDisclosurePending("rider");
+          await queueLocationDisclosureIfNeeded("rider");
           router.navigate("/");
         }
       })

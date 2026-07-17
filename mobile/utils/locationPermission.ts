@@ -113,10 +113,12 @@ export async function ensureForegroundLocationAccess(
 
   let permission = await Location.getForegroundPermissionsAsync();
 
+  // Keep in sync with canPromptOsLocationPermission (Android OEMs may report
+  // DENIED + canAskAgain:false before the user was ever asked).
   const osCanPrompt =
     permission.status === Location.PermissionStatus.UNDETERMINED ||
-    (permission.status === Location.PermissionStatus.DENIED &&
-      permission.canAskAgain !== false);
+    (permission.status !== Location.PermissionStatus.GRANTED &&
+      (permission.canAskAgain !== false || Platform.OS === "android"));
 
   if (osCanPrompt) {
     // Play "Prominent Disclosure" policy: the in-app disclosure must be shown
@@ -182,7 +184,8 @@ export async function requestLocationFromBanner(
 
   if (
     current.status === Location.PermissionStatus.DENIED &&
-    current.canAskAgain === false
+    current.canAskAgain === false &&
+    Platform.OS !== "android"
   ) {
     await openLocationSettings();
     return false;
@@ -206,7 +209,8 @@ export async function resolveLocationPermissionFromBanner(
 
   if (
     current.status === Location.PermissionStatus.DENIED &&
-    current.canAskAgain === false
+    current.canAskAgain === false &&
+    Platform.OS !== "android"
   ) {
     await openLocationSettings();
     return false;

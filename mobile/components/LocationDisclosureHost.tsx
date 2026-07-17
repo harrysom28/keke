@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState, type AppStateStatus } from "react-native";
 import { useSelector } from "react-redux";
 
 import { LocationDisclosureModal } from "@/components/LocationDisclosureModal";
@@ -14,7 +15,10 @@ import {
   ensureForegroundLocationAccess,
   type LocationAccessPurpose,
 } from "@/utils/locationPermission";
-import { resumeLocationAfterDisclosure, skipAutoLocationPromptAfterDisclosureDeny } from "@/hooks/useCurrentLocation";
+import {
+  resumeLocationAfterDisclosure,
+  skipAutoLocationPromptAfterDisclosureDeny,
+} from "@/hooks/useCurrentLocation";
 import notificationManager from "@/services/notificationManager";
 import { tryPromptAndRegisterNotifications } from "@/utils/notifications";
 
@@ -30,9 +34,8 @@ function scheduleNotificationPromptAfterLocationFlow(): void {
 
 /**
  * Shows the prominent location disclosure before the OS location permission
- * dialog. Triggered after signup/driver registration (pending flag), after
- * login (permission still undetermined and disclosure never accepted), and on
- * demand from permission flows via requestLocationDisclosure().
+ * dialog. Triggered after signup/login (pending flag), after cold start when
+ * permission can still be prompted, and on demand via requestLocationDisclosure().
  */
 export function LocationDisclosureHost() {
   const { token, user } = useSelector(AuthState);
@@ -53,8 +56,6 @@ export function LocationDisclosureHost() {
       setVisible(true);
       return;
     }
-    // Login path: no pending flag, but the OS permission was never requested
-    // and the user has never answered the disclosure.
     if (await shouldAutoShowLocationDisclosure()) {
       setPurpose(defaultPurpose);
       setVisible(true);
@@ -67,6 +68,13 @@ export function LocationDisclosureHost() {
       return;
     }
     void checkNeeded();
+    // Retry shortly after auth — permission APIs / AsyncStorage can lag on first tick.
+    const t1 = setTimeout(() => void checkNeeded(), 400);
+    const t2 = setTimeout(() => void checkNeeded(), 1500);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [token, checkNeeded]);
 
   useEffect(() => {
@@ -81,6 +89,19 @@ export function LocationDisclosureHost() {
       setVisible(true);
     });
   }, [token]);
+
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+    const onChange = (state: AppStateStatus) => {
+      if (state === "active") {
+        void checkNeeded();
+      }
+    };
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
+  }, [token, checkNeeded]);
 
   const finish = useCallback(async () => {
     handlingRef.current = true;

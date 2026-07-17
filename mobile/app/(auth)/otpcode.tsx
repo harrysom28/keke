@@ -30,6 +30,7 @@ import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { formatPhoneForDisplay } from "@/utils/phoneFormat";
 import { useDispatch, useSelector } from "react-redux";
+import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 
 type ITarget = "SIGNUP" | "FORGOT-PASSWORD" | "LOGIN";
 
@@ -126,7 +127,7 @@ const OtpCode = () => {
         device_id,
         device_token,
       })
-      .then(({ data }) => {
+      .then(async ({ data }) => {
         showMessage({ type: "success", message: data.message });
         dispatch(updateToken(data?.authorisation?.token));
         dispatch(updateRefreshToken(data?.authorisation?.refresh_token || null));
@@ -141,6 +142,10 @@ const OtpCode = () => {
             router.replace({ pathname: "/authenticate", params: { fromLogin: "1" } });
           }
         } else {
+          const role = data?.data?.user?.role;
+          await queueLocationDisclosureIfNeeded(
+            role === "driver" ? "driver" : "rider"
+          );
           router.replace("/");
         }
       })

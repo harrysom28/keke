@@ -28,7 +28,7 @@ import {
   updateUser,
 } from "@/store/AuthSlice";
 import { getUniqueId } from "react-native-device-info";
-import { markLocationDisclosurePending } from "@/utils/locationDisclosure";
+import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 import { requestUserNotificationPermission } from "@/utils/notifications";
 
 const SIGNUP_MODES = ["Phone OTP", "Email & Password"] as const;
@@ -90,7 +90,7 @@ const SignUp = () => {
         params: { name: state.name.trim() },
       });
     } else {
-      await markLocationDisclosurePending("rider");
+      await queueLocationDisclosureIfNeeded("rider");
       router.replace("/");
     }
   };

@@ -14,7 +14,7 @@ import AuthForm from "@/components/AuthForm";
 import { AuthState } from "@/store/AuthSlice";
 import { Dropdown } from "react-native-element-dropdown";
 import { PROFILE_UPDATE } from "@/constants";
-import { markLocationDisclosurePending } from "@/utils/locationDisclosure";
+import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 import PhoneInput from "@perttu/react-native-phone-number-input";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
@@ -145,7 +145,7 @@ const AuthenticateGoogle = () => {
           message: data.message,
         });
         if (registration?.type === "1") {
-          await markLocationDisclosurePending("rider");
+          await queueLocationDisclosureIfNeeded("rider");
         }
         router.navigate(registration?.type === "1" ? "/" : "/driverinfo");
       })
