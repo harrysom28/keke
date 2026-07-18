@@ -28,6 +28,7 @@ import logger from "@/utils/logger";
 import { ACTIVE_BOOKING } from "@/constants";
 import { formatBookingDate, formatBookingTime } from "@/lib/formatBookingDateTime";
 import { safeShowMessage } from "@/utils/safeShowMessage";
+import { getErrorMessage } from "@/utils/errorHandler";
 import { useFocusRefresh } from "@/hooks/useFocusRefresh";
 
 type RideStatus = "pending" | "accepted" | "in_progress" | "completed" | "cancelled" | "scheduled" | "requested";
@@ -1375,6 +1376,9 @@ const RidesScreen = () => {
   }, []);
 
   const cancelBooking = useCallback((booking_id: string, setLoadingState: React.Dispatch<React.SetStateAction<boolean>>) => {
+    const id = String(
+      booking_id || selectedBooking?.booking_id || (selectedBooking as any)?.ride_id || ""
+    ).trim();
     const currentStatus = String(selectedBooking?.status ?? "").toLowerCase();
     if (currentStatus === "in_progress" || currentStatus === "in progress" || currentStatus === "started") {
       safeShowMessage({
@@ -1383,10 +1387,17 @@ const RidesScreen = () => {
       });
       return;
     }
+    if (!id) {
+      safeShowMessage({
+        type: "danger",
+        message: "Missing booking id. Close and open the booking again.",
+      });
+      return;
+    }
 
     setLoadingState(true);
     apiClient
-      .post("schedule/cancel/booking", { booking_id })
+      .post("schedule/cancel/booking", { booking_id: id, rideId: id })
       .then(() => {
         safeShowMessage({
           type: "success",
@@ -1397,14 +1408,14 @@ const RidesScreen = () => {
         lastFetchRef.current = 0;
         setRefreshTrigger((t) => t + 1);
       })
-      .catch((err: any) => {
-        showMessage({
+      .catch((err: unknown) => {
+        safeShowMessage({
           type: "danger",
-          message: err?.response?.data?.message || err?.response?.data?.error || "Failed to cancel booking",
+          message: getErrorMessage(err, "Failed to cancel booking"),
         });
       })
       .finally(() => setLoadingState(false));
-  }, [selectedBooking?.status]);
+  }, [selectedBooking]);
 
   const renderUpcomingRides = useCallback(() => {
     if (loading) {

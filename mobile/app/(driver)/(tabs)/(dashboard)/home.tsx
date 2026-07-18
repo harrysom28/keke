@@ -576,29 +576,45 @@ const Home = () => {
     booking_id: string,
     loading: React.Dispatch<React.SetStateAction<boolean>>
   ) => {
+    const id = String(booking_id || "").trim();
+    if (!id) {
+      safeShowMessage({
+        type: "danger",
+        message: "Missing booking id. Close and open the booking again.",
+      });
+      return;
+    }
+
     loading(true);
     axios
-      .post(DRIVER_CANCEL_BOOKING, { booking_id }, apiConfig)
+      .post(DRIVER_CANCEL_BOOKING, { booking_id: id, rideId: id }, apiConfig)
       .then(() => {
+        safeShowMessage({
+          type: "success",
+          message: "Booking cancelled successfully",
+        });
         bookingSheetRef?.current?.close();
         setViewbooking({});
         setChange((prev) => !prev);
       })
       .catch((err) => {
-        console.log('Cancel booking error:', err?.response?.data);
+        console.log("Cancel booking error:", err?.response?.data);
         const status = err?.response?.status || err?.status;
-        
-        // Silently handle 401 errors - token refresh should happen automatically via API client
-        if (status === 401) {
-          console.log('Authentication error (401) - token refresh should handle this');
+
+        if (status === 404) {
+          safeShowMessage({
+            type: "info",
+            message: "Booking may have already been cancelled or completed.",
+          });
+          bookingSheetRef?.current?.close();
+          setViewbooking({});
+          setChange((prev) => !prev);
           return;
         }
-        
-        // Use centralized error handler to extract safe string message
-        const errorMessage = getErrorMessage(err);
+
         safeShowMessage({
           type: "danger",
-          message: errorMessage,
+          message: getErrorMessage(err, "Unable to cancel booking. Please try again."),
         });
       })
       .finally(() => loading(false));

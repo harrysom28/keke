@@ -14,10 +14,13 @@ import Stripe from 'stripe';
 import {
   initializeTransaction,
   verifyTransaction,
+  refundTransaction,
   listBanksNigeria,
   normalizeNgBankCode,
   resolveAccountName,
 } from '../services/paystackService.js';
+import { calculateFareBreakdown as calculateFareBreakdownFromSettings } from '../services/settingsService.js';
+import { startRideSearchAfterCardPayment } from '../services/rideCardPaymentDispatch.js';
 
 // Initialize Stripe (if API key is provided)
 const stripe = process.env.STRIPE_SECRET_KEY
@@ -415,6 +418,268 @@ export const verifyWalletTopup = asyncHandler(async (req, res) => {
     data: { balance: updatedUser?.balance ?? 0, already_credited: false },
   });
 });
+
+/**
+ * Paystack redirect after ride card payment → app deep link.
+ * GET /api/payment/ride-card-redirect
+ */
+export const getRideCardRedirect = (req, res) => {
+  const reference = (req.query.reference || '').toString().trim();
+  const appScheme = process.env.APP_SCHEME || 'myapp';
+  const deepLink = reference
+    ? `${appScheme}://ride-card-success?reference=${encodeURIComponent(reference)}`
+    : `${appScheme}://ride-card-success`;
+  const safeForMeta = deepLink.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${safeForMeta}"></head><body><p>Redirecting to app…</p><script>window.location.href=${JSON.stringify(deepLink)};</script></body></html>`;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+};
+
+/**
+ * Initialize Paystack checkout for a card ride - POST /api/payment/initialize-ride-card
+ */
+export const initializeRideCardPayment = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const rideId = String(req.body?.rideId || req.body?.ride_id || '').trim();
+  if (!rideId) {
+    throw new ValidationError('Ride ID is required');
+  }
+
+  const ride = await Ride.findById(rideId);
+  if (!ride) {
+    throw new NotFoundError('Ride');
+  }
+  if (ride.rider?.toString?.() !== userId.toString() && ride.rider?._id?.toString?.() !== userId.toString()) {
+    throw new ValidationError('You do not have permission to pay for this ride');
+  }
+  if (String(ride.paymentMethod || '').toLowerCase() !== 'card') {
+    throw new ValidationError('This ride is not a card payment');
+  }
+  if (['cancelled', 'completed'].includes(String(ride.status))) {
+    throw new ValidationError('This ride can no longer be paid for');
+  }
+  const ps = String(ride.paymentStatus || '').toLowerCase();
+  if (['charged', 'held', 'completed', 'settled'].includes(ps)) {
+    return res.json({
+      status: 'success',
+      message: 'Ride already paid',
+      data: { already_paid: true, ride_id: ride._id.toString() },
+    });
+  }
+
+  const fareAmount = Math.round(Number(ride.fare?.totalFare || 0));
+  if (fareAmount < 1) {
+    throw new ValidationError('Invalid ride fare');
+  }
+  const breakdown = await calculateFareBreakdownFromSettings(fareAmount);
+  const chargeAmount = Math.max(
+    fareAmount,
+    Math.round(Number(breakdown?.riderTotal || fareAmount))
+  );
+
+  const user = await User.findById(userId).select('email name');
+  if (!user) {
+    throw new NotFoundError('User');
+  }
+
+  const appScheme = process.env.APP_SCHEME || 'myapp';
+  const apiBase = (process.env.API_BASE_URL || '').trim();
+  const callbackUrl = apiBase.startsWith('https')
+    ? `${apiBase.replace(/\/$/, '')}/api/payment/ride-card-redirect`
+    : `${appScheme}://ride-card-success`;
+
+  const result = await initializeTransaction({
+    email: user.email || `user-${userId}@keke.app`,
+    amount: chargeAmount,
+    metadata: {
+      type: 'ride_card',
+      userId: userId.toString(),
+      rideId: ride._id.toString(),
+    },
+    callback_url: callbackUrl,
+  });
+
+  if (!result || !result.authorization_url) {
+    throw new ValidationError(
+      'Payment provider is not configured or failed to create checkout. Try Wallet or Cash.'
+    );
+  }
+
+  try {
+    await Payment.create({
+      user: userId,
+      ride: ride._id,
+      amount: chargeAmount,
+      currency: 'NGN',
+      method: 'card',
+      status: 'initialized',
+      paymentType: 'ride_payment',
+      reference: result.reference,
+      access_code: result.access_code || null,
+      metadata: new Map(
+        Object.entries({
+          paystackReference: result.reference,
+          type: 'ride_card',
+          rideId: ride._id.toString(),
+        })
+      ),
+    });
+  } catch (err) {
+    if (err.code !== 11000) {
+      logger.warn(`initializeRideCardPayment: Payment.create: ${err.message}`);
+    }
+  }
+
+  logger.info(
+    `Ride card payment initialized for ride ${ride._id}, amount ₦${chargeAmount}`
+  );
+
+  return res.json({
+    status: 'success',
+    message: 'Complete card payment to continue',
+    data: {
+      payment_url: result.authorization_url,
+      reference: result.reference,
+      amount: chargeAmount,
+      ride_id: ride._id.toString(),
+    },
+  });
+});
+
+/**
+ * Verify Paystack ride card payment, then start driver search.
+ * POST /api/payment/verify-ride-card
+ */
+export const verifyRideCardPayment = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { reference } = req.body;
+  if (!reference || typeof reference !== 'string' || !reference.trim()) {
+    throw new ValidationError('Transaction reference is required');
+  }
+
+  const ref = reference.trim();
+  const verified = await verifyTransaction(ref);
+  if (!verified || verified.status !== 'success') {
+    throw new ValidationError('Payment could not be verified or did not succeed');
+  }
+
+  const metadata = verified.metadata || {};
+  if (metadata.type !== 'ride_card' || metadata.userId !== userId.toString()) {
+    throw new ValidationError('This payment is not a ride card payment for your account');
+  }
+
+  const rideId = metadata.rideId;
+  if (!rideId) {
+    throw new ValidationError('Ride id missing from payment metadata');
+  }
+
+  const ride = await Ride.findById(rideId);
+  if (!ride) {
+    throw new NotFoundError('Ride');
+  }
+  if (ride.rider?.toString?.() !== userId.toString()) {
+    throw new ValidationError('You do not have permission to verify this payment');
+  }
+
+  const alreadyPaid = ['charged', 'held', 'completed', 'settled'].includes(
+    String(ride.paymentStatus || '').toLowerCase()
+  );
+  if (alreadyPaid) {
+    return res.json({
+      status: 'success',
+      message: 'Payment already confirmed',
+      data: {
+        ride_id: ride._id.toString(),
+        already_paid: true,
+        payment_status: ride.paymentStatus,
+      },
+    });
+  }
+
+  const amountKobo = Number(verified.amount || 0);
+  const amountNaira = amountKobo / 100;
+
+  ride.paymentStatus = 'charged';
+  ride.paymentMethod = 'card';
+  await ride.save();
+
+  try {
+    await Payment.findOneAndUpdate(
+      {
+        $or: [{ reference: ref }, { transactionId: ref }, { 'metadata.paystackReference': ref }],
+      },
+      {
+        $set: {
+          user: userId,
+          ride: ride._id,
+          amount: amountNaira,
+          method: 'card',
+          status: 'completed',
+          paymentType: 'ride_payment',
+          reference: ref,
+          transactionId: ref,
+          paidAt: new Date(),
+        },
+      },
+      { upsert: true, new: true }
+    );
+  } catch (err) {
+    if (err.code !== 11000) {
+      logger.warn(`verifyRideCardPayment: Payment upsert: ${err.message}`);
+    }
+  }
+
+  const dispatch = await startRideSearchAfterCardPayment(ride._id);
+  logger.info(
+    `Ride card payment verified for ride ${ride._id} (₦${amountNaira}); drivers_notified=${dispatch.drivers_notified}`
+  );
+
+  return res.json({
+    status: 'success',
+    message: 'Card payment confirmed. Finding a driver…',
+    data: {
+      ride_id: ride._id.toString(),
+      payment_status: 'charged',
+      amount: amountNaira,
+      drivers_notified: dispatch.drivers_notified,
+      already_paid: false,
+    },
+  });
+});
+
+/**
+ * Best-effort Paystack refund for a charged card ride (used on cancel).
+ * @param {import('mongoose').Document} ride
+ */
+export async function refundChargedCardRideIfNeeded(ride) {
+  if (String(ride.paymentMethod || '').toLowerCase() !== 'card') return null;
+  if (!['charged', 'held'].includes(String(ride.paymentStatus || '').toLowerCase())) {
+    return null;
+  }
+  const payment = await Payment.findOne({
+    ride: ride._id,
+    method: 'card',
+    status: 'completed',
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+  const reference = payment?.transactionId || payment?.reference;
+  if (!reference) {
+    logger.warn(`refundChargedCardRideIfNeeded: no Paystack ref for ride ${ride._id}`);
+    return null;
+  }
+  const result = await refundTransaction(reference);
+  if (result?.status) {
+    ride.paymentStatus = 'refunded';
+    await ride.save();
+    await Payment.updateOne(
+      { _id: payment._id },
+      { $set: { status: 'refunded', refundReason: 'ride_cancelled' } }
+    );
+    logger.info(`Refunded card payment for ride ${ride._id} (ref ${reference})`);
+  }
+  return result;
+}
 
 /**
  * Top-up wallet - POST /api/user/profile/topup

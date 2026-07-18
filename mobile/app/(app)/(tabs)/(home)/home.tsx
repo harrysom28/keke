@@ -268,6 +268,8 @@ export default function HomeScreen() {
   const [chatOpenKick, setChatOpenKick] = useState(0);
   const [trigger, setTrigger] = useState(0);
   const [dismissedBookingId, setDismissedBookingId] = useState<string | null>(null);
+  /** Measured height of the scheduled-booking preview card for map top padding. */
+  const [bookingCardHeight, setBookingCardHeight] = useState(0);
   const [bookRideOpenVersion, setBookRideOpenVersion] = useState(0);
   const [findRideSheetOpen, setFindRideSheetOpen] = useState(false);
   const [nearby, setNearby] = useState<
@@ -1844,11 +1846,20 @@ export default function HomeScreen() {
     booking_id: string,
     loading: React.Dispatch<React.SetStateAction<boolean>>
   ) => {
+    const id = String(booking_id || "").trim();
+    if (!id) {
+      safeShowMessage({
+        type: "danger",
+        message: "Missing booking id. Close and open the booking again.",
+      });
+      return;
+    }
+
     loading(true);
     apiClient
-      .post("schedule/cancel/booking", { booking_id })
+      .post("schedule/cancel/booking", { booking_id: id, rideId: id })
       .then(async () => {
-        await suppressScheduleBookingForHomePreview(booking_id);
+        await suppressScheduleBookingForHomePreview(id);
         safeShowMessage({
           type: "success",
           message: "Booking cancelled successfully",
@@ -1863,11 +1874,13 @@ export default function HomeScreen() {
       })
       .catch(async (err) => {
         const status = err?.response?.status || err?.status;
-        
-        // Silently handle 404 errors - endpoint may not exist or booking already cancelled
+
+        // 404 = booking already gone — clear local UI so the sheet doesn't look stuck
         if (status === 404) {
-          logger.debug("Cancel booking endpoint not found (404) - booking may already be cancelled", { booking_id });
-          await suppressScheduleBookingForHomePreview(booking_id);
+          logger.debug("Cancel booking 404 — treating as already cancelled", {
+            booking_id: id,
+          });
+          await suppressScheduleBookingForHomePreview(id);
           safeShowMessage({
             type: "info",
             message: "Booking may have already been cancelled or completed.",
@@ -1877,32 +1890,16 @@ export default function HomeScreen() {
           clearRideState();
           bookingViewSheetRef?.current?.close();
           getActiveBooking();
-          loading(false);
           return;
         }
-        
-        logger.error("Cancel booking error", err, { response: err?.response?.data });
-        if (err?.response?.data?.message) {
-          safeShowMessage({
-            type: "danger",
-            message: err?.response?.data.message,
-          });
-        } else if (err?.response?.data?.error) {
-          // Handle error object - extract message string
-          const errorData = err.response.data.error;
-          const errorMessage = typeof errorData === 'string' 
-            ? errorData 
-            : (errorData?.message || errorData?.name || 'An error occurred');
-          safeShowMessage({
-            type: "danger",
-            message: errorMessage,
-          });
-        } else {
-          safeShowMessage({
-            type: "danger",
-            message: "Unable to cancel booking. Please try again.",
-          });
-        }
+
+        logger.error("Cancel booking error", err, {
+          response: err?.response?.data,
+        });
+        safeShowMessage({
+          type: "danger",
+          message: getErrorMessage(err, "Unable to cancel booking. Please try again."),
+        });
       })
       .finally(() => {
         loading(false);
@@ -2612,6 +2609,11 @@ export default function HomeScreen() {
     !isTerminalScheduleListStatus(normalizeBookingListStatus(booking?.status)) &&
     dismissedBookingId !== booking?.booking_id;
 
+  // Card sits under the header with marginTop -44; keep user pin below the overlay.
+  const mapExtraTopPadding = bookingHomePreviewVisible
+    ? Math.round(insets.top + 8 + 52 + Math.max(bookingCardHeight - 44, 0) + 20)
+    : 0;
+
   /**
    * Pickup "X min" / arrive-by — only for Find Ride / active WAITING.
    * Scheduled-booking home still has leftover maps + route + ETA from useRoute; hide pills whenever the
@@ -2709,6 +2711,7 @@ export default function HomeScreen() {
           routeLoading={routeLoading}
           pauseDriverUpdates={isBooking}
           riderActiveRideStatus={riderActiveRideStatusForMap || null}
+          extraTopPadding={mapExtraTopPadding}
           etaLabel={showPickupRouteEta && eta ? eta : null}
           arriveByLabel={
             showPickupRouteEta && routeArriveBy ? `Arrive by ${routeArriveBy}` : null
@@ -2821,6 +2824,12 @@ export default function HomeScreen() {
            ) &&
            dismissedBookingId !== booking?.booking_id && (
             <View
+              onLayout={(e) => {
+                const h = e.nativeEvent.layout.height;
+                if (h > 0 && Math.abs(h - bookingCardHeight) > 1) {
+                  setBookingCardHeight(h);
+                }
+              }}
               style={tw.style(`ml-4 bg-white p-3 shadow-xl rounded-2xl overflow-hidden relative`, {
                 marginTop: -44,
                 marginRight: 64,

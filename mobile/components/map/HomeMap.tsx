@@ -206,6 +206,11 @@ export interface HomeMapProps {
   pauseDriverUpdates?: boolean;
   /** Rider active-ride status from API (e.g. accepted, arrived) — used with Redux driverLiveLocation */
   riderActiveRideStatus?: string | null;
+  /**
+   * Extra top inset when a home overlay (e.g. scheduled booking card) covers the map.
+   * Applied on top of the base padding for the current mapState.
+   */
+  extraTopPadding?: number;
 }
 
 function HomeMapComponent({
@@ -222,6 +227,7 @@ function HomeMapComponent({
   children,
   pauseDriverUpdates = false,
   riderActiveRideStatus = null,
+  extraTopPadding = 0,
 }: HomeMapProps) {
   const [engineLocation, setEngineLocation] = useState({
     latitude: 0,
@@ -270,10 +276,11 @@ function HomeMapComponent({
     return null;
   }, [userLocationProp?.heading, engineLocation.heading]);
 
-  const mapPadding = useMemo(
-    () => MAP_PADDING_BY_STATE[mapState] ?? MAP_PADDING_BY_STATE.idle,
-    [mapState]
-  );
+  const mapPadding = useMemo(() => {
+    const base = MAP_PADDING_BY_STATE[mapState] ?? MAP_PADDING_BY_STATE.idle;
+    if (!extraTopPadding || extraTopPadding <= 0) return base;
+    return { ...base, top: Math.max(base.top, extraTopPadding) };
+  }, [mapState, extraTopPadding]);
   const legalLabelInsets = useMemo(
     () => LEGAL_LABEL_INSETS_BY_STATE[mapState] ?? LEGAL_LABEL_INSETS_BY_STATE.idle,
     [mapState]
@@ -325,6 +332,35 @@ function HomeMapComponent({
     dropoff.longitude !== 0 &&
     dropoff.latitude !== 1;
   const hasRoute = routeCoords.length > 0;
+
+  // When a top overlay appears/disappears, nudge the camera so the user pin
+  // stays in the clear (padded) region instead of under the card.
+  const prevExtraTopRef = useRef(0);
+  useEffect(() => {
+    if (!mapReady || !mapRef?.current || !hasValidUser) return;
+    if (hasPickup && hasDropoff) return;
+    if (prevExtraTopRef.current === extraTopPadding) return;
+    prevExtraTopRef.current = extraTopPadding;
+    const map = mapRef.current as any;
+    map.animateToRegion?.(
+      {
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        latitudeDelta: ZOOM_DELTA,
+        longitudeDelta: ZOOM_DELTA,
+      },
+      350
+    );
+  }, [
+    extraTopPadding,
+    mapReady,
+    mapRef,
+    hasValidUser,
+    hasPickup,
+    hasDropoff,
+    userLocation.latitude,
+    userLocation.longitude,
+  ]);
 
   const initialRegion = useMemo(
     () =>

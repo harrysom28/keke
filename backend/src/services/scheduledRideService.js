@@ -60,6 +60,8 @@ class ScheduledRideService {
           $gte: now,
         },
         driver: null,
+        // Do not auto-dispatch unpaid card bookings
+        $nor: [{ paymentMethod: 'card', paymentStatus: 'pending' }],
       })
         .populate('rider', 'name phone deviceToken')
         .populate('vehicleType')
@@ -98,6 +100,7 @@ class ScheduledRideService {
         status: { $in: ['requested', 'searching', 'scheduled'] },
         scheduledAt: { $lt: now },
         driver: null,
+        $nor: [{ paymentMethod: 'card', paymentStatus: 'pending' }],
       })
         .populate('rider', 'name phone deviceToken')
         .lean();

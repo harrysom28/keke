@@ -2,8 +2,9 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Pressable,
+  ScrollView,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
@@ -80,11 +81,16 @@ export const DriverBookingSheet = ({
   const rawStatus = String(data?.status ?? "").trim().toLowerCase().replace(/-/g, "_");
   const isCancelled = rawStatus === "cancelled";
   const isCompleted = rawStatus === "completed";
+  const startedFlag = data?.is_started as unknown;
+  const isStartedFlag =
+    startedFlag === true ||
+    startedFlag === 1 ||
+    String(startedFlag).toLowerCase() === "true";
   const isInProgressOrStarted =
     rawStatus === "in_progress" ||
     rawStatus === "in progress" ||
     rawStatus === "started" ||
-    !!data?.is_started;
+    isStartedFlag;
   const hasAssignedDriver =
     accepted ||
     !!data?.driver_id ||
@@ -182,12 +188,22 @@ export const DriverBookingSheet = ({
           ? 2
           : 3;
 
+  const rideId = (data?.ride_id ?? data?.rideId ?? data?.booking_id) as string;
+  const cancelId = String(data?.booking_id || rideId || "").trim();
+
   const handleCancelPress = () => {
-    if (!cancel) return;
+    if (!cancel || reject) return;
     if (isInProgressOrStarted) {
       showMessage({
         type: "warning",
         message: "This ride has already started and cannot be cancelled.",
+      });
+      return;
+    }
+    if (!cancelId) {
+      showMessage({
+        type: "danger",
+        message: "Missing booking id. Close and open the booking again.",
       });
       return;
     }
@@ -199,13 +215,11 @@ export const DriverBookingSheet = ({
         {
           text: "Yes, Cancel",
           style: "destructive",
-          onPress: () => cancel(data?.booking_id as string, setReject),
+          onPress: () => cancel(cancelId, setReject),
         },
       ]
     );
   };
-
-  const rideId = (data?.ride_id ?? data?.rideId ?? data?.booking_id) as string;
 
   const BookingAction = (booking_id: string, action: "start" | "complete") => {
     const URL =
@@ -239,21 +253,45 @@ export const DriverBookingSheet = ({
       .finally(() => setRide(false));
   };
 
+  const showCancel =
+    !!cancel && !isCancelled && !isCompleted && !isInProgressOrStarted;
+  const showDriverAccept =
+    !hasAssignedDriver && isDriver && !isCancelled && !isCompleted;
+  const showAssignedActions =
+    hasAssignedDriver &&
+    !isCancelled &&
+    !isCompleted &&
+    isBookingValid(
+      data?.booking_date as string,
+      data?.booking_time as string
+    );
+  const showActionFooter =
+    showCancel || showDriverAccept || showAssignedActions;
+  const scrollBottomPad = sheetFooterBottomPadding(insets.bottom) + 8;
+
   return (
     <Portal>
       <BottomSheet
-        height={"82%"}
+        height={"75%"}
         ref={bottomSheetRef}
         animationType="spring"
         backdropMaskColor="#19191933"
-        openDuration={1000}
+        openDuration={400}
+        // Body pan steals taps from Cancel; drag handle still dismisses.
+        disableBodyPanning
         disableKeyboardHandling={false}
-        style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
+        style={tw`px-6 pt-2 rounded-t-[40px] bg-white`}
       >
         {isloading ? (
           <ActivityIndicator color={tw.color("base-green")} size={"large"} />
         ) : (
-          <View>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            bounces
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: scrollBottomPad }}
+          >
             <View
               style={tw`flex-row items-center justify-between px-4 py-2 bg-black rounded-t-[16px]`}
             >
@@ -683,142 +721,148 @@ export const DriverBookingSheet = ({
                 {data?.payment_method}
               </Text>
             </View>
-            <View
-              style={tw.style(
-                `flex-col gap-y-4`,
-                hasAssignedDriver && `mt-12`,
-                { paddingBottom: sheetFooterBottomPadding(insets.bottom) }
-              )}
-            >
-              {/* Accept Ride button - only for drivers viewing unaccepted bookings */}
-              {!hasAssignedDriver && isDriver && !isCancelled && !isCompleted && (
-                <TouchableOpacity
-                  onPress={() => action(data?.booking_id as string, setAccept)}
-                  style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
-                >
-                  {accept ? (
-                    <ActivityIndicator color="white" />
-                  ) : (
-                    <Text
-                      style={tw.style(`text-base text-white uppercase`, {
-                        fontFamily: "RobotoBold",
-                      })}
-                    >
-                      Accept ride
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              )}
 
-              {/* Accepted booking actions */}
-              {hasAssignedDriver && !isCancelled && !isCompleted && isBookingValid(
-                data?.booking_date as string,
-                data?.booking_time as string
-              ) && (
-                <>
-                  {/* Start Ride button - only for drivers when ride not yet started */}
-                  {isDriver && !isInProgressOrStarted && (
-                    <TouchableOpacity
-                      onPress={() => BookingAction(data?.booking_id as string, "start")}
-                      style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
-                    >
-                      {ride ? (
-                        <ActivityIndicator color="white" />
-                      ) : (
-                        <Text
-                          style={tw.style(`text-base text-white uppercase`, {
-                            fontFamily: "RobotoBold",
-                          })}
-                        >
-                          Start Ride
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  )}
+            {showActionFooter ? (
+              <View
+                collapsable={false}
+                style={tw`flex-col gap-y-3 mt-4 pt-3 border-t border-[#F0F0F0]`}
+              >
+                {showDriverAccept && (
+                  <Pressable
+                    onPress={() => action(data?.booking_id as string, setAccept)}
+                    disabled={accept}
+                    hitSlop={8}
+                    style={({ pressed }) => [
+                      tw`min-h-[48px] flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`,
+                      { opacity: pressed || accept ? 0.85 : 1 },
+                    ]}
+                  >
+                    {accept ? (
+                      <ActivityIndicator color="white" />
+                    ) : (
+                      <Text
+                        style={tw.style(`text-base text-white uppercase`, {
+                          fontFamily: "RobotoBold",
+                        })}
+                      >
+                        Accept ride
+                      </Text>
+                    )}
+                  </Pressable>
+                )}
 
-                  {/* Complete Ride button - only for drivers when ride is in progress */}
-                  {isDriver && isInProgressOrStarted && (
-                    <TouchableOpacity
-                      onPress={() => BookingAction(data?.booking_id as string, "complete")}
-                      style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
-                    >
-                      {ride ? (
-                        <ActivityIndicator color="white" />
-                      ) : (
-                        <Text
-                          style={tw.style(`text-base text-white uppercase`, {
-                            fontFamily: "RobotoBold",
-                          })}
-                        >
-                          Complete Ride
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  )}
+                {showAssignedActions && (
+                  <>
+                    {isDriver && !isInProgressOrStarted && (
+                      <Pressable
+                        onPress={() =>
+                          BookingAction(data?.booking_id as string, "start")
+                        }
+                        disabled={ride}
+                        hitSlop={8}
+                        style={({ pressed }) => [
+                          tw`min-h-[48px] flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`,
+                          { opacity: pressed || ride ? 0.85 : 1 },
+                        ]}
+                      >
+                        {ride ? (
+                          <ActivityIndicator color="white" />
+                        ) : (
+                          <Text
+                            style={tw.style(`text-base text-white uppercase`, {
+                              fontFamily: "RobotoBold",
+                            })}
+                          >
+                            Start Ride
+                          </Text>
+                        )}
+                      </Pressable>
+                    )}
 
-                  {/* Start Ride button - only for passengers when ride hasn't started */}
-                  {!isDriver && !data?.is_started && (
-                    <TouchableOpacity
-                      onPress={() => BookingAction(data?.booking_id as string, "start")}
-                      style={tw`flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`}
-                    >
-                      {ride ? (
-                        <ActivityIndicator color="white" />
-                      ) : (
-                        <Text
-                          style={tw.style(`text-base text-white uppercase`, {
-                            fontFamily: "RobotoBold",
-                          })}
-                        >
-                          Start Ride
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  )}
+                    {isDriver && isInProgressOrStarted && (
+                      <Pressable
+                        onPress={() =>
+                          BookingAction(data?.booking_id as string, "complete")
+                        }
+                        disabled={ride}
+                        hitSlop={8}
+                        style={({ pressed }) => [
+                          tw`min-h-[48px] flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`,
+                          { opacity: pressed || ride ? 0.85 : 1 },
+                        ]}
+                      >
+                        {ride ? (
+                          <ActivityIndicator color="white" />
+                        ) : (
+                          <Text
+                            style={tw.style(`text-base text-white uppercase`, {
+                              fontFamily: "RobotoBold",
+                            })}
+                          >
+                            Complete Ride
+                          </Text>
+                        )}
+                      </Pressable>
+                    )}
 
-                  {/* Cancel button - only for drivers when accepted and not cancelled */}
-                  {isDriver && cancel && !isCancelled && !isInProgressOrStarted && (
-                    <TouchableOpacity
-                      onPress={handleCancelPress}
-                      style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-red-400 rounded-[8px]`}
-                    >
-                      {reject ? (
-                        <ActivityIndicator color={tw.color("text-red-400")} />
-                      ) : (
-                        <Text
-                          style={tw.style(`text-base text-red-400 uppercase`, {
-                            fontFamily: "RobotoBold",
-                          })}
-                        >
-                          Cancel Ride
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  )}
-                </>
-              )}
+                    {!isDriver && !isStartedFlag && (
+                      <Pressable
+                        onPress={() =>
+                          BookingAction(data?.booking_id as string, "start")
+                        }
+                        disabled={ride}
+                        hitSlop={8}
+                        style={({ pressed }) => [
+                          tw`min-h-[48px] flex-row items-center justify-center gap-x-2 py-3.5 bg-base-green rounded-[8px]`,
+                          { opacity: pressed || ride ? 0.85 : 1 },
+                        ]}
+                      >
+                        {ride ? (
+                          <ActivityIndicator color="white" />
+                        ) : (
+                          <Text
+                            style={tw.style(`text-base text-white uppercase`, {
+                              fontFamily: "RobotoBold",
+                            })}
+                          >
+                            Start Ride
+                          </Text>
+                        )}
+                      </Pressable>
+                    )}
+                  </>
+                )}
 
-              {/* Cancel button for passengers to cancel their booking - hide when cancelled */}
-              {!isDriver && cancel && !isCancelled && !isInProgressOrStarted && (
-                <TouchableOpacity
-                  onPress={handleCancelPress}
-                  style={tw`flex-row items-center justify-center gap-x-2 py-3 border border-red-400 rounded-[8px]`}
-                >
-                  {reject ? (
-                    <ActivityIndicator color={tw.color("text-red-400")} />
-                  ) : (
-                    <Text
-                      style={tw.style(`text-base text-red-400 uppercase`, {
-                        fontFamily: "RobotoBold",
-                      })}
-                    >
-                      Cancel Booking
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
+                {showCancel && (
+                  <Pressable
+                    onPress={handleCancelPress}
+                    disabled={reject}
+                    hitSlop={12}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      isDriver ? "Cancel ride" : "Cancel booking"
+                    }
+                    style={({ pressed }) => [
+                      tw`min-h-[48px] flex-row items-center justify-center gap-x-2 py-3 border border-red-400 rounded-[8px]`,
+                      { opacity: pressed || reject ? 0.7 : 1 },
+                    ]}
+                  >
+                    {reject ? (
+                      <ActivityIndicator color={tw.color("text-red-400")} />
+                    ) : (
+                      <Text
+                        style={tw.style(`text-base text-red-400 uppercase`, {
+                          fontFamily: "RobotoBold",
+                        })}
+                      >
+                        {isDriver ? "Cancel Ride" : "Cancel Booking"}
+                      </Text>
+                    )}
+                  </Pressable>
+                )}
+              </View>
+            ) : null}
+          </ScrollView>
         )}
       </BottomSheet>
     </Portal>

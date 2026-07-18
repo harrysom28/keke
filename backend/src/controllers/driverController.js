@@ -2510,8 +2510,12 @@ export const completeRide = asyncHandler(async (req, res) => {
   ride.completion_reason = 'normal';
   ride.dropOffCompleted = true;
   ride.completedAt = new Date();
-  const isEscrowWallet = ride.paymentMethod === 'wallet' && ['held', 'charged'].includes(ride.paymentStatus);
-  if (!isEscrowWallet) {
+  const isEscrowWallet =
+    ride.paymentMethod === 'wallet' && ['held', 'charged'].includes(ride.paymentStatus);
+  // Prepaid Paystack card — keep charged until processRidePayment settles + credits driver
+  const isPrepaidCard =
+    ride.paymentMethod === 'card' && ['held', 'charged'].includes(ride.paymentStatus);
+  if (!isEscrowWallet && !isPrepaidCard) {
     if (ride.paymentMethod === 'cash') {
       ride.paymentStatus = 'pending';
     } else {

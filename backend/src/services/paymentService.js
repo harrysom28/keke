@@ -182,13 +182,63 @@ export const processRidePayment = async (ride) => {
       }
 
       case 'card':
-      case 'stripe':
-        // For Stripe payments, check if payment intent exists
+      case 'stripe': {
+        // Prepaid via Paystack at booking — credit driver and mark settled.
+        const prepaid = ['charged', 'held', 'settled', 'completed'].includes(
+          String(ride.paymentStatus || '').toLowerCase()
+        );
+        if (prepaid || paymentMethod === 'card') {
+          const existingCard = await Payment.findOne({
+            ride: ride._id,
+            method: 'card',
+            status: { $in: ['completed', 'refunded'] },
+          });
+          if (existingCard?.status === 'completed' || ride.paymentStatus === 'settled') {
+            if (ride.paymentStatus !== 'settled' && ride.paymentStatus !== 'completed') {
+              ride.paymentStatus = 'settled';
+              await ride.save();
+            }
+            try {
+              await applyRideEarningToWallet(ride);
+            } catch (earnErr) {
+              logger.error(
+                `Card ride earning apply failed for ${ride._id}: ${earnErr.message}`
+              );
+            }
+            payment = existingCard;
+            transactionId = existingCard?.transactionId || existingCard?.reference;
+            logger.info(`Card (Paystack) payment settled for ride ${ride._id}`);
+            break;
+          }
+
+          if (!prepaid) {
+            throw new Error('Card ride was not paid before completion');
+          }
+
+          payment = await Payment.create({
+            user: ride.rider,
+            ride: ride._id,
+            amount,
+            currency: ride.fare.currency || 'NGN',
+            method: 'card',
+            status: 'completed',
+            paymentType: 'ride_payment',
+            transactionId: `CARD-${Date.now()}-${ride._id}`,
+            paidAt: new Date(),
+          });
+          transactionId = payment.transactionId;
+          ride.paymentStatus = 'settled';
+          await ride.save();
+          await applyRideEarningToWallet(ride);
+          logger.info(`Card (Paystack) payment recorded for ride ${ride._id}`);
+          break;
+        }
+
+        // Legacy Stripe path (only if Stripe configured and not prepaid card)
         if (!stripe) {
           throw new Error('Stripe is not configured');
         }
 
-        // Check if payment intent was already created
         const existingPayment = await Payment.findOne({
           ride: ride._id,
           method: 'stripe',
@@ -199,9 +249,8 @@ export const processRidePayment = async (ride) => {
           transactionId = existingPayment.transactionId;
           logger.info(`Stripe payment already processed for ride ${ride._id}`);
         } else {
-          // Create payment intent if not exists
           const paymentIntent = await stripe.paymentIntents.create({
-            amount: Math.round(amount * 100), // Convert to cents
+            amount: Math.round(amount * 100),
             currency: (ride.fare.currency || 'ngn').toLowerCase(),
             metadata: {
               userId: ride.rider.toString(),
@@ -210,7 +259,6 @@ export const processRidePayment = async (ride) => {
             description: `Ride payment for ride ${ride._id}`,
           });
 
-          // Create payment record (status: processing)
           payment = await Payment.create({
             user: ride.rider,
             ride: ride._id,
@@ -221,7 +269,6 @@ export const processRidePayment = async (ride) => {
             stripePaymentIntentId: paymentIntent.id,
           });
 
-          // Note: Payment will be confirmed when client completes payment
           logger.info(`Stripe payment intent created for ride ${ride._id}: ${paymentIntent.id}`);
           return {
             success: true,
@@ -232,6 +279,7 @@ export const processRidePayment = async (ride) => {
           };
         }
         break;
+      }
 
       case 'cash':
         payment = await Payment.create({

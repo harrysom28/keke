@@ -98,7 +98,7 @@ const ListItem = memo(({ item, onPress, onClick, onReassign, isActive }: LProps)
             {driverVehicleType ? (
               <RNImage
                 source={getVehicleImage(
-                  driverVehicleId ? parseInt(String(driverVehicleId)) : 1,
+                  driverVehicleId,
                   driverVehicleType
                 )}
                 style={{ width: 53, height: 20 }}

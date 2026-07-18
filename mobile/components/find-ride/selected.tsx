@@ -123,16 +123,13 @@ export const SelectedView = ({ back, action }: Props) => {
       </View>
       <View style={tw`flex-row justify-center items-center gap-x-4 mt-9 mb-5`}>
         <Image
-          source={
-            rideUtils?.vehicle?.vehicle_type_image
-              ? { uri: rideUtils.vehicle.vehicle_type_image }
-              : getVehicleImageSource(
-                  rideUtils?.vehicle?.vehicle_id || 1,
-                  rideUtils?.vehicle?.vehicle_type_image,
-                  rideUtils?.vehicle?.vehicle_type
-                ).source ||
-                require("@/assets/images/vehicle-1.png")
-          }
+          source={getVehicleImageSource(
+            rideUtils?.vehicle?.vehicle_id,
+            rideUtils?.vehicle?.vehicle_type_image || rideUtils?.vehicle?.image,
+            rideUtils?.vehicle?.display_name ||
+              rideUtils?.vehicle?.name ||
+              rideUtils?.vehicle?.vehicle_type
+          )}
           style={tw`h-[55px] w-[55px]`}
         />
 

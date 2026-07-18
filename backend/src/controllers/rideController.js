@@ -180,6 +180,7 @@ export const requestRide = asyncHandler(async (req, res) => {
 
   const normalizedPaymentMethod = await assertPaymentMethodEnabled(paymentMethod || 'cash');
   const isWalletPayment = normalizedPaymentMethod === 'wallet';
+  const isCardPayment = normalizedPaymentMethod === 'card';
   let escrowBreakdown = null;
   if (isWalletPayment) {
     try {
@@ -189,6 +190,9 @@ export const requestRide = asyncHandler(async (req, res) => {
       if (err.name === 'EscrowWalletError') throw err;
       throw new ValidationError(err.message || 'Wallet validation failed');
     }
+  } else if (isCardPayment) {
+    // Same rider-facing total as wallet (fare + service charge) for Paystack amount.
+    escrowBreakdown = await calculateFareBreakdownFromSettings(totalFare);
   }
 
   // Create ride request with normalized coordinates
@@ -223,6 +227,8 @@ export const requestRide = asyncHandler(async (req, res) => {
       }),
     },
     ...(isWalletPayment && { paymentStatus: 'held' }),
+    // Card stays pending until Paystack verify; do not dispatch until then.
+    ...(isCardPayment && { paymentStatus: 'pending' }),
     distance: {
       value: distanceKm,
       unit: 'km',
@@ -241,6 +247,21 @@ export const requestRide = asyncHandler(async (req, res) => {
     }],
   };
 
+  // For card + preferred driver: validate availability before creating (user will pay next).
+  if (isCardPayment && preferredDriverId) {
+    const preferred = await Driver.findById(preferredDriverId)
+      .populate('user', 'role')
+      .populate('vehicleDetails.vehicleType');
+    if (!preferred || String(preferred.user?.role || '') !== 'driver') {
+      throw new ValidationError('Selected driver was not found. Please choose another driver.');
+    }
+    if (!preferred.isOnline || !preferred.isAvailable) {
+      throw new ValidationError(
+        'The driver you selected is not available right now. Please choose another driver.'
+      );
+    }
+  }
+
   const ride = await Ride.create(rideData);
   logRideLifecycle(logger, ride, { event: 'ride_created' });
   if (isWalletPayment) {
@@ -255,11 +276,8 @@ export const requestRide = asyncHandler(async (req, res) => {
   await ride.populate('rider', 'name phone profileImage rating');
   await ride.populate('vehicleType', 'name displayName image');
 
-  // Round 1: if the rider hand-picked a driver, send the offer to that driver
-  // ALONE (Bolt/Uber-style sequential offer). If they let it expire/decline,
-  // `dispatchRide` already retries with a fresh batch (excluding everyone in
-  // `notifiedDriverIds`), so the trip rolls forward to the next available
-  // driver automatically.
+  // Card: create the ride but do NOT match/dispatch until Paystack verifies.
+  // Wallet/cash: existing immediate dispatch path (unchanged).
   let matchedDrivers = [];
   let usedPreferredDriver = false;
 
@@ -277,96 +295,104 @@ export const requestRide = asyncHandler(async (req, res) => {
     throw new ValidationError(message);
   };
 
-  if (preferredDriverId) {
-    try {
-      const preferred = await Driver.findById(preferredDriverId)
-        .populate('user', 'name deviceToken fcm_token role')
-        .populate('vehicleDetails.vehicleType');
+  if (!isCardPayment) {
+    // Round 1: if the rider hand-picked a driver, send the offer to that driver
+    // ALONE (Bolt/Uber-style sequential offer). If they let it expire/decline,
+    // `dispatchRide` already retries with a fresh batch (excluding everyone in
+    // `notifiedDriverIds`), so the trip rolls forward to the next available
+    // driver automatically.
+    if (preferredDriverId) {
+      try {
+        const preferred = await Driver.findById(preferredDriverId)
+          .populate('user', 'name deviceToken fcm_token role')
+          .populate('vehicleDetails.vehicleType');
 
-      if (!preferred) {
-        await abortRideAfterHold('Selected driver was not found. Please choose another driver.');
-      }
+        if (!preferred) {
+          await abortRideAfterHold('Selected driver was not found. Please choose another driver.');
+        }
 
-      const rideVehicleTypeId = getVehicleTypeId(ride.vehicleType);
-      const preferredVehicleTypeId = getVehicleTypeId(preferred.vehicleDetails?.vehicleType);
-      const sameVehicle =
-        !rideVehicleTypeId ||
-        !preferredVehicleTypeId ||
-        preferredVehicleTypeId === rideVehicleTypeId;
+        const rideVehicleTypeId = getVehicleTypeId(ride.vehicleType);
+        const preferredVehicleTypeId = getVehicleTypeId(preferred.vehicleDetails?.vehicleType);
+        const sameVehicle =
+          !rideVehicleTypeId ||
+          !preferredVehicleTypeId ||
+          preferredVehicleTypeId === rideVehicleTypeId;
 
-      if (!sameVehicle) {
-        await abortRideAfterHold(
-          'Selected driver cannot fulfill this vehicle type. Please choose another driver.'
+        if (!sameVehicle) {
+          await abortRideAfterHold(
+            'Selected driver cannot fulfill this vehicle type. Please choose another driver.'
+          );
+        }
+
+        if (String(preferred.user?.role || '') !== 'driver') {
+          await abortRideAfterHold('Selected driver is not available. Please choose another driver.');
+        }
+
+        if (!preferred.isOnline || !preferred.isAvailable) {
+          await abortRideAfterHold(
+            'The driver you selected is not available right now. Please choose another driver.'
+          );
+        }
+
+        matchedDrivers = [{ driver: preferred, score: 100, distance: 0 }];
+        usedPreferredDriver = true;
+        logger.info(
+          `requestRide: exclusive offer to preferred driver ${preferredDriverId} for ride ${ride._id}`
         );
-      }
-
-      if (String(preferred.user?.role || '') !== 'driver') {
-        await abortRideAfterHold('Selected driver is not available. Please choose another driver.');
-      }
-
-      if (!preferred.isOnline || !preferred.isAvailable) {
-        await abortRideAfterHold(
-          'The driver you selected is not available right now. Please choose another driver.'
+      } catch (err) {
+        if (err instanceof ValidationError) throw err;
+        logger.warn(
+          `requestRide: failed to resolve preferred driver ${preferredDriverId} for ride ${ride._id}: ${err.message}`
         );
+        await abortRideAfterHold('Could not request the selected driver. Please try again.');
       }
+    } else {
+      matchedDrivers = await rideMatchingService.findAndMatchDrivers(
+        ride,
+        RIDER_MATCH_SEARCH_RADIUS_KM,
+        5
+      );
+    }
 
-      // Rider picked this driver in the UI — offer ONLY to them in round 1 (no broadcast).
-      matchedDrivers = [{ driver: preferred, score: 100, distance: 0 }];
-      usedPreferredDriver = true;
-      logger.info(
-        `requestRide: exclusive offer to preferred driver ${preferredDriverId} for ride ${ride._id}`
-      );
-    } catch (err) {
-      if (err instanceof ValidationError) throw err;
-      logger.warn(
-        `requestRide: failed to resolve preferred driver ${preferredDriverId} for ride ${ride._id}: ${err.message}`
-      );
-      await abortRideAfterHold('Could not request the selected driver. Please try again.');
+    logger.info(
+      `Ride ${ride._id} dispatching to ${matchedDrivers.length} driver(s) ` +
+        `(preferred=${usedPreferredDriver})`
+    );
+
+    if (!ride.isScheduled && (ride.status === 'searching' || ride.status === 'requested')) {
+      if (matchedDrivers.length > 0) {
+        setImmediate(() => {
+          (async () => {
+            try {
+              await dispatchRide(ride, matchedDrivers, usedPreferredDriver ? { maxOffers: 1 } : {});
+            } catch (err) {
+              logger.error(`dispatchRide error for ride ${ride._id}: ${err.message}`);
+            }
+          })();
+        });
+      } else {
+        logger.warn(`No matched drivers for ride ${ride._id}`);
+        setImmediate(() => {
+          notifyNoDriverFound(ride).catch((err) =>
+            logger.error(`notifyNoDriverFound failed: ${err.message}`)
+          );
+        });
+      }
     }
   } else {
-    matchedDrivers = await rideMatchingService.findAndMatchDrivers(
-      ride,
-      RIDER_MATCH_SEARCH_RADIUS_KM,
-      5
+    logger.info(
+      `Ride ${ride._id} created with card payment pending — dispatch deferred until Paystack verify`
     );
-  }
-
-  logger.info(
-    `Ride ${ride._id} dispatching to ${matchedDrivers.length} driver(s) ` +
-      `(preferred=${usedPreferredDriver})`
-  );
-
-  // NOTE: do NOT pre-fill `notifiedDriverIds` here. `dispatchRide` adds the
-  // drivers it actually offered to via $addToSet, which is what the round-2
-  // fallback (inside dispatchRide's setTimeout) relies on to skip them.
-
-  // Sequential driver offers (FCM + Pusher + Socket.io), background — instant HTTP response for rider
-  if (!ride.isScheduled && (ride.status === 'searching' || ride.status === 'requested')) {
-    if (matchedDrivers.length > 0) {
-      setImmediate(() => {
-        (async () => {
-          try {
-            await dispatchRide(ride, matchedDrivers, usedPreferredDriver ? { maxOffers: 1 } : {});
-          } catch (err) {
-            logger.error(`dispatchRide error for ride ${ride._id}: ${err.message}`);
-          }
-        })();
-      });
-    } else {
-      logger.warn(`No matched drivers for ride ${ride._id}`);
-      setImmediate(() => {
-        notifyNoDriverFound(ride).catch((err) =>
-          logger.error(`notifyNoDriverFound failed: ${err.message}`)
-        );
-      });
-    }
   }
 
   res.status(201).json({
     status: 'success',
-    message: 'Ride requested successfully',
+    message: isCardPayment
+      ? 'Ride created. Complete card payment to find a driver.'
+      : 'Ride requested successfully',
     data: {
       ride: formatRideResponse(ride),
+      payment_required: isCardPayment,
       surge_pricing: {
         multiplier: surgePricing.multiplier,
         is_surged: surgePricing.isSurged,
@@ -729,6 +755,9 @@ export const cancelRide = asyncHandler(async (req, res) => {
   const isEscrow =
     String(ride.paymentMethod || '').toLowerCase() === 'wallet' &&
     (['held', 'charged'].includes(paymentStatusLower) || !!hasWalletHold);
+  const isChargedCard =
+    String(ride.paymentMethod || '').toLowerCase() === 'card' &&
+    ['held', 'charged'].includes(paymentStatusLower);
   const previousRideStatus = ride.status;
 
   let cancellationFee = 0;
@@ -779,6 +808,18 @@ export const cancelRide = asyncHandler(async (req, res) => {
         driverCompensation = driverShare;
         cancellationSplit = { driverCompensation: driverShare, platformRetention: platformShare };
       }
+    }
+  }
+
+  // Prepaid card (Paystack): refund before marking cancelled (best-effort).
+  if (isChargedCard) {
+    try {
+      const { refundChargedCardRideIfNeeded } = await import('./paymentController.js');
+      await refundChargedCardRideIfNeeded(ride);
+    } catch (refundErr) {
+      logger.error(
+        `Card refund failed for cancelled ride ${rideId}: ${refundErr.message}`
+      );
     }
   }
 

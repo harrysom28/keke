@@ -278,6 +278,38 @@ export async function verifyTransaction(reference) {
 }
 
 /**
+ * Refund a successful Paystack transaction (e.g. card ride cancelled before pickup).
+ * @param {string} reference
+ * @param {number} [amountNaira] - optional partial refund; omit for full refund
+ * @returns {Promise<{ status: boolean, data?: object }|null>}
+ */
+export async function refundTransaction(reference, amountNaira) {
+  const secretKey = getSecretKey();
+  if (!secretKey || !reference) {
+    return null;
+  }
+  try {
+    const body = { transaction: reference };
+    if (amountNaira != null && Number.isFinite(Number(amountNaira))) {
+      body.amount = Math.round(Number(amountNaira) * 100);
+    }
+    const { data } = await axios.post(`${PAYSTACK_BASE}/refund`, body, {
+      headers: {
+        Authorization: `Bearer ${secretKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: PAYSTACK_TIMEOUT_MS,
+    });
+    return data || null;
+  } catch (err) {
+    logger.error(
+      `Paystack refundTransaction: ${err?.response?.data?.message || err.message}`
+    );
+    return null;
+  }
+}
+
+/**
  * Paystack bank list JSON often returns `code` as a number, dropping leading zeros (e.g. 44 for Access Bank).
  * NIBSS resolve expects the 3-digit (or longer fintech) string code.
  * @param {unknown} raw

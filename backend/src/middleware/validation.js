@@ -640,6 +640,31 @@ export const validationRules = {
       .trim(),
   ],
 
+  initializeRideCardPayment: [
+    body('rideId')
+      .optional()
+      .isMongoId()
+      .withMessage('Invalid ride ID'),
+    body('ride_id')
+      .optional()
+      .isMongoId()
+      .withMessage('Invalid ride ID'),
+    body().custom((_, { req }) => {
+      if (!req.body.rideId && !req.body.ride_id) {
+        throw new Error('Ride ID is required');
+      }
+      return true;
+    }),
+  ],
+
+  verifyRideCardPayment: [
+    body('reference')
+      .notEmpty()
+      .withMessage('Transaction reference is required')
+      .isString()
+      .trim(),
+  ],
+
   walletFund: [
     body('amount')
       .isFloat({ min: 100 })

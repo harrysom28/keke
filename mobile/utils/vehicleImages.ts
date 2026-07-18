@@ -1,47 +1,109 @@
 /**
+ * Local vehicle thumbnails by type name.
+ * vehicle-1 = keke, vehicle-2 = taxi/car, vehicle-3 = okada/bike
+ */
+
+const KEKE_IMAGE = require("@/assets/images/vehicle-1.png");
+const CAR_IMAGE = require("@/assets/images/vehicle-2.png");
+const BIKE_IMAGE = require("@/assets/images/vehicle-3.png");
+
+type VehicleKind = "keke" | "bike" | "car";
+
+function resolveVehicleKind(vehicleType?: string | null): VehicleKind | null {
+  if (!vehicleType || typeof vehicleType !== "string") return null;
+  const typeName = vehicleType.toLowerCase().trim();
+
+  // Keke / tricycle first (before generic "auto" which can match auto-rickshaw)
+  if (
+    typeName.includes("keke") ||
+    typeName.includes("tuk") ||
+    typeName.includes("tricycle") ||
+    typeName.includes("rickshaw") ||
+    typeName.includes("napep")
+  ) {
+    return "keke";
+  }
+
+  // Okada / motorcycle
+  if (
+    typeName.includes("okada") ||
+    typeName.includes("bike") ||
+    typeName.includes("motor") ||
+    typeName.includes("scooter")
+  ) {
+    return "bike";
+  }
+
+  // Taxi / car
+  if (
+    typeName.includes("taxi") ||
+    typeName.includes("cab") ||
+    typeName.includes("car") ||
+    typeName.includes("sedan") ||
+    typeName.includes("automobile")
+  ) {
+    return "car";
+  }
+
+  return null;
+}
+
+function imageForKind(kind: VehicleKind) {
+  if (kind === "keke") return KEKE_IMAGE;
+  if (kind === "bike") return BIKE_IMAGE;
+  return CAR_IMAGE;
+}
+
+/**
  * Helper function to get local vehicle image asset
  * Falls back to local assets when API doesn't provide image URL
  */
-export const getVehicleImage = (vehicleId: number, vehicleType?: string): any => {
-  // Map by vehicle type name for accuracy (vehicle-2.png is Car, vehicle-3.png is Bike)
-  if (vehicleType) {
-    const typeName = vehicleType.toLowerCase();
-    if (typeName.includes("keke") || typeName.includes("tuk")) {
-      return require("@/assets/images/vehicle-1.png");
-    }
-    if (typeName.includes("bike") || typeName.includes("motorcycle")) {
-      return require("@/assets/images/vehicle-3.png"); // vehicle-3.png is the bike image
-    }
-    if (typeName.includes("car") || typeName.includes("auto")) {
-      return require("@/assets/images/vehicle-2.png"); // vehicle-2.png is the car image
-    }
-  }
+export const getVehicleImage = (
+  vehicleId: number | string | null | undefined,
+  vehicleType?: string
+): any => {
+  const kind = resolveVehicleKind(vehicleType);
+  if (kind) return imageForKind(kind);
 
-  // Fallback: Map vehicle_id to local assets
-  // Note: vehicle-2.png is Car, vehicle-3.png is Bike (images are swapped from expected)
+  // Numeric id fallback only (Mongo ObjectIds must not map to keke)
+  const numericId =
+    typeof vehicleId === "number"
+      ? vehicleId
+      : typeof vehicleId === "string" && /^\d+$/.test(vehicleId)
+        ? Number(vehicleId)
+        : NaN;
+
   const imageMap: { [key: number]: any } = {
-    1: require("@/assets/images/vehicle-1.png"), // Keke
-    2: require("@/assets/images/vehicle-2.png"), // Car (not Bike!)
-    3: require("@/assets/images/vehicle-3.png"), // Bike (not Car!)
+    1: KEKE_IMAGE,
+    2: CAR_IMAGE,
+    3: BIKE_IMAGE,
   };
 
-  // Return mapped image if exists, otherwise return first vehicle image as default
-  return imageMap[vehicleId] || imageMap[1] || require("@/assets/images/vehicle-1.png");
+  if (!Number.isNaN(numericId) && imageMap[numericId]) {
+    return imageMap[numericId];
+  }
+
+  return KEKE_IMAGE;
 };
 
 /**
- * Get vehicle image source - prefers API URL, falls back to local asset
+ * Image source for <Image />.
+ * Prefers type-matched local asset, then API URL, then id fallback.
+ * Local-by-name first avoids DB rows that all point at the same keke image.
  */
 export const getVehicleImageSource = (
-  vehicleId: number,
+  vehicleId: number | string | null | undefined,
   apiImageUrl: string | null | undefined,
   vehicleType?: string
-): { uri?: string; source?: any } => {
-  // If API provides a valid URL, use it
-  if (apiImageUrl && typeof apiImageUrl === "string" && apiImageUrl.trim() !== "") {
-    return { uri: apiImageUrl };
+): any => {
+  const kind = resolveVehicleKind(vehicleType);
+  if (kind) {
+    return imageForKind(kind);
   }
 
-  // Otherwise, use local asset
-  return { source: getVehicleImage(vehicleId, vehicleType) };
+  if (apiImageUrl && typeof apiImageUrl === "string" && apiImageUrl.trim() !== "") {
+    return { uri: apiImageUrl.trim() };
+  }
+
+  return getVehicleImage(vehicleId, vehicleType);
 };

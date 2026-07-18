@@ -25,6 +25,10 @@ import apiClient from "@/utils/apiClient";
 import { setAppData, setRideData, AppDetailsState, type IUtils, type IUserLocation } from "@/store/AppSlice";
 import { getErrorMessage } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
+import {
+  cancelUnpaidCardRide,
+  collectRideCardPayment,
+} from "@/utils/openRideCardPayment";
 import { geocodeAddress, resolvePickupLabel, reverseGeocode } from "@/utils/mapsApi";
 import tw from "@/lib/tailwind";
 import { useDispatch, useSelector } from "react-redux";
@@ -742,10 +746,32 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
       console.log('📤 Scheduling ride:', requestData);
 
       const { data } = await apiClient.post(REQUEST_RIDE, requestData);
+      const ridePayload = data?.data?.ride ?? data?.data ?? null;
+      const paymentRequired = Boolean(data?.data?.payment_required);
+      const rideIdForPay = String(
+        ridePayload?.ride_id || ridePayload?._id || ridePayload?.id || ""
+      ).trim();
+
+      if (paymentRequired && rideIdForPay) {
+        const paid = await collectRideCardPayment(rideIdForPay, safeShowMessage);
+        if (!paid) {
+          await cancelUnpaidCardRide(rideIdForPay, true);
+          safeShowMessage({
+            type: "warning",
+            message: "Card payment was not completed. Booking was cancelled.",
+            duration: 4500,
+          });
+          setLoading(false);
+          return;
+        }
+      }
+
       getActiveBooking();
       safeShowMessage({
         type: "success",
-        message: data?.message || "Ride scheduled successfully",
+        message: paymentRequired
+          ? "Payment confirmed. Ride scheduled successfully"
+          : data?.message || "Ride scheduled successfully",
       });
       handleBack();
     } catch (error: any) {

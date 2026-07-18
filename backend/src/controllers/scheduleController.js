@@ -51,6 +51,8 @@ export const getScheduledBookings = asyncHandler(async (req, res) => {
       isScheduled: true,
       scheduledAt: { $gte: new Date() }, // Only future scheduled rides
       status: { $nin: ['cancelled', 'completed'] },
+      // Hide unpaid card bookings from drivers
+      $nor: [{ paymentMethod: 'card', paymentStatus: 'pending' }],
     };
   } else {
     // Get scheduled rides for rider
@@ -125,6 +127,13 @@ export const acceptScheduledBooking = asyncHandler(async (req, res) => {
 
   if (ridePreview.scheduledAt && ridePreview.scheduledAt < new Date()) {
     throw new ValidationError('Cannot accept past scheduled ride');
+  }
+
+  if (
+    ridePreview.paymentMethod === 'card' &&
+    String(ridePreview.paymentStatus || '').toLowerCase() === 'pending'
+  ) {
+    throw new ValidationError('This booking is awaiting card payment and cannot be accepted yet');
   }
 
   const rideVehicleTypeId =
@@ -324,12 +333,14 @@ export const getClosestScheduledBooking = asyncHandler(async (req, res) => {
     });
   }
 
+  const unpaidCardGate = { $nor: [{ paymentMethod: 'card', paymentStatus: 'pending' }] };
   const rideFilter = assignedToDriver
     ? {
         driver: driver._id,
         isScheduled: true,
         scheduledAt: { $gte: new Date() },
         status: { $nin: ['cancelled', 'completed'] },
+        ...unpaidCardGate,
       }
     : {
         vehicleType: driver.vehicleDetails.vehicleType,
@@ -337,6 +348,7 @@ export const getClosestScheduledBooking = asyncHandler(async (req, res) => {
         scheduledAt: { $gte: new Date() },
         status: { $in: ['requested', 'scheduled'] },
         driver: null,
+        ...unpaidCardGate,
       };
 
   const scheduledRides = await Ride.find(rideFilter)
@@ -509,6 +521,20 @@ export const cancelScheduledBooking = asyncHandler(async (req, res) => {
 
   if (isEscrowRide) {
     await processCancellation(ride._id, riderId, driverUserId, fareAmount, cancellationScenario);
+  }
+
+  const isChargedCard =
+    String(ride.paymentMethod || '').toLowerCase() === 'card' &&
+    ['held', 'charged'].includes(String(ride.paymentStatus || '').toLowerCase());
+  if (isChargedCard) {
+    try {
+      const { refundChargedCardRideIfNeeded } = await import('./paymentController.js');
+      await refundChargedCardRideIfNeeded(ride);
+    } catch (refundErr) {
+      logger.error(
+        `Card refund failed for cancelled scheduled booking ${rideIdToCancel}: ${refundErr.message}`
+      );
+    }
   }
 
   // Cancel the ride using the Ride model method

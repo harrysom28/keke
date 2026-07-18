@@ -39,6 +39,10 @@ import { getErrorMessage, showErrorMessage } from "@/utils/errorHandler";
 import { requestManager } from "@/utils/requestManager";
 import apiClient from "@/utils/apiClient";
 import { mapUiPaymentToApi } from "@/utils/paymentMethods";
+import {
+  cancelUnpaidCardRide,
+  collectRideCardPayment,
+} from "@/utils/openRideCardPayment";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -312,6 +316,30 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       console.log('✅ Ride created successfully:', response.data?.data);
 
       const confirmedRide = response.data?.data?.ride ?? null;
+      const paymentRequired = Boolean(response.data?.data?.payment_required);
+      const rideIdForPay = String(
+        confirmedRide?.ride_id || confirmedRide?._id || confirmedRide?.id || ""
+      ).trim();
+      const isScheduledRide = Boolean(
+        confirmedRide?.is_scheduled ||
+          confirmedRide?.scheduled_at ||
+          requestData.scheduledAt
+      );
+
+      // Card: charge via Paystack before entering waiting / matching UI.
+      // Wallet and cash skip this block entirely.
+      if (paymentRequired && rideIdForPay) {
+        const paid = await collectRideCardPayment(rideIdForPay, showMessage);
+        if (!paid) {
+          await cancelUnpaidCardRide(rideIdForPay, isScheduledRide);
+          showMessage({
+            type: "warning",
+            message: "Card payment was not completed. Ride was cancelled.",
+            duration: 4500,
+          });
+          return;
+        }
+      }
 
       // Grace period + immediate hydration from confirm response (GET active-ride can lag).
       onRideBooked?.(confirmedRide);
@@ -336,7 +364,9 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       
       showMessage({ 
         type: "success", 
-        message: "Ride created successfully" 
+        message: paymentRequired
+          ? "Payment confirmed. Finding a driver…"
+          : "Ride created successfully" 
       });
       
       // Reset step

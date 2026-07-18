@@ -10,6 +10,7 @@ const router = express.Router();
 
 // Public: Paystack redirects here after payment; we redirect to app deep link (no auth)
 router.get('/payment/wallet-topup-redirect', paymentController.getWalletTopupRedirect);
+router.get('/payment/ride-card-redirect', paymentController.getRideCardRedirect);
 
 // All routes below require authentication
 router.use(protect);
@@ -23,6 +24,20 @@ router.get('/wallet/verify', limiters.walletOpsLimiter, validationRules.walletVe
 router.post('/payment/initialize', validationRules.initializePayment, validate, paymentController.initializePayment);
 router.post('/payment/initialize-wallet-topup', limiters.walletOpsLimiter, validationRules.initializeWalletTopup, validate, paymentController.initializeWalletTopup);
 router.post('/payment/verify-wallet-topup', limiters.walletOpsLimiter, validationRules.verifyWalletTopup, validate, paymentController.verifyWalletTopup);
+router.post(
+  '/payment/initialize-ride-card',
+  limiters.walletOpsLimiter,
+  validationRules.initializeRideCardPayment,
+  validate,
+  paymentController.initializeRideCardPayment
+);
+router.post(
+  '/payment/verify-ride-card',
+  limiters.walletOpsLimiter,
+  validationRules.verifyRideCardPayment,
+  validate,
+  paymentController.verifyRideCardPayment
+);
 router.post('/payment/confirm', validationRules.confirmStripePayment, validate, paymentController.confirmStripePayment);
 
 // Wallet operations (matching mobile app endpoints)

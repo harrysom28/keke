@@ -10,7 +10,7 @@ import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
-import { getVehicleImage, getVehicleImageSource } from "@/utils/vehicleImages";
+import { getVehicleImageSource } from "@/utils/vehicleImages";
 import { useSelector, useDispatch } from "react-redux";
 import apiClient from "@/utils/apiClient";
 import { AntDesign, Ionicons } from "@expo/vector-icons";
@@ -648,11 +648,11 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
         >
           <View style={styles.vehicleIconContainer}>
             <Image
-              source={
-                vehicle.vehicle_type_image
-                  ? { uri: vehicle.vehicle_type_image }
-                  : getVehicleImage(vehicle.vehicle_id || 1, vehicle.vehicle_type)
-              }
+              source={getVehicleImageSource(
+                vehicle.vehicle_id,
+                vehicle.vehicle_type_image || vehicle.image,
+                vehicle.display_name || vehicle.name || vehicle.vehicle_type
+              )}
               style={styles.vehicleIcon}
               resizeMode="contain"
             />
