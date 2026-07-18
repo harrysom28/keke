@@ -259,9 +259,18 @@ const formatLocation = (placeName: string, address: string, maxLength: number = 
 };
 
 const inferRideStatus = (ride: any): RideStatus => {
-  const rawStatus = String(ride?.status || ride?.ride_status || "").trim().toLowerCase();
+  const rawStatus = String(ride?.status || ride?.ride_status || ride?.internal_status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_");
 
-  if (ride?.cancelled_at || ride?.cancelledAt || ride?.canceled_at || ride?.canceledAt) {
+  if (
+    ride?.cancelled_at ||
+    ride?.cancelledAt ||
+    ride?.canceled_at ||
+    ride?.canceledAt ||
+    ride?.cancellation?.cancelledAt
+  ) {
     return "cancelled";
   }
 
@@ -296,13 +305,15 @@ const inferRideStatus = (ride: any): RideStatus => {
   return "scheduled";
 };
 
-type BookingStage = "scheduled" | "searching" | "confirmed" | "ongoing";
+type BookingStage = "scheduled" | "searching" | "confirmed" | "ongoing" | "cancelled" | "completed";
 
 const getBookingStage = (ride: Ride): BookingStage => {
-  const status = String(ride.status || "").toLowerCase();
-  if (status === "in_progress") return "ongoing";
-  if (status === "accepted") return "confirmed";
-  if (status === "pending" || status === "requested") return "searching";
+  const inferred = inferRideStatus(ride);
+  if (inferred === "cancelled") return "cancelled";
+  if (inferred === "completed") return "completed";
+  if (inferred === "in_progress") return "ongoing";
+  if (inferred === "accepted") return "confirmed";
+  if (inferred === "pending" || inferred === "requested") return "searching";
   return "scheduled";
 };
 
@@ -310,6 +321,22 @@ const getBookingStatusMeta = (ride: Ride, bookingTime?: string) => {
   const stage = getBookingStage(ride);
 
   switch (stage) {
+    case "cancelled":
+      return {
+        stage,
+        label: "Canceled",
+        hint: "This booking was canceled",
+        accent: "#B42318",
+        background: "#FEE4E2",
+      };
+    case "completed":
+      return {
+        stage,
+        label: "Completed",
+        hint: "This ride has been completed",
+        accent: "#374151",
+        background: "#F3F4F6",
+      };
     case "ongoing":
       return {
         stage,
@@ -1064,13 +1091,15 @@ const RidesScreen = () => {
                       : booking.booking_time || "";
 
                   return {
+                    ...booking, // base fields first
                     ride_id: booking.ride_id || booking.booking_id || booking._id || "",
                     _id: booking._id || booking.ride_id || booking.booking_id || "",
+                    // Infer after spread so cancelled_at wins over stale "scheduled" status
                     status: inferRideStatus(booking),
                     isScheduled: true,
                     is_scheduled: true,
-                    scheduledAt: booking.scheduled_at || booking.scheduled_at,
-                    scheduled_at: booking.scheduled_at || booking.scheduled_at,
+                    scheduledAt: booking.scheduled_at || booking.scheduledAt,
+                    scheduled_at: booking.scheduled_at || booking.scheduledAt,
                     pickupLocation: {
                       address: booking.pickup?.address || booking.pickup_location || booking.origin || "",
                       coordinates: booking.pickup?.location
@@ -1086,8 +1115,9 @@ const RidesScreen = () => {
                     fare: booking.fare || booking.cost || 0,
                     vehicleType: booking.vehicle_type,
                     driver: booking.driver,
-                    createdAt: booking.created_at || new Date().toISOString(),
-                    ...booking, // Include all other fields
+                    createdAt: booking.created_at || booking.createdAt || new Date().toISOString(),
+                    cancelled_at: booking.cancelled_at || booking.cancelledAt,
+                    completed_at: booking.completed_at || booking.completedAt,
                   };
                 })
               : [];
@@ -1106,8 +1136,8 @@ const RidesScreen = () => {
             // Filter past rides (completed and cancelled)
             const past = combinedRides
               .filter((ride: any) => {
-                const status = (ride.status || "").toLowerCase();
-                return ["completed", "cancelled"].includes(status);
+                const status = inferRideStatus(ride);
+                return status === "completed" || status === "cancelled";
               })
               .map(transformRide);
 
@@ -1115,57 +1145,42 @@ const RidesScreen = () => {
             // Also include scheduled rides that haven't been completed/cancelled
             const upcoming = combinedRides
               .filter((ride: any) => {
-                const status = (ride.status || "").toLowerCase();
-                // Check for scheduled flag in both camelCase and snake_case
-                const isScheduled = ride.isScheduled || ride.is_scheduled || false;
+                const status = inferRideStatus(ride);
+                const isScheduled = !!(ride.isScheduled || ride.is_scheduled);
                 const scheduledAt = ride.scheduledAt || ride.scheduled_at;
 
-                // Include active rides (but exclude if they're completed/cancelled)
-                if (["pending", "accepted", "in_progress"].includes(status)) {
-                  // If it's a scheduled ride, check if scheduled time is in the future
+                // Completed trips belong in Past only
+                if (status === "completed") return false;
+
+                // Cancelled scheduled bookings stay visible in Bookings (Canceled badge)
+                if (status === "cancelled") {
+                  return isScheduled || !!scheduledAt;
+                }
+
+                // Active / upcoming scheduled rides
+                if (["pending", "accepted", "in_progress", "requested", "searching"].includes(status)) {
                   if (isScheduled && scheduledAt) {
-                    const scheduledDate = new Date(scheduledAt);
-                    const now = new Date();
-                    return scheduledDate > now;
+                    return new Date(scheduledAt) > new Date();
                   }
-                  return true;
+                  return !isScheduled; // on-demand active rides
                 }
 
-                // Include scheduled rides (status might be "scheduled" or "requested" with isScheduled flag)
-                if (isScheduled && scheduledAt) {
-                  const scheduledDate = new Date(scheduledAt);
-                  const now = new Date();
-                  // Only include if scheduled time is in the future
-                  if (scheduledDate > now) {
-                    if (__DEV__) {
-                      console.log("✅ Including scheduled ride:", {
-                        id: ride.ride_id || ride._id,
-                        scheduledAt: scheduledAt,
-                        scheduledDate: scheduledDate.toISOString(),
-                        now: now.toISOString(),
-                      });
-                    }
-                    return true;
-                  }
-                }
-
-                // Include rides with status "scheduled" even if flag is missing
-                if (status === "scheduled" && scheduledAt) {
-                  const scheduledDate = new Date(scheduledAt);
-                  const now = new Date();
-                  const isFuture = scheduledDate > now;
-                  if (__DEV__ && isFuture) {
-                    console.log('✅ Including ride with status "scheduled":', {
-                      id: ride.ride_id || ride._id,
-                      scheduledAt: scheduledAt,
-                    });
-                  }
-                  return isFuture;
+                if ((isScheduled || status === "scheduled") && scheduledAt) {
+                  return new Date(scheduledAt) > new Date();
                 }
 
                 return false;
               })
-              .map(transformRide);
+              .map(transformRide)
+              // Active first, canceled scheduled last
+              .sort((a, b) => {
+                const aCanceled = a.status === "cancelled" ? 1 : 0;
+                const bCanceled = b.status === "cancelled" ? 1 : 0;
+                if (aCanceled !== bCanceled) return aCanceled - bCanceled;
+                const aTime = new Date(a.scheduled_at || a.created_at).getTime();
+                const bTime = new Date(b.scheduled_at || b.created_at).getTime();
+                return aTime - bTime;
+              });
 
             if (__DEV__) {
               console.log("📊 Bookings count:", upcoming.length);
@@ -1221,13 +1236,14 @@ const RidesScreen = () => {
         const bookings = bookingsResponse.data?.data || [];
         const transformedBookings = Array.isArray(bookings)
           ? bookings.map((booking: any) => ({
+              ...booking,
               ride_id: booking.ride_id || booking.booking_id || booking._id || "",
               _id: booking._id || booking.ride_id || booking.booking_id || "",
               status: inferRideStatus(booking),
               isScheduled: true,
               is_scheduled: true,
-              scheduledAt: booking.scheduled_at || booking.scheduled_at,
-              scheduled_at: booking.scheduled_at || booking.scheduled_at,
+              scheduledAt: booking.scheduled_at || booking.scheduledAt,
+              scheduled_at: booking.scheduled_at || booking.scheduledAt,
               pickupLocation: {
                 address: booking.pickup?.address || booking.pickup_location || booking.origin || "",
                 coordinates: booking.pickup?.location
@@ -1243,30 +1259,45 @@ const RidesScreen = () => {
               fare: booking.fare || booking.cost || 0,
               vehicleType: booking.vehicle_type,
               driver: booking.driver,
-              createdAt: booking.created_at || new Date().toISOString(),
-              ...booking,
+              createdAt: booking.created_at || booking.createdAt || new Date().toISOString(),
+              cancelled_at: booking.cancelled_at || booking.cancelledAt,
+              completed_at: booking.completed_at || booking.completedAt,
             }))
           : [];
         const rideIds = new Set(allRides.map((r: any) => r.ride_id || r._id));
         const uniqueBookings = transformedBookings.filter((b: any) => !rideIds.has(b.ride_id || b._id));
         const combinedRides = [...allRides, ...uniqueBookings];
         const past = combinedRides
-          .filter((ride: any) => ["completed", "cancelled"].includes(String(ride.status || "").toLowerCase()))
+          .filter((ride: any) => {
+            const status = inferRideStatus(ride);
+            return status === "completed" || status === "cancelled";
+          })
           .map(transformRide);
         const upcoming = combinedRides
           .filter((ride: any) => {
-            const status = String(ride.status || "").toLowerCase();
-            const isScheduled = ride.isScheduled || ride.is_scheduled || false;
+            const status = inferRideStatus(ride);
+            const isScheduled = !!(ride.isScheduled || ride.is_scheduled);
             const scheduledAt = ride.scheduledAt || ride.scheduled_at;
-            if (["pending", "accepted", "in_progress"].includes(status)) {
+            if (status === "completed") return false;
+            if (status === "cancelled") return isScheduled || !!scheduledAt;
+            if (["pending", "accepted", "in_progress", "requested", "searching"].includes(status)) {
               if (isScheduled && scheduledAt) return new Date(scheduledAt) > new Date();
-              return true;
+              return !isScheduled;
             }
-            if (isScheduled && scheduledAt) return new Date(scheduledAt) > new Date();
-            if (status === "scheduled" && scheduledAt) return new Date(scheduledAt) > new Date();
+            if ((isScheduled || status === "scheduled") && scheduledAt) {
+              return new Date(scheduledAt) > new Date();
+            }
             return false;
           })
-          .map(transformRide);
+          .map(transformRide)
+          .sort((a, b) => {
+            const aCanceled = a.status === "cancelled" ? 1 : 0;
+            const bCanceled = b.status === "cancelled" ? 1 : 0;
+            if (aCanceled !== bCanceled) return aCanceled - bCanceled;
+            const aTime = new Date(a.scheduled_at || a.created_at).getTime();
+            const bTime = new Date(b.scheduled_at || b.created_at).getTime();
+            return aTime - bTime;
+          });
         setPastRides(past);
         setUpcomingRides(upcoming);
       })
@@ -1405,6 +1436,23 @@ const RidesScreen = () => {
         });
         bookingSheetRef.current?.close();
         setSelectedBooking({});
+        // Optimistic UI: keep card in Bookings with Canceled badge; also add to Past
+        const canceledAt = new Date().toISOString();
+        setUpcomingRides((prevUpcoming) => {
+          const updated = prevUpcoming.map((r) =>
+            String(r.ride_id) === id
+              ? { ...r, status: "cancelled" as RideStatus, cancelled_at: canceledAt }
+              : r
+          );
+          const canceledRide = updated.find((r) => String(r.ride_id) === id);
+          if (canceledRide) {
+            setPastRides((prevPast) => {
+              if (prevPast.some((r) => String(r.ride_id) === id)) return prevPast;
+              return [canceledRide, ...prevPast];
+            });
+          }
+          return updated;
+        });
         lastFetchRef.current = 0;
         setRefreshTrigger((t) => t + 1);
       })

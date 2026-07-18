@@ -15,6 +15,8 @@ interface QuickPickPlace {
 
 interface CustomPlacesAutocompleteProps {
   placeholder?: string;
+  /** Readable placeholder; iOS default is too light on pale fields */
+  placeholderTextColor?: string;
   /** When set, uses Uber-level backend search (re-ranked by distance) and shows "X km away" */
   userLat?: number;
   userLng?: number;
@@ -47,6 +49,7 @@ function newSessionToken(): string {
 
 export default function CustomPlacesAutocomplete({
   placeholder = 'Search',
+  placeholderTextColor = '#6B7280',
   userLat,
   userLng,
   onPlaceSelected,
@@ -348,6 +351,7 @@ export default function CustomPlacesAutocomplete({
             setListClosedBySelection(false);
           }}
           placeholder={placeholder}
+          placeholderTextColor={placeholderTextColor}
           autoFocus={autoFocus}
           style={[
             {
@@ -357,6 +361,7 @@ export default function CustomPlacesAutocomplete({
               paddingVertical: 12,
               backgroundColor: '#3C8F7C63',
               borderRadius: 8,
+              color: '#242E42',
             },
             styles?.textInput,
           ]}

@@ -602,6 +602,19 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
 
   const validHeight = getValidHeight();
 
+  const sheetCloseButton = (
+    <View style={tw`flex-row justify-end items-center mb-1`}>
+      <TouchableOpacity
+        onPress={handleBack}
+        style={tw`h-[32px] w-[32px] items-center justify-center bg-black rounded-full`}
+        activeOpacity={0.7}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
+        <AntDesign name="close" size={18} color="white" />
+      </TouchableOpacity>
+    </View>
+  );
+
   if (!validHeight || validHeight <= 0 || isNaN(validHeight) || !isFinite(validHeight)) {
     const fallbackHeight = 600;
     return (
@@ -616,25 +629,11 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         // Android: PanResponder on the sheet body steals/conflicts with TextInput & ScrollView touches
         // on some devices (e.g. Samsung). Drag-to-close still works via the handle bar.
         disableBodyPanning={true}
-        style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`, {
-          position: 'relative',
-        })}
+        style={tw`gap-y-2 px-6 pt-1 pb-2 rounded-t-[40px] bg-white`}
         closeOnDragDown={true}
         onClose={handleSheetClosed}
       >
-        {/* X Button at top right edge of card */}
-        <View style={tw.style(`absolute -top-1 right-1 z-50`, {
-          paddingTop: 0,
-          paddingRight: 0,
-        })}>
-          <TouchableOpacity 
-            onPress={handleBack}
-            style={tw`h-[32px] w-[32px] flex-col items-center justify-center bg-black rounded-full`}
-            activeOpacity={0.7}
-          >
-            <AntDesign name="close" size={20} color="white" />
-          </TouchableOpacity>
-        </View>
+        {sheetCloseButton}
         <View onLayout={handleContentLayout}>
           {content}
         </View>
@@ -652,25 +651,11 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       closeDuration={1000}
       disableKeyboardHandling={false}
       disableBodyPanning={true}
-      style={tw.style(`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`, {
-        position: 'relative',
-      })}
+      style={tw`gap-y-2 px-6 pt-1 pb-2 rounded-t-[40px] bg-white`}
       closeOnDragDown={true}
       onClose={handleSheetClosed}
     >
-      {/* X Button at top right edge of card */}
-      <View style={tw.style(`absolute -top-1 right-1 z-50`, {
-        paddingTop: 0,
-        paddingRight: 0,
-      })}>
-        <TouchableOpacity 
-          onPress={handleBack}
-          style={tw`h-[32px] w-[32px] flex-col items-center justify-center bg-black rounded-full`}
-          activeOpacity={0.7}
-        >
-          <AntDesign name="close" size={20} color="white" />
-        </TouchableOpacity>
-      </View>
+      {sheetCloseButton}
       <View onLayout={handleContentLayout}>
         {content}
       </View>

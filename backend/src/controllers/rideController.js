@@ -1223,8 +1223,16 @@ const formatRideResponse = (ride) => {
     search_radius_km: resolveDispatchSearchRadiusKm(ride),
     scheduled_at: ride.scheduledAt ? ride.scheduledAt.toISOString() : null, // Include scheduled time
     is_scheduled: ride.isScheduled || false, // Include scheduled flag
+    created_at: ride.createdAt,
     createdAt: ride.createdAt,
     updatedAt: ride.updatedAt,
+    completed_at: ride.completedAt ? ride.completedAt.toISOString() : null,
+    completedAt: ride.completedAt || null,
+    cancelled_at:
+      ride.cancellation?.cancelledAt
+        ? new Date(ride.cancellation.cancelledAt).toISOString()
+        : null,
+    cancelledAt: ride.cancellation?.cancelledAt || null,
   };
 };
 

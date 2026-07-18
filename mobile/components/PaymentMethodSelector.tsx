@@ -115,10 +115,9 @@ export default function PaymentMethodSelector({
 
   return (
     <View style={styles.compactContainer}>
-      {enabledMethods.map((method, index) => {
+      {enabledMethods.map((method) => {
         const isActive = selected === method.uiKey;
         const subtitle = subtitleForMethod(method, walletBalance, fareTotal);
-        const isLast = index === enabledMethods.length - 1;
         return (
           <TouchableOpacity
             key={method.id}
@@ -126,7 +125,6 @@ export default function PaymentMethodSelector({
             style={[
               styles.compactOption,
               isActive && styles.compactOptionActive,
-              isLast && styles.compactOptionLast,
             ]}
           >
             <View style={[styles.compactIcon, isActive && styles.compactIconActive]}>
@@ -159,11 +157,7 @@ const styles = StyleSheet.create({
   },
   compactContainer: {
     flexDirection: "row",
-    borderWidth: 1.5,
-    borderColor: "#EFEFF4",
-    borderRadius: 10,
-    overflow: "hidden",
-    backgroundColor: "#FAFAFA",
+    gap: 8,
   },
   compactOption: {
     flex: 1,
@@ -171,14 +165,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingVertical: 8,
     paddingHorizontal: 6,
-    borderRightWidth: 1,
-    borderRightColor: "#EFEFF4",
-  },
-  compactOptionLast: {
-    borderRightWidth: 0,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#E5E5EA",
+    backgroundColor: "#FAFAFA",
   },
   compactOptionActive: {
     backgroundColor: "#F0F9F4",
+    borderColor: BRAND_GREEN,
   },
   compactIcon: {
     width: 28,
