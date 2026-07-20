@@ -454,7 +454,7 @@ function UpdateProfileModal({
             />
             <TouchableOpacity
               onPress={() => handleUpdate()}
-              style={tw`bg-base-green py-3 mt-2`}
+              style={tw`bg-base-green py-3 mt-2 rounded-lg items-center justify-center`}
             >
               {loading ? (
                 <ActivityIndicator color="white" />
@@ -788,11 +788,14 @@ const SharedAccountSettings = ({ type }: Props) => {
                     const idx = stepToIndex[firstIncomplete.id] ?? "0";
                     router.navigate(`/driverinfo?initialIndex=${idx}` as any);
                   }}
-                  style={tw`bg-base-green py-3.5 flex-row items-center justify-center gap-x-2`}
+                  style={tw`bg-base-green py-3.5 rounded-lg items-center justify-center`}
                 >
-                  <Feather name="edit-2" size={18} color="white" />
-                  <Text style={tw.style("text-[17px] text-white", { fontFamily: "RobotoRegular" })}>
-                    Complete setup / Edit driver profile
+                  <Text
+                    style={tw.style("text-[17px] text-white text-center", {
+                      fontFamily: "RobotoRegular",
+                    })}
+                  >
+                    Complete setup
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -879,7 +882,7 @@ const SharedAccountSettings = ({ type }: Props) => {
 
           <Pressable
             onPress={() => setShowUpdateModal(true)}
-            style={tw`bg-base-green py-3.5`}
+            style={tw`bg-base-green py-3.5 rounded-lg items-center justify-center`}
           >
             <Text
               style={tw.style(`text-[17px] text-white text-center`, {
