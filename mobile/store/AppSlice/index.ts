@@ -80,6 +80,10 @@ interface IState {
   driverRideOfferPusherPayload?: Record<string, unknown> | null;
   /** Bumps when a new ride-offer payload is staged for home-map. */
   driverRideOfferPusherSeq?: number;
+  /** Bumps when a pending offer is revoked (rider cancel / matching stopped). */
+  driverRideOfferRevokeSeq?: number;
+  /** Ride id for the revoked offer (empty = dismiss whatever is showing). */
+  driverRideOfferRevokeRideId?: string | null;
   /** Bumps when a driver trip ends or is flagged — refresh online/available UI. */
   driverTripEndedSeq?: number;
   latest_notification: null | {
@@ -123,6 +127,8 @@ const InitialState: IState = {
   driverTimeOnlineFromPusher: null,
   driverRideOfferPusherPayload: null,
   driverRideOfferPusherSeq: 0,
+  driverRideOfferRevokeSeq: 0,
+  driverRideOfferRevokeRideId: null,
   driverTripEndedSeq: 0,
   latest_notification: null,
 };
@@ -269,6 +275,8 @@ const AppSlice = createSlice({
       state.driverTimeOnlineFromPusher = null;
       state.driverRideOfferPusherPayload = null;
       state.driverRideOfferPusherSeq = 0;
+      state.driverRideOfferRevokeSeq = 0;
+      state.driverRideOfferRevokeRideId = null;
       // Also drop any live driver GPS in utils (in case a ride was in-flight).
       const utils = (state.ride?.utils ?? {}) as any;
       state.ride.utils = { ...(utils || {}), driverLiveLocation: null };

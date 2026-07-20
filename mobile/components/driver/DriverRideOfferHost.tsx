@@ -20,7 +20,6 @@ import { TDriverActiveRide } from "@/types";
 import { getErrorMessage, isRateLimitError } from "@/utils/errorHandler";
 import { safeShowMessage } from "@/utils/safeShowMessage";
 import {
-  isPendingDriverOffer,
   mapApiOfferToRide,
   resolveOfferPayload,
 } from "@/utils/driverRideOffer";
@@ -46,10 +45,13 @@ export default function DriverRideOfferHost() {
     driverPendingRideOffer,
     driverRideOfferPusherSeq,
     driverRideOfferPusherPayload,
+    driverRideOfferRevokeSeq,
+    driverRideOfferRevokeRideId,
   } = useSelector(AppDetailsState);
 
   const [ride, setRide] = useState<Partial<TDriverActiveRide>>({});
   const [offerDeadlineMs, setOfferDeadlineMs] = useState<number | null>(null);
+  const lastRevokeSeqRef = useRef(0);
 
   const scheduleOpenSheet = useCallback(() => {
     if (openSheetTimerRef.current) {
@@ -110,12 +112,17 @@ export default function DriverRideOfferHost() {
       .then(({ data }) => {
         const offerRide = data?.data?.ride ?? null;
         if (!offerRide || typeof offerRide !== "object") {
+          // Server says no pending offer — dismiss card if one is showing
+          // (rider cancel, offer expired, etc.).
+          if (String(ride?.ride_id ?? "").trim()) {
+            emptyOfferPollsRef.current = 0;
+            clearOfferUI();
+            return;
+          }
           emptyOfferPollsRef.current += 1;
           if (emptyOfferPollsRef.current >= MAX_EMPTY_OFFER_POLLS) {
             emptyOfferPollsRef.current = 0;
-            if (!isPendingDriverOffer(ride)) {
-              clearOfferUI();
-            }
+            clearOfferUI();
           }
           return;
         }
@@ -181,6 +188,24 @@ export default function DriverRideOfferHost() {
     showOffer,
   ]);
 
+  // Rider cancel / matching stopped — dismiss accept/decline if it matches.
+  useEffect(() => {
+    const seq = driverRideOfferRevokeSeq ?? 0;
+    if (!seq || seq === lastRevokeSeqRef.current) return;
+    lastRevokeSeqRef.current = seq;
+
+    const revokedId = String(driverRideOfferRevokeRideId ?? "").trim();
+    const currentId = String(ride?.ride_id ?? "").trim();
+    if (!revokedId || !currentId || revokedId === currentId) {
+      clearOfferUI();
+    }
+  }, [
+    driverRideOfferRevokeSeq,
+    driverRideOfferRevokeRideId,
+    ride?.ride_id,
+    clearOfferUI,
+  ]);
+
   // Open sheet only after ride state is committed and NewRide has mounted.
   useEffect(() => {
     const rideId = String(ride?.ride_id ?? "").trim();
@@ -195,18 +220,18 @@ export default function DriverRideOfferHost() {
     };
   }, [ride?.ride_id, offerDeadlineMs, scheduleOpenSheet]);
 
-  // Notification-only path: pending flag without payload — poll until offer loads.
+  // Poll while an offer is pending so rider cancel / server expiry dismisses the card
+  // even if the realtime revoke event is missed.
   useEffect(() => {
     if (!driverPendingRideOffer) {
       emptyOfferPollsRef.current = 0;
       return;
     }
-    if (String(ride?.ride_id ?? "").trim()) return;
 
     refreshCurrentOffer();
     const interval = setInterval(refreshCurrentOffer, OFFER_POLL_MS);
     return () => clearInterval(interval);
-  }, [driverPendingRideOffer, ride?.ride_id, refreshCurrentOffer]);
+  }, [driverPendingRideOffer, refreshCurrentOffer]);
 
   useEffect(
     () => () => {

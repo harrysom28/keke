@@ -45,7 +45,6 @@ function DriverPrivateChannelSubscription() {
         }
         return;
       }
-      if (name !== "ride-request") return;
 
       let payload: Record<string, unknown> = {};
       if (typeof event.data === "string") {
@@ -57,6 +56,24 @@ function DriverPrivateChannelSubscription() {
       } else if (event.data && typeof event.data === "object") {
         payload = event.data as Record<string, unknown>;
       }
+
+      // Rider cancelled (or matching stopped) while this driver still has accept/decline open.
+      if (name === "ride_cancelled" || name === "ride-cancelled") {
+        const rideId = String(
+          payload.ride_id ?? payload.rideId ?? ""
+        ).trim();
+        dispatch(
+          setAppData({
+            driverPendingRideOffer: false,
+            driverRideOfferPusherPayload: null,
+            driverRideOfferRevokeRideId: rideId || null,
+            driverRideOfferRevokeSeq: Date.now(),
+          })
+        );
+        return;
+      }
+
+      if (name !== "ride-request") return;
 
       dispatch(
         setAppData({

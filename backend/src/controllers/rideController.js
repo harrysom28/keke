@@ -860,6 +860,63 @@ export const cancelRide = asyncHandler(async (req, res) => {
     await socketService.emitRideCancelled(ride, cancelledBy, reason);
   }
 
+  // During matching, expire pending offers and tell those drivers to dismiss accept/decline UI.
+  // Assigned-driver cancel is already covered by emitRideCancelled; this covers pre-accept offers.
+  try {
+    const pendingOffers = await RideOffer.find({
+      ride_id: ride._id,
+      status: 'pending',
+    })
+      .select('driver_id')
+      .lean();
+
+    if (pendingOffers.length > 0) {
+      await RideOffer.updateMany(
+        { ride_id: ride._id, status: 'pending' },
+        { $set: { status: 'expired', expired_at: new Date() } }
+      );
+
+      const revokePayload = {
+        ride_id: ride._id.toString(),
+        rideId: ride._id.toString(),
+        status: 'cancelled',
+        cancelled_by: cancelledBy,
+        reason: reason || null,
+        subType: cancelledBy === 'driver' ? 'driver_cancelled' : 'passenger_cancelled',
+        event_key:
+          cancelledBy === 'driver' ? 'ride_cancelled_by_driver' : 'ride_cancelled_by_rider',
+        timestamp: new Date().toISOString(),
+      };
+
+      const { getPusherService } = await import('../services/pusherService.js');
+      const pusherService = getPusherService();
+
+      for (const offer of pendingOffers) {
+        const driverId = offer.driver_id?.toString?.() || String(offer.driver_id || '');
+        if (!driverId) continue;
+        try {
+          pusherService?.pusher?.trigger(
+            `private-driver-${driverId}`,
+            'ride_cancelled',
+            revokePayload
+          );
+          socketService?.io?.to(`driver:${driverId}`).emit('ride-cancelled', revokePayload);
+        } catch (notifyErr) {
+          logger.warn(
+            `Failed to notify driver ${driverId} of cancelled offer for ride ${rideId}: ${notifyErr.message}`
+          );
+        }
+      }
+      logger.info(
+        `Expired ${pendingOffers.length} pending offer(s) and notified drivers for cancelled ride ${rideId}`
+      );
+    }
+  } catch (offerErr) {
+    logger.error(
+      `Failed to expire/notify pending offers for cancelled ride ${rideId}: ${offerErr.message}`
+    );
+  }
+
   try {
     const { sendToUser } = await import('../services/notificationService.js');
     if (cancelledBy === 'driver') {

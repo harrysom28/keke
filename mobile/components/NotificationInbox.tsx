@@ -22,6 +22,7 @@ import {
   setAppData,
   setUnreadCount,
 } from "@/store/AppSlice";
+import { stripNotificationEmojis } from "@/utils/stripNotificationEmojis";
 
 type InboxNotification = {
   id: string;
@@ -146,9 +147,14 @@ export default function NotificationInbox({ userId, isDriver = false }: Props) {
       }
 
       const payload = data?.data || {};
-      const nextNotifications = Array.isArray(payload.notifications)
+      const nextNotifications = (Array.isArray(payload.notifications)
         ? payload.notifications
-        : [];
+        : []
+      ).map((n: InboxNotification) => ({
+        ...n,
+        title: stripNotificationEmojis(n.title),
+        message: stripNotificationEmojis(n.message),
+      }));
 
       setNotifications((current) =>
         replace ? nextNotifications : [...current, ...nextNotifications]
@@ -195,8 +201,8 @@ export default function NotificationInbox({ userId, isDriver = false }: Props) {
     const mapped: InboxNotification[] = incoming.map((n) => ({
       id: n.notification_id,
       notification_id: n.notification_id,
-      title: n.title,
-      message: n.message,
+      title: stripNotificationEmojis(n.title),
+      message: stripNotificationEmojis(n.message),
       is_read: n.is_read,
       delivered_at: n.created_at,
       created_at: n.created_at,
@@ -461,14 +467,14 @@ export default function NotificationInbox({ userId, isDriver = false }: Props) {
               <View style={styles.cardBody}>
                 <View style={styles.titleRow}>
                   <Text style={styles.cardTitle} numberOfLines={2}>
-                    {item.title}
+                    {stripNotificationEmojis(item.title)}
                   </Text>
                   <Text style={styles.timeText}>
                     {formatTimestamp(item.delivered_at || item.created_at)}
                   </Text>
                 </View>
                 <Text style={styles.subtitle} numberOfLines={3}>
-                  {item.message}
+                  {stripNotificationEmojis(item.message)}
                 </Text>
                 {actions.length > 0 ? (
                   <View style={styles.actionsRow}>
@@ -617,7 +623,7 @@ export default function NotificationInbox({ userId, isDriver = false }: Props) {
           >
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle} numberOfLines={3}>
-                {selected?.title || "Notification"}
+                {stripNotificationEmojis(selected?.title) || "Notification"}
               </Text>
               <TouchableOpacity
                 onPress={closeDetail}
