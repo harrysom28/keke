@@ -2186,7 +2186,7 @@ export default function HomeScreen() {
         const amt = payload?.amount ?? payload?.fare ?? payload?.cost ?? null;
         safeShowMessage({
           type: "info",
-          message: "Your fare is locked 🔒",
+          message: "Your fare is locked",
           description: amt
             ? `₦${Number(amt).toLocaleString()} is fixed — no cash needed at pickup.`
             : "Your fare is fixed in the app. No cash needed at pickup.",
@@ -2199,7 +2199,7 @@ export default function HomeScreen() {
       if (subType === "ride_started") {
         safeShowMessage({
           type: "success",
-          message: "Ride started 🚀",
+          message: "Ride started",
           description: "You're on your way! Sit back and relax.",
           duration: 6000,
         });
@@ -2210,7 +2210,7 @@ export default function HomeScreen() {
       if (subType === "ride_completed" || subType === "trip:completed" || subType === "ride.completed") {
         safeShowMessage({
           type: "success",
-          message: "Ride completed ✅",
+          message: "Ride completed",
           description: "Thanks for riding with Keke Ride!",
           duration: 6000,
         });
@@ -2240,7 +2240,7 @@ export default function HomeScreen() {
         const desc = [vi, plate].filter(Boolean).join(" • ");
         safeShowMessage({
           type: "success",
-          message: `${dn} has arrived 📍`,
+          message: `${dn} has arrived`,
           ...(desc ? { description: desc } : {}),
           duration: 8000,
         });

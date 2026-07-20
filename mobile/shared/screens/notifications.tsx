@@ -43,6 +43,18 @@ import { useIsFocused } from "@react-navigation/native";
 import { useFocusRefresh } from "@/hooks/useFocusRefresh";
 import { useDispatch, useSelector } from "react-redux";
 
+/** Strip emoji / symbols from notification titles (legacy rows may still include them). */
+function stripNotificationEmojis(text: string | undefined | null): string {
+  if (!text) return "";
+  return text
+    .replace(
+      /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}]/gu,
+      ""
+    )
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 interface NotificationItem {
   notification_id: string;
   type: string;
@@ -231,7 +243,7 @@ const ListItem = ({ item, showModal, onMarkAsRead, onDelete }: LProps) => {
             })}
             numberOfLines={1}
           >
-            {item.title}
+            {stripNotificationEmojis(item.title)}
           </Text>
           {!item.is_read && (
             <View
@@ -576,7 +588,7 @@ const SharedNotificationsScreen = () => {
                 })}
                 numberOfLines={2}
               >
-                {current?.title || "Notification"}
+                {stripNotificationEmojis(current?.title) || "Notification"}
               </Text>
               <TouchableOpacity
                 onPress={() => setModalVisible(false)}

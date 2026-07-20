@@ -401,7 +401,7 @@ export const verifyWalletTopup = asyncHandler(async (req, res) => {
   try {
     const { sendToUser } = await import('../services/notificationService.js');
     await sendToUser(userId, user.role === 'driver' ? 'driver' : 'rider', {
-      title: 'Wallet credited ✅',
+      title: 'Wallet credited',
       message: `Top-up: ₦${amountNaira.toLocaleString()} added. New balance: ₦${Number(updatedUser?.balance ?? 0).toLocaleString()}.`,
       type: 'alert',
       priority: 'high',
@@ -748,7 +748,7 @@ export const topUpWallet = asyncHandler(async (req, res) => {
       try {
         const { sendToUser } = await import('../services/notificationService.js');
         await sendToUser(userId, user.role === 'driver' ? 'driver' : 'rider', {
-          title: 'Wallet credited ✅',
+          title: 'Wallet credited',
           message: `Top-up: ₦${Number(amount).toLocaleString()} added. New balance: ₦${Number(user.balance).toLocaleString()}.`,
           type: 'alert',
           priority: 'high',
@@ -1247,7 +1247,7 @@ export const confirmStripePayment = asyncHandler(async (req, res) => {
         try {
           const { sendToUser } = await import('../services/notificationService.js');
           await sendToUser(user._id, user.role === 'driver' ? 'driver' : 'rider', {
-            title: 'Wallet credited ✅',
+            title: 'Wallet credited',
             message: `Top-up: ₦${Number(payment.amount).toLocaleString()} added. New balance: ₦${Number(user.balance).toLocaleString()}.`,
             type: 'alert',
             priority: 'high',

@@ -141,7 +141,7 @@ export async function creditWalletFromPaystack(reference, amountNaira, userId, o
     try {
       const { sendToUser } = await import('./notificationService.js');
       await sendToUser(uid, user?.role === 'driver' ? 'driver' : 'rider', {
-        title: 'Wallet credited ✅',
+        title: 'Wallet credited',
         message: `Top-up: ₦${Number(amountNaira).toLocaleString()} added. New available balance: ₦${Number(ledgerBalanceAfter).toLocaleString()}.`,
         type: 'alert',
         priority: 'high',

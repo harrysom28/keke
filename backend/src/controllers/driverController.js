@@ -1709,7 +1709,7 @@ export const acceptRide = asyncHandler(async (req, res) => {
     const fareLabel = fareAmount.toLocaleString();
 
     await sendToUser(ride.rider._id, 'rider', {
-      title: 'Driver on the way! 🛺',
+      title: 'Driver on the way!',
       message: `${driverName} has accepted your ride and is heading to you.`,
       type: 'alert',
       priority: 'high',
@@ -1722,7 +1722,7 @@ export const acceptRide = asyncHandler(async (req, res) => {
     });
 
     await sendToUser(ride.rider._id, 'rider', {
-      title: 'Your fare is locked 🔒',
+      title: 'Your fare is locked',
       message: `Your fare of ₦${fareLabel} is fixed in the app. No cash needed at pickup.`,
       type: 'banner',
       priority: 'normal',
@@ -2287,7 +2287,7 @@ export const markArrived = asyncHandler(async (req, res) => {
   try {
     const { sendToUser } = await import('../services/notificationService.js');
     await sendToUser(ride.rider._id, 'rider', {
-      title: 'Driver arrived! 📍',
+      title: 'Driver arrived!',
       message: `${driverName} is at your pickup point. Please come out now.`,
       type: 'alert',
       priority: 'critical',
@@ -2389,7 +2389,7 @@ export const startRide = asyncHandler(async (req, res) => {
       ride.dropoffLocation?.address ||
       'your destination';
     await sendToUser(ride.rider._id, 'rider', {
-      title: 'Ride started 🚀',
+      title: 'Ride started',
       message: `You are on your way to ${dropoffName}. Enjoy your ride!`,
       type: 'alert',
       priority: 'normal',
@@ -2589,7 +2589,7 @@ export const completeRide = asyncHandler(async (req, res) => {
     const isCashRide = String(ride.paymentMethod || '').toLowerCase() === 'cash';
 
     await sendToUser(ride.rider._id, 'rider', {
-      title: 'Ride completed ✅',
+      title: 'Ride completed',
       message: isCashRide
         ? `Please pay ₦${fareAmount.toLocaleString()} cash to your driver. Thanks for riding with Keke!`
         : `₦${fareAmount.toLocaleString()} has been deducted from your wallet. Thanks for riding with Keke!`,
