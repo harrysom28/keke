@@ -143,6 +143,12 @@ const OtpCode = () => {
           }
         } else {
           const role = data?.data?.user?.role;
+          if (role === "driver") {
+            const { forceDriverOfflineNow } = await import(
+              "@/utils/driverStartOffline"
+            );
+            await forceDriverOfflineNow();
+          }
           await queueLocationDisclosureIfNeeded(
             role === "driver" ? "driver" : "rider"
           );

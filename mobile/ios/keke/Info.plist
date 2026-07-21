@@ -70,11 +70,11 @@
     <key>NSContactsUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your contacts to invite friends.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Allow $(PRODUCT_NAME) to use your location.</string>
+    <string>Keke Ride needs Always location while you are online as a driver so you can receive trip requests when the app is in the background or your screen is locked. Your location is only shared while you are online or on a trip.</string>
     <key>NSLocationAlwaysUsageDescription</key>
-    <string>Allow $(PRODUCT_NAME) to access your location</string>
+    <string>Keke Ride needs Always location while you are online as a driver so you can receive trip requests when the app is in the background.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Allow $(PRODUCT_NAME) to access your location</string>
+    <string>Keke Ride uses your location to show your position on the map and find nearby drivers when you book a ride.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your microphone</string>
     <key>NSPhotoLibraryUsageDescription</key>

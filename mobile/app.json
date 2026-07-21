@@ -21,8 +21,9 @@
         "NSContactsUsageDescription": "We need access to your contacts to help you share rides with friends.",
         "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to take photos for document and vehicle verification.",
         "NSPhotoLibraryUsageDescription": "Allow $(PRODUCT_NAME) to access your photos for document and vehicle verification.",
-        "NSLocationWhenInUseUsageDescription": "Keke Ride uses your location to show your position on the map, find nearby drivers or passengers, and match you with rides.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "Keke Ride uses your location while you are online as a driver so riders can find you and you can receive trip requests.",
+        "NSLocationWhenInUseUsageDescription": "Keke Ride uses your location to show your position on the map and find nearby drivers when you book a ride.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Keke Ride needs Always location while you are online as a driver so you can receive trip requests when the app is in the background or your screen is locked. Your location is only shared while you are online or on a trip.",
+        "NSLocationAlwaysUsageDescription": "Keke Ride needs Always location while you are online as a driver so you can receive trip requests when the app is in the background.",
         "UIBackgroundModes": ["location", "remote-notification"]
       }
     },
@@ -80,8 +81,8 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Keke Ride uses your location to show your position on the map, find nearby drivers or passengers, and book or accept rides.",
-          "locationAlwaysAndWhenInUsePermission": "Keke Ride uses your location while you are online as a driver so riders can find you and you can receive trip requests.",
+          "locationWhenInUsePermission": "Keke Ride uses your location to show your position on the map and find nearby drivers when you book a ride.",
+          "locationAlwaysAndWhenInUsePermission": "Keke Ride needs Always / Allow all the time location while you are online as a driver so you can receive trip requests when the app is in the background or your screen is locked. Your location is only shared while you are online or on a trip.",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true
         }

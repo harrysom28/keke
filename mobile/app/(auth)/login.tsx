@@ -69,6 +69,12 @@ const Login = () => {
     }
     const role = data?.data?.user?.role;
     const purpose = role === "driver" ? "driver" : "rider";
+    if (role === "driver") {
+      const { forceDriverOfflineNow } = await import(
+        "@/utils/driverStartOffline"
+      );
+      await forceDriverOfflineNow();
+    }
     if (!data?.data?.needs_onboarding) {
       await queueLocationDisclosureIfNeeded(purpose);
     }

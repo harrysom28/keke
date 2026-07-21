@@ -8,6 +8,7 @@ import {
   startDriverBackgroundLocation,
   stopDriverBackgroundLocation,
 } from "@/lib/driverBackgroundLocation";
+import { ensureDriverStartsOfflineOnce } from "@/utils/driverStartOffline";
 
 const ONLINE_POLL_MS = 45_000;
 const HEARTBEAT_MS = 30_000;
@@ -95,7 +96,14 @@ export function useDriverSession() {
   }, [refreshOnlineStatus, sendHeartbeat]);
 
   useEffect(() => {
-    void syncSession();
+    let cancelled = false;
+
+    void (async () => {
+      // Start each driver app session offline; driver flips Online manually.
+      await ensureDriverStartsOfflineOnce();
+      if (cancelled) return;
+      await syncSession();
+    })();
 
     const pollId = setInterval(() => {
       void syncSession();
@@ -116,6 +124,7 @@ export function useDriverSession() {
     });
 
     return () => {
+      cancelled = true;
       clearInterval(pollId);
       clearInterval(heartbeatId);
       appSub.remove();

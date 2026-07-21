@@ -224,7 +224,11 @@ export async function resolveLocationPermissionFromBanner(
 
 /**
  * Request background location so online drivers stay discoverable when the app
- * is backgrounded or the screen is locked. Call when the driver goes online.
+ * is backgrounded or the screen is locked.
+ *
+ * Driver-only — riders must never call this. On Android 11+ the OS usually
+ * sends drivers to Settings to pick “Allow all the time”; on iOS they get
+ * “Change to Always Allow”.
  */
 export async function ensureDriverBackgroundLocationAccess(
   options: { showRationale?: boolean } = {}
@@ -239,14 +243,21 @@ export async function ensureDriverBackgroundLocationAccess(
     return { ...foreground, granted: true };
   }
 
-  if (permission.status === Location.PermissionStatus.UNDETERMINED) {
-    // Play "Prominent Disclosure" policy: always disclose background collection
-    // (with the required "even when the app is closed or not in use" wording)
-    // before the OS background permission dialog.
+  const alwaysLabel =
+    Platform.OS === "ios" ? "Always Allow" : "Allow all the time";
+
+  if (
+    permission.status === Location.PermissionStatus.UNDETERMINED ||
+    (Platform.OS === "android" &&
+      permission.status !== Location.PermissionStatus.GRANTED &&
+      permission.canAskAgain !== false)
+  ) {
+    // Play "Prominent Disclosure" + clear soft note before the OS step.
+    // Only shown on the driver go-online path.
     const proceed = await new Promise<boolean>((resolve) => {
       Alert.alert(
-        "Background location",
-        "Keke Ride collects location data while you are online as a driver to enable rider-driver matching, trip requests, and ride tracking, even when the app is closed or not in use. Your location is shared with riders only while you are online or on an active trip.",
+        "Stay online for trip requests",
+        `As a driver, enable “${alwaysLabel}” so Keke Ride can send you trip requests when the app is in the background or your screen is locked.\n\nKeke Ride collects location data while you are online as a driver to enable rider-driver matching, trip requests, and ride tracking, even when the app is closed or not in use. Your location is shared with riders only while you are online or on an active trip.`,
         [
           { text: "Not now", style: "cancel", onPress: () => resolve(false) },
           { text: "Continue", onPress: () => resolve(true) },
@@ -261,14 +272,15 @@ export async function ensureDriverBackgroundLocationAccess(
 
   const granted = permission.status === Location.PermissionStatus.GRANTED;
   if (!granted && options.showRationale) {
-    Alert.alert(
-      "Background location needed",
-      "To stay online when the app is in the background, enable “Always” or “Allow all the time” location for Keke Ride in Settings.",
-      [
-        { text: "Not now", style: "cancel" },
-        { text: "Open Settings", onPress: () => void openLocationSettings() },
-      ]
-    );
+    const settingsBody =
+      Platform.OS === "android"
+        ? `Open Settings → Location → choose “Allow all the time”.\n\nThis is only needed for drivers so you still receive trip requests when Keke Ride is not open. You can go online now with “While using the app”, but background requests may be missed.`
+        : `Choose “Change to Always Allow” so you still receive trip requests when Keke Ride is not open.\n\nThis is only needed for drivers. You can go online now with “While Using”, but background requests may be missed.`;
+
+    Alert.alert(`Enable “${alwaysLabel}”`, settingsBody, [
+      { text: "Not now", style: "cancel" },
+      { text: "Open Settings", onPress: () => void openLocationSettings() },
+    ]);
   }
 
   return {
