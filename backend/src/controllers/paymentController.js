@@ -650,8 +650,9 @@ export const verifyRideCardPayment = asyncHandler(async (req, res) => {
 /**
  * Best-effort Paystack refund for a charged card ride (used on cancel).
  * @param {import('mongoose').Document} ride
+ * @param {{ retainFeeNaira?: number }} [options] — keep this much of the charge (cancellation fee)
  */
-export async function refundChargedCardRideIfNeeded(ride) {
+export async function refundChargedCardRideIfNeeded(ride, options = {}) {
   if (String(ride.paymentMethod || '').toLowerCase() !== 'card') return null;
   if (!['charged', 'held'].includes(String(ride.paymentStatus || '').toLowerCase())) {
     return null;
@@ -668,15 +669,38 @@ export async function refundChargedCardRideIfNeeded(ride) {
     logger.warn(`refundChargedCardRideIfNeeded: no Paystack ref for ride ${ride._id}`);
     return null;
   }
-  const result = await refundTransaction(reference);
+
+  const paid = Math.max(0, Number(payment.amount) || 0);
+  const retainFee = Math.max(0, Math.round(Number(options.retainFeeNaira) || 0));
+  const refundAmount =
+    retainFee > 0 && paid > 0 ? Math.max(0, paid - Math.min(retainFee, paid)) : null;
+
+  const result =
+    refundAmount != null
+      ? await refundTransaction(reference, refundAmount)
+      : await refundTransaction(reference);
+
   if (result?.status) {
-    ride.paymentStatus = 'refunded';
+    const retained =
+      retainFee > 0 && refundAmount != null && refundAmount < paid;
+    ride.paymentStatus = retained ? 'partial' : 'refunded';
     await ride.save();
     await Payment.updateOne(
       { _id: payment._id },
-      { $set: { status: 'refunded', refundReason: 'ride_cancelled' } }
+      {
+        $set: {
+          // Payment schema enum has no partially_refunded — keep refunded + note retention.
+          status: 'refunded',
+          refundReason: retained
+            ? `ride_cancelled_fee_retained:${retainFee}`
+            : 'ride_cancelled',
+        },
+      }
     );
-    logger.info(`Refunded card payment for ride ${ride._id} (ref ${reference})`);
+    logger.info(
+      `Refunded card payment for ride ${ride._id} (ref ${reference}` +
+        `${refundAmount != null ? `, refund ₦${refundAmount}, retained ₦${retainFee}` : ', full'})`
+    );
   }
   return result;
 }

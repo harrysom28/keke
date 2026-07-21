@@ -702,3 +702,94 @@ export async function processCancellation(rideId, riderId, driverUserId, fareAmo
     return await runCancellation(false);
   }
 }
+
+/**
+ * Resolve rider-cancel scenario using the same grace / movement rules as cancelRide.
+ */
+export async function resolveRiderCancellationScenario(ride) {
+  if (['requested', 'searching', 'scheduled'].includes(ride.status)) {
+    return 'beforeAccept';
+  }
+  if (ride.status === 'accepted' || ride.status === 'driver_en_route') {
+    const { gracePeriodSeconds } = await getCancellationGuards();
+    const minutesSinceAccepted = ride.acceptedAt
+      ? (Date.now() - new Date(ride.acceptedAt).getTime()) / 60000
+      : 999;
+    const withinGracePeriod = minutesSinceAccepted * 60 <= (gracePeriodSeconds ?? 60);
+    const driverNotMoving = ride.driverMovementFlag === 'not_approaching';
+    return withinGracePeriod || driverNotMoving ? 'beforeAccept' : 'afterAccept';
+  }
+  return 'afterArrival';
+}
+
+/**
+ * Debit rider available wallet for a cancellation fee (cash / card / no-hold paths).
+ * Idempotent via cancel_penalty:{rideId}.
+ */
+export async function debitRiderCancellationFee(riderId, rideId, cancelFee) {
+  const fee = Math.max(0, Math.round(Number(cancelFee) || 0));
+  if (!riderId || fee <= 0) {
+    return { success: false, collected: 0, reason: 'no_fee' };
+  }
+
+  const idempotencyKey = `cancel_penalty:${rideId}`;
+  const existing = await UserWalletTransaction.findOne({ idempotencyKey }).lean();
+  if (existing) {
+    return { success: true, collected: fee, reason: 'already_collected' };
+  }
+
+  await getOrCreateRiderWallet(riderId);
+
+  const wallet = await UserWallet.findOneAndUpdate(
+    { userId: riderId, userType: 'rider', availableBalance: { $gte: fee } },
+    { $inc: { availableBalance: -fee } },
+    { new: true }
+  );
+
+  if (!wallet) {
+    return { success: false, collected: 0, reason: 'insufficient_balance' };
+  }
+
+  await syncLegacyUserBalanceFromWallet(riderId, wallet);
+  await UserWalletTransaction.create({
+    userId: riderId,
+    rideId,
+    type: 'cancel_penalty',
+    amount: -fee,
+    balanceBefore: wallet.availableBalance + fee,
+    balanceAfter: wallet.availableBalance,
+    description: 'Cancellation fee',
+    idempotencyKey,
+    status: 'completed',
+  });
+
+  return { success: true, collected: fee, reason: 'debited' };
+}
+
+/**
+ * Credit driver cancellation share (DriverWallet). Safe no-op when capped / missing driver.
+ */
+export async function creditDriverCancellationShare(driverUserId, rideId, driverShare) {
+  const amount = Math.max(0, Math.round(Number(driverShare) || 0));
+  if (!driverUserId || amount <= 0) {
+    return { success: false, reason: 'no_payout' };
+  }
+
+  const allow = await driverCancelPayoutAllowed(driverUserId);
+  if (!allow) {
+    logger.warn(
+      `creditDriverCancellationShare: skipped ₦${amount} for ride ${rideId} (daily payout cap)`
+    );
+    return { success: false, reason: 'daily_cap' };
+  }
+
+  const driver = await Driver.findOne({ user: driverUserId }).select('_id').lean();
+  if (!driver?._id) {
+    return { success: false, reason: 'driver_not_found' };
+  }
+
+  await getOrCreateWallet(driver._id);
+  await ensureWalletDayStats(driver._id);
+  await creditCancellationCompensation(driver._id, amount, rideId);
+  return { success: true, reason: 'credited', amount };
+}

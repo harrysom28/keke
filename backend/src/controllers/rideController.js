@@ -27,6 +27,9 @@ import {
   settleRide,
   processCancellation,
   splitCancellationPenalty,
+  resolveRiderCancellationScenario,
+  debitRiderCancellationFee,
+  creditDriverCancellationShare,
   EscrowWalletError,
 } from '../services/escrowWalletService.js';
 import { assertPaymentMethodEnabled } from '../services/paymentMethodsService.js';
@@ -764,58 +767,104 @@ export const cancelRide = asyncHandler(async (req, res) => {
   let cancellationScenario = null;
   let driverCompensation = 0;
   let cancellationSplit = null;
+  let escrowSettled = false;
+
+  if (cancelledBy === 'driver') {
+    cancellationScenario = 'driverCancel';
+  } else {
+    cancellationScenario = await resolveRiderCancellationScenario(ride);
+  }
+
+  const { getCancellationPolicy } = await import('../services/settingsService.js');
+  const policy = await getCancellationPolicy(cancellationScenario);
+  cancellationFee = policy.riderPenalty ?? 0;
+  if (cancellationScenario === 'afterAccept' && cancellationFee > 0) {
+    const { driverShare, platformShare } = splitCancellationPenalty(cancellationFee);
+    driverCompensation = driverShare;
+    cancellationSplit = { driverCompensation: driverShare, platformRetention: platformShare };
+  } else {
+    driverCompensation = policy.driverPayout ?? 0;
+  }
 
   if (isEscrow && (fareAmount > 0 || !!hasWalletHold)) {
-    if (cancelledBy === 'driver') {
-      cancellationScenario = 'driverCancel';
-    } else if (['requested', 'searching', 'scheduled'].includes(ride.status)) {
-      cancellationScenario = 'beforeAccept';
-    } else if (ride.status === 'accepted' || ride.status === 'driver_en_route') {
-      const { getCancellationGuards } = await import('../services/settingsService.js');
-      const { gracePeriodSeconds } = await getCancellationGuards();
-      const minutesSinceAccepted = ride.acceptedAt
-        ? (Date.now() - new Date(ride.acceptedAt).getTime()) / 60000
-        : 999;
-      const withinGracePeriod = minutesSinceAccepted * 60 <= (gracePeriodSeconds ?? 60);
-      const driverNotMoving = ride.driverMovementFlag === 'not_approaching';
-      cancellationScenario = withinGracePeriod || driverNotMoving ? 'beforeAccept' : 'afterAccept';
-    } else {
-      cancellationScenario = 'afterArrival';
-    }
-    const { getCancellationPolicy } = await import('../services/settingsService.js');
-    const policy = await getCancellationPolicy(cancellationScenario);
-    cancellationFee = policy.riderPenalty ?? 0;
-    if (cancellationScenario === 'afterAccept' && cancellationFee > 0) {
-      const { driverShare, platformShare } = splitCancellationPenalty(cancellationFee);
-      driverCompensation = driverShare;
-      cancellationSplit = { driverCompensation: driverShare, platformRetention: platformShare };
-    } else {
-      driverCompensation = policy.driverPayout ?? 0;
-    }
     try {
-      await processCancellation(ride._id, riderId, driverUserId, fareAmount, cancellationScenario);
+      const escrowResult = await processCancellation(
+        ride._id,
+        riderId,
+        driverUserId,
+        fareAmount,
+        cancellationScenario
+      );
+      escrowSettled = !escrowResult?.skipped;
+      if (escrowResult?.skipped && cancellationFee > 0) {
+        // Hold missing — fall through to non-escrow collection below.
+        logger.warn(
+          `Escrow cancel skipped for ride ${rideId}; attempting non-escrow fee settlement`
+        );
+      } else if (escrowResult?.skipped) {
+        cancellationFee = 0;
+        driverCompensation = 0;
+        cancellationSplit = null;
+      }
     } catch (err) {
       logger.error(`Escrow cancellation failed for ride ${rideId}: ${err.message}`);
       throw new ValidationError(err.message || 'Cancellation failed');
     }
-  } else {
-    const { calculateCancellationFee } = await import('../utils/cancellationFeeCalculator.js');
-    const result = calculateCancellationFee(ride, cancelledBy);
-    cancellationFee = result.cancellationFee;
-    if (cancelledBy === 'rider' && ['accepted', 'driver_en_route', 'arrived'].includes(ride.status)) {
-      if (cancellationFee > 0) {
-        const { driverShare, platformShare } = splitCancellationPenalty(cancellationFee);
-        driverCompensation = driverShare;
-        cancellationSplit = { driverCompensation: driverShare, platformRetention: platformShare };
+  }
+
+  // Cash / card / wallet-without-hold: collect fee + credit driver when escrow did not settle.
+  if (!escrowSettled && cancelledBy === 'rider' && cancellationFee > 0) {
+    const method = String(ride.paymentMethod || '').toLowerCase();
+    if (method === 'card' && isChargedCard) {
+      // Fee is retained on the Paystack refund below; still credit the driver share.
+      try {
+        await creditDriverCancellationShare(driverUserId, ride._id, driverCompensation);
+      } catch (err) {
+        logger.error(`Card cancel driver credit failed for ride ${rideId}: ${err.message}`);
       }
+    } else {
+      // Cash (or unpaid): debit rider available wallet when possible.
+      try {
+        const debit = await debitRiderCancellationFee(riderId, ride._id, cancellationFee);
+        if (!debit.success) {
+          logger.warn(
+            `Could not collect cancel fee ₦${cancellationFee} for ride ${rideId}: ${debit.reason}`
+          );
+          cancellationFee = 0;
+          driverCompensation = 0;
+          cancellationSplit = null;
+        } else if (driverCompensation > 0) {
+          await creditDriverCancellationShare(driverUserId, ride._id, driverCompensation);
+        }
+      } catch (err) {
+        logger.error(`Non-escrow cancel settlement failed for ride ${rideId}: ${err.message}`);
+        cancellationFee = 0;
+        driverCompensation = 0;
+        cancellationSplit = null;
+      }
+    }
+  } else if (
+    !escrowSettled &&
+    cancelledBy === 'rider' &&
+    cancellationFee === 0 &&
+    driverCompensation > 0 &&
+    (cancellationScenario === 'afterArrival')
+  ) {
+    // afterArrival: rider fee 0, platform-funded driver payout
+    try {
+      await creditDriverCancellationShare(driverUserId, ride._id, driverCompensation);
+    } catch (err) {
+      logger.error(`afterArrival driver credit failed for ride ${rideId}: ${err.message}`);
     }
   }
 
-  // Prepaid card (Paystack): refund before marking cancelled (best-effort).
+  // Prepaid card (Paystack): refund before marking cancelled (retain cancel fee when applicable).
   if (isChargedCard) {
     try {
       const { refundChargedCardRideIfNeeded } = await import('./paymentController.js');
-      await refundChargedCardRideIfNeeded(ride);
+      await refundChargedCardRideIfNeeded(ride, {
+        retainFeeNaira: cancelledBy === 'rider' ? cancellationFee : 0,
+      });
     } catch (refundErr) {
       logger.error(
         `Card refund failed for cancelled ride ${rideId}: ${refundErr.message}`
@@ -1018,37 +1067,48 @@ export const cancelRidePreview = asyncHandler(async (req, res) => {
   let feeAmount = 0;
   let feeReason = null;
 
-  if (isEscrow && (fareAmount > 0 || !!hasWalletHold)) {
-    let cancellationScenario;
-    if (['requested', 'searching', 'scheduled'].includes(ride.status)) {
-      cancellationScenario = 'beforeAccept';
-    } else if (ride.status === 'accepted' || ride.status === 'driver_en_route') {
-      const { getCancellationGuards } = await import('../services/settingsService.js');
-      const { gracePeriodSeconds } = await getCancellationGuards();
-      const minutesSinceAccepted = ride.acceptedAt
-        ? (Date.now() - new Date(ride.acceptedAt).getTime()) / 60000
-        : 999;
-      const withinGracePeriod = minutesSinceAccepted * 60 <= (gracePeriodSeconds ?? 60);
-      const driverNotMoving = ride.driverMovementFlag === 'not_approaching';
-      cancellationScenario = withinGracePeriod || driverNotMoving ? 'beforeAccept' : 'afterAccept';
-    } else {
-      cancellationScenario = 'afterArrival';
-    }
-    const { getCancellationPolicy } = await import('../services/settingsService.js');
-    const policy = await getCancellationPolicy(cancellationScenario);
-    feeAmount = policy.riderPenalty ?? 0;
-    if (feeAmount > 0) {
-      if (cancellationScenario === 'afterAccept') {
-        feeReason = 'Driver has already accepted and is on the way';
-      } else if (cancellationScenario === 'afterArrival') {
-        feeReason = 'Driver has arrived at your pickup location';
-      }
-    }
+  // Same policy for wallet / card / cash so preview matches what cancel collects.
+  let cancellationScenario;
+  if (['requested', 'searching', 'scheduled'].includes(ride.status)) {
+    cancellationScenario = 'beforeAccept';
+  } else if (ride.status === 'accepted' || ride.status === 'driver_en_route') {
+    const { resolveRiderCancellationScenario } = await import('../services/escrowWalletService.js');
+    cancellationScenario = await resolveRiderCancellationScenario(ride);
   } else {
-    const { calculateCancellationFee } = await import('../utils/cancellationFeeCalculator.js');
-    const result = calculateCancellationFee(ride, 'rider');
-    feeAmount = result.cancellationFee ?? 0;
-    feeReason = feeAmount > 0 ? result.feeReason || 'A cancellation fee applies' : null;
+    cancellationScenario = 'afterArrival';
+  }
+  const { getCancellationPolicy } = await import('../services/settingsService.js');
+  const policy = await getCancellationPolicy(cancellationScenario);
+  feeAmount = policy.riderPenalty ?? 0;
+  if (feeAmount > 0) {
+    if (cancellationScenario === 'afterAccept') {
+      feeReason = 'Driver has already accepted and is on the way';
+    } else if (cancellationScenario === 'afterArrival') {
+      feeReason = 'Driver has arrived at your pickup location';
+    }
+  }
+
+  // Cash without wallet balance: preview honesty — fee may not be collectable.
+  if (
+    feeAmount > 0 &&
+    String(ride.paymentMethod || '').toLowerCase() === 'cash' &&
+    !isEscrow
+  ) {
+    try {
+      const UserWallet = (await import('../models/UserWallet.js')).default;
+      const w = await UserWallet.findOne({ userId: ride.rider._id, userType: 'rider' })
+        .select('availableBalance')
+        .lean();
+      const available = Number(w?.availableBalance) || 0;
+      if (available < feeAmount) {
+        feeReason =
+          available <= 0
+            ? 'A cancellation fee applies after accept, but it can only be collected if you have wallet balance'
+            : `Cancellation fee ₦${feeAmount.toLocaleString()} applies if your wallet has enough balance (available ₦${available.toLocaleString()})`;
+      }
+    } catch {
+      // keep feeAmount as policy amount
+    }
   }
 
   const feeSplit =
