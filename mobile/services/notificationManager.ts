@@ -8,6 +8,8 @@ import { Pusher, PusherEvent } from "@pusher/pusher-websocket-react-native";
 import { router } from "expo-router";
 import { Platform, Vibration } from "react-native";
 import { registerForPushNotifications } from "@/utils/registerPushToken";
+import { requestDriverOfferRefresh } from "@/utils/driverRideOffer";
+import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
 
 export type NotificationPayload = {
   id: string;
@@ -359,22 +361,36 @@ export const mapExpoNotificationRequestToPayload = (
 };
 
 export const handleNavigation = (payload: NotificationPayload): void => {
-  if (payload.action_type !== "navigate") {
-    return;
-  }
-
-  const screen = payload.action_payload?.screen || payload.screen || "home";
+  const eventKey = String(payload.event_key || "").toLowerCase();
+  const screen = String(
+    payload.action_payload?.screen || payload.screen || "home"
+  );
   const rideId =
     payload.action_payload?.rideId ||
     payload.action_payload?.ride_id ||
     payload.ride_id;
 
-  if (
+  // New ride offer: wake DriverRideOfferHost and land on driver home — not the
+  // "Passengers around you" map (home-map), which only shows active trips.
+  const isRideRequest =
+    eventKey === "ride_requested" ||
+    eventKey === "ride_request" ||
     screen === "DriverHome" ||
     screen === "driver_home" ||
-    screen === "ride_request" ||
-    screen === "DriverMap"
-  ) {
+    screen === "ride_request";
+
+  if (isRideRequest) {
+    requestDriverOfferRefresh(AppStore.dispatch);
+    markInitialDriverRouteHandled();
+    navigateToRoute("/(driver)/(tabs)/(dashboard)/home", rideId);
+    return;
+  }
+
+  if (payload.action_type !== "navigate") {
+    return;
+  }
+
+  if (screen === "DriverMap") {
     navigateToRoute("/(driver)/(tabs)/(dashboard)/home-map", rideId);
     return;
   }
