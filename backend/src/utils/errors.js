@@ -146,9 +146,59 @@ export class RateLimitError extends AppError {
 }
 
 /**
+ * Best-effort drain of an unconsumed request body before an error response.
+ *
+ * When middleware fails before the body is read (e.g. `protect` rejecting an
+ * expired token on the multipart POST /api/driver/create), Express writes the
+ * error response while the client is still streaming the body. Node then
+ * destroys the socket with unread data, which reaches the client as a TCP
+ * reset instead of the response — mobile axios surfaces a raw "Network Error"
+ * with no status, so the app's 401 → refresh-token interceptor never runs and
+ * the user is stuck. Reading the remainder (bounded by size and time) lets the
+ * client finish writing and receive the real status code.
+ */
+const DRAIN_MAX_BYTES = 25 * 1024 * 1024; // above multer's 10MB/file cap for the 4-image driver create
+const DRAIN_TIMEOUT_MS = 10 * 1000;
+
+const drainRequestBody = (req) =>
+  new Promise((resolve) => {
+    if (!req || req.readableEnded || req.complete || req.destroyed || !req.readable) {
+      return resolve();
+    }
+    let received = 0;
+    let finished = false;
+    let timer;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      req.removeListener('data', onData);
+      req.removeListener('end', done);
+      req.removeListener('error', done);
+      req.removeListener('close', done);
+      resolve();
+    };
+    const onData = (chunk) => {
+      received += chunk.length;
+      if (received > DRAIN_MAX_BYTES) done();
+    };
+    timer = setTimeout(done, DRAIN_TIMEOUT_MS);
+    // Attaching a 'data' listener switches the stream to flowing mode,
+    // discarding the rest of the body as it arrives.
+    req.on('data', onData);
+    req.on('end', done);
+    req.on('error', done);
+    req.on('close', done);
+  });
+
+/**
  * Global error handler middleware
  */
-export const errorHandler = (err, req, res, next) => {
+export const errorHandler = async (err, req, res, next) => {
+  // Consume any unread body first so the client can receive this response
+  // instead of a connection reset (see drainRequestBody). No-op when the
+  // body was already parsed (JSON routes, successful multer runs).
+  await drainRequestBody(req);
   // Mongoose bad ObjectId
   if (err.name === 'CastError') {
     const label = CAST_PATH_LABELS[err.path] || 'request';

@@ -10,9 +10,12 @@ import {
 import { AuthState, updateToken, updateUser } from "@/store/AuthSlice";
 import {
   CREATE_DRIVER,
+  CURRENT_USER,
   VEHICLE_TYPES,
   VEHICLE_YEARS,
 } from "@/constants";
+import { isAuthError, isNetworkError } from "@/utils/errorHandler";
+import { UserMessages } from "@/constants/userMessages";
 import { City, Country, State } from "country-state-city";
 import React, {
   Fragment,
@@ -595,6 +598,25 @@ const DriverInfo = () => {
     inFlight.current = true;
     setLoading(true);
     try {
+      // Pre-flight token check. Access tokens expire after 15 minutes and
+      // this multi-step form (four photos) routinely takes longer — and this
+      // submit is the flow's first network call, so an expired token would
+      // otherwise only be discovered mid-upload, where the server's early 401
+      // can reach the device as a connection reset ("Network Error") instead
+      // of a response. A cheap authenticated GET here lets the apiClient
+      // interceptor refresh the token (updating Redux) before we stream the
+      // multipart body.
+      try {
+        await apiClient.get(CURRENT_USER, { timeout: 15000 });
+      } catch (preflightErr) {
+        if (isAuthError(preflightErr)) {
+          showMessage({ type: "danger", message: UserMessages.authRequired });
+          return;
+        }
+        // Anything else (offline, transient 5xx): continue and let the
+        // upload attempt surface the real error via the catch below.
+      }
+
       const data = new FormData();
 
       const imageFields = [
@@ -750,6 +772,10 @@ const DriverInfo = () => {
           typeof extracted === "string"
             ? extracted
             : "Validation error. Please check your input.";
+      } else if (isNetworkError(err)) {
+        // No HTTP response (connection dropped/reset, or timeout). Show the
+        // standard friendly copy instead of axios's raw "Network Error".
+        message = UserMessages.networkError;
       } else {
         const raw =
           e?.response?.data?.message ||
