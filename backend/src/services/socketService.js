@@ -107,19 +107,30 @@ class SocketService {
 
   /**
    * Emit a single ride offer to one driver (sequential offer queue payload).
+   *
+   * `driverUserId` (the driver's User._id) matters: authenticated sockets join
+   * `driver:{User._id}` (see server.js authenticate handler), while `driverId`
+   * here is the Driver document id — a room no real client is in. Emitting to
+   * both keeps any legacy `join-driver` consumers working and actually reaches
+   * connected drivers.
    */
-  emitRideOfferToDriver(driverId, ridePayload) {
+  emitRideOfferToDriver(driverId, ridePayload, driverUserId = null) {
     if (!this.io) {
       logger.warn('Socket.io not initialized');
       return;
     }
     const id = typeof driverId === 'string' ? driverId : driverId?.toString?.();
     if (!id) return;
+    const rooms = [`driver:${id}`];
+    const uid = typeof driverUserId === 'string' ? driverUserId : driverUserId?.toString?.();
+    if (uid && uid !== id) rooms.push(`driver:${uid}`);
     const ackPayload = { ...ridePayload, ack_required: true, sent_at: new Date().toISOString() };
-    this.io.to(`driver:${id}`).emit('ride-request', ridePayload);
-    this.io.to(`driver:${id}`).emit('NEW_RIDE_REQUEST', ackPayload);
-    this.io.to(`driver:${id}`).emit('RIDE_REQUEST_RECEIVED', ackPayload);
-    logger.info(`Ride offer emitted via Socket.io to driver ${id}`);
+    for (const room of rooms) {
+      this.io.to(room).emit('ride-request', ridePayload);
+      this.io.to(room).emit('NEW_RIDE_REQUEST', ackPayload);
+      this.io.to(room).emit('RIDE_REQUEST_RECEIVED', ackPayload);
+    }
+    logger.info(`Ride offer emitted via Socket.io to driver ${id}${uid && uid !== id ? ` (user ${uid})` : ''}`);
   }
 
   /**

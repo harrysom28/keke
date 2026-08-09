@@ -84,8 +84,15 @@ async function pushOfferToDriver(driver, ridePayload, rideId) {
           action_payload: { screen: 'DriverHome', rideId: ridePayload.ride_id },
           // Ride offers are inherently time-sensitive; retries can spam drivers when push is misconfigured.
           disable_retry: true,
-          // Realtime offer UI uses private-driver ride-request + socket; skip duplicate inbox/pusher/socket here.
-          skip_realtime: true,
+          // Realtime (socket NEW_NOTIFICATION + pusher private-user `notification`)
+          // must NOT be skipped here: the production app wakes its ride-offer
+          // sheet from this path (home.tsx sets driverPendingRideOffer on
+          // event_key ride_requested, then polls GET driver/rides/current-offer).
+          // The private-driver `ride-request` Pusher event below is the primary
+          // channel, but when it is missed the realtime notification is the only
+          // in-time fallback — with it skipped, drivers only discovered offers
+          // from the inbox after the 60s window expired. Duplicate alerts are
+          // suppressed client-side once the offer sheet is already pending.
           data: {
             subType: 'ride_requested',
             rideId: ridePayload.ride_id,
@@ -103,7 +110,9 @@ async function pushOfferToDriver(driver, ridePayload, rideId) {
     (async () => {
       const socket = getSocketService();
       if (socket) {
-        socket.emitRideOfferToDriver(driverId, ridePayload);
+        // Pass the User id too: authenticated driver sockets sit in
+        // `driver:{User._id}` rooms, not `driver:{Driver._id}`.
+        socket.emitRideOfferToDriver(driverId, ridePayload, driverUserId);
       }
     })(),
   ]);

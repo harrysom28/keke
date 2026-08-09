@@ -1,4 +1,8 @@
 import mongoose from 'mongoose';
+import {
+  DRIVER_LOCATION_MAX_AGE_MS,
+  DRIVER_STALE_OFFLINE_MS,
+} from '../utils/driverSearchRadius.js';
 
 const driverSchema = new mongoose.Schema(
   {
@@ -257,7 +261,7 @@ driverSchema.methods.addEarnings = async function (amount) {
 
 /** Mark drivers with stale location heartbeats as offline (fire-and-forget). */
 driverSchema.statics.markStaleDriversOffline = function () {
-  const cutoff = new Date(Date.now() - 5 * 60 * 1000);
+  const cutoff = new Date(Date.now() - DRIVER_STALE_OFFLINE_MS);
   return this.updateMany(
     {
       isOnline: true,
@@ -273,7 +277,9 @@ driverSchema.statics.markStaleDriversOffline = function () {
 // Static method to find nearby available drivers
 driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, maxDistanceKm = 15) {
   const logger = (await import('../utils/logger.js')).default;
-  const locationFreshSince = new Date(Date.now() - 2 * 60 * 1000);
+  // Same window the stale-offline sweeper uses: any driver still counted as
+  // online must also be matchable (see driverSearchRadius.js).
+  const locationFreshSince = new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS);
 
   try {
     const drivers = await this.find({
@@ -296,7 +302,11 @@ driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, 
     })
       .populate('user', 'name email phone profileImage rating')
       .populate('vehicleDetails.vehicleType')
-      .sort({ rating: -1, acceptanceRate: -1 })
+      // No explicit sort: $near already orders nearest-first, which is what
+      // both consumers want when >20 drivers are in radius (the previous
+      // .sort({ rating: -1 }) keyed on `rating`, an OBJECT field — the scalar
+      // is rating.average — so it scrambled distance order for nothing).
+      // Preview re-sorts by distance and dispatch re-scores anyway.
       .limit(20);
 
     logger.info(
