@@ -3,6 +3,7 @@ import multer from 'multer';
 import os from 'os';
 import path from 'path';
 import { mkdirSync } from 'fs';
+import { unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import * as driverController from '../controllers/driverController.js';
 import * as payoutController from '../controllers/payoutController.js';
@@ -69,7 +70,45 @@ function parseDriverCreateBody(req, res, next) {
   });
 }
 
-// All routes require authentication
+function cleanupDriverCreateTemps(req) {
+  const files = Array.isArray(req.files) ? req.files : [];
+  for (const file of files) {
+    if (file?.path) {
+      unlink(file.path).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Authenticate AFTER multer has fully consumed the multipart body.
+ *
+ * If protect runs first and rejects an expired token while the phone is still
+ * uploading 4 images, Node resets the socket and the shipped app surfaces a
+ * raw "Network Error" — the 401 never arrives, so the refresh interceptor
+ * never runs. Parsing first lets us return a real 401; the client refreshes
+ * and retries the upload successfully. Temp files from disk storage are
+ * cleaned up when auth fails so rejected attempts don't fill the volume.
+ */
+function protectDriverCreate(req, res, next) {
+  protect(req, res, (err) => {
+    if (err) cleanupDriverCreateTemps(req);
+    next(err);
+  });
+}
+
+// Create driver profile MUST be registered before router.use(protect) so we
+// can parse the multipart body before auth (see protectDriverCreate).
+// Allowed for users transitioning to driver (not yet driver role).
+router.post(
+  '/create',
+  parseDriverCreateBody,
+  protectDriverCreate,
+  validationRules.createDriver,
+  validate,
+  driverController.createDriverProfile
+);
+
+// All other /api/driver routes require authentication
 router.use(protect);
 
 // Paystack bank directory + NIBSS resolve (also mounted under /api/bank/* on payment routes).
@@ -89,9 +128,6 @@ router.get(
   validate,
   paymentController.resolveBankAccount
 );
-
-// Create driver profile - allowed for users transitioning to driver (not yet driver)
-router.post('/create', parseDriverCreateBody, validationRules.createDriver, validate, driverController.createDriverProfile);
 
 // Driver-only routes (require driver role)
 router.use(restrictTo('driver'));
