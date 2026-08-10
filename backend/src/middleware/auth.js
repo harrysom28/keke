@@ -18,6 +18,11 @@ export const extractTokenFromRequest = (req) => {
 
 /**
  * Protect routes - require authentication
+ * @param {{ clockToleranceSec?: number }} [opts]
+ *   Optional JWT clockTolerance (seconds). Used by driver registration so a
+ *   multi-step photo form that outlives the 15m access token still succeeds
+ *   without forcing the mobile client to retry a consumed multipart body
+ *   (RN FormData retries surface as a raw "Network Error").
  */
 export const protect = asyncHandler(async (req, res, next) => {
   const token = extractTokenFromRequest(req);
@@ -32,8 +37,11 @@ export const protect = asyncHandler(async (req, res, next) => {
       throw new AuthenticationError('Token has been revoked. Please login again.');
     }
 
-    // Verify token
-    const decoded = verifyAccessToken(token);
+    const clockToleranceSec = Number(req?.protectClockToleranceSec);
+    const decoded =
+      Number.isFinite(clockToleranceSec) && clockToleranceSec > 0
+        ? verifyAccessToken(token, { clockTolerance: clockToleranceSec })
+        : verifyAccessToken(token);
 
     // Get user from database
     const user = await User.findById(decoded.id).select('-password');
@@ -57,6 +65,15 @@ export const protect = asyncHandler(async (req, res, next) => {
     throw new AuthenticationError('Invalid or expired token. Please login again.');
   }
 });
+
+/**
+ * Driver registration only: accept access tokens expired by up to 2 hours.
+ * Signature + blacklist + active-user checks are unchanged.
+ */
+export const protectDriverRegistration = (req, res, next) => {
+  req.protectClockToleranceSec = 2 * 60 * 60;
+  return protect(req, res, next);
+};
 
 /**
  * Restrict routes to specific roles

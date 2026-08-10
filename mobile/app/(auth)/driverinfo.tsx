@@ -9,7 +9,6 @@ import {
 } from "react-native";
 import { AuthState, updateToken, updateUser } from "@/store/AuthSlice";
 import {
-  CREATE_DRIVER,
   CURRENT_USER,
   VEHICLE_TYPES,
   VEHICLE_YEARS,
@@ -672,14 +671,30 @@ const DriverInfo = () => {
       for (const [stateKey, formKey] of Object.entries(imageFieldMap)) {
         const img = state[stateKey as keyof typeof state] as {
           uri?: string;
+          type?: string;
+          name?: string;
         } | null;
         if (img?.uri) {
-          const ext = img.uri.split(".").pop() || "jpg";
-          const typed = img as { uri: string; type?: string };
+          const uri = img.uri;
+          // RN multipart cannot read ph:// / content:// / assets-library:// —
+          // those fail client-side as axios "Network Error" with no HTTP response.
+          if (
+            uri.startsWith("ph://") ||
+            uri.startsWith("content://") ||
+            uri.startsWith("assets-library://")
+          ) {
+            showMessage({
+              type: "warning",
+              message:
+                "One of your photos could not be prepared for upload. Please retake it and try again.",
+            });
+            return;
+          }
+          const ext = uri.split(".").pop()?.split("?")[0] || "jpg";
           data.append(formKey, {
-            uri: img.uri,
-            type: typed.type || mimeFromUri(img.uri),
-            name: `${formKey}.${ext}`,
+            uri,
+            type: img.type || mimeFromUri(uri),
+            name: img.name || `${formKey}.${ext}`,
           } as unknown as Blob);
         }
       }
@@ -706,15 +721,9 @@ const DriverInfo = () => {
         });
       }
 
-      // Use the configured apiClient (utils/apiClient.ts) so we get:
-      //   1. Bearer token attached from Redux on every request.
-      //   2. Content-Type stripped on FormData bodies, letting axios/RN
-      //      set `multipart/form-data; boundary=...` correctly (the
-      //      missing boundary was the prior "Network Error" cause).
-      //   3. Request/response logging via the interceptor, so this POST
-      //      now shows up in Metro alongside the other API calls.
-      // Do NOT pass a `headers` object here; apiClient handles them.
-      await apiClient.post(CREATE_DRIVER, data, {
+      // Relative path so apiClient baseURL + FormData Content-Type strip apply
+      // consistently (absolute CREATE_DRIVER URLs bypass some axios defaults).
+      await apiClient.post("driver/create", data, {
         // Safety net for slow networks even after on-device compression.
         // Backend uploads to Cloudinary in parallel; 180s covers large JPEGs
         // on Android mobile data where TLS + multipart can spike latency.

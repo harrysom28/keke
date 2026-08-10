@@ -89,12 +89,30 @@ apiClient.interceptors.request.use(
     }
 
     // FormData: let the client set Content-Type (multipart/form-data with boundary)
-    // so file uploads (e.g. user/profile/upload-image) work correctly
-    if (config.data && typeof FormData !== 'undefined' && config.data instanceof FormData) {
-      const headers = config.headers as Record<string, unknown>;
-      if (headers && 'Content-Type' in headers) {
-        delete headers['Content-Type'];
+    // so file uploads (e.g. user/profile/upload-image) work correctly.
+    // Use duck-typing — in RN, `instanceof FormData` can fail across realms
+    // and leave Content-Type: application/json on the request, which the
+    // native layer rejects as a generic "Network Error" with no response.
+    const data = config.data as { append?: unknown; _parts?: unknown } | undefined;
+    const isFormDataBody =
+      !!data &&
+      ((typeof FormData !== 'undefined' && data instanceof FormData) ||
+        (typeof data.append === 'function' && Array.isArray((data as { _parts?: unknown })._parts)));
+    if (isFormDataBody) {
+      const headers = config.headers as Record<string, unknown> & {
+        delete?: (key: string) => void;
+        set?: (key: string, value: string) => void;
+      };
+      if (headers) {
+        if (typeof headers.delete === 'function') {
+          headers.delete('Content-Type');
+          headers.delete('content-type');
+        } else {
+          delete headers['Content-Type'];
+          delete headers['content-type'];
+        }
       }
+      (config as { __isFormData?: boolean }).__isFormData = true;
     }
 
     // Ensure we're using the correct API URL (check for production domain)
@@ -453,6 +471,32 @@ apiClient.interceptors.response.use(
         if (newToken) {
           originalRequest.headers = originalRequest.headers ?? {};
           originalRequest.headers.Authorization = `Bearer ${newToken}`;
+          // Do NOT auto-retry multipart uploads. RN FormData image parts are
+          // often unreadable after the first send attempt — retrying them
+          // fails with a raw "Network Error" even though the token is now
+          // valid. Reject so the caller can rebuild FormData and submit again
+          // (driver registration preflight + second Continue tap).
+          const isFormDataRetry =
+            (originalRequest as { __isFormData?: boolean }).__isFormData === true ||
+            (typeof FormData !== 'undefined' &&
+              originalRequest.data instanceof FormData) ||
+            (originalRequest.data &&
+              typeof originalRequest.data === 'object' &&
+              typeof (originalRequest.data as { append?: unknown }).append === 'function');
+          if (isFormDataRetry) {
+            if (__DEV__) {
+              console.log('🔄 Token refreshed; skipping FormData auto-retry (rebuild body and resubmit)');
+            }
+            const formDataAuthError = new Error(
+              'Your session was refreshed. Please tap Continue again to finish.'
+            );
+            (formDataAuthError as any).response = error.response;
+            (formDataAuthError as any).config = error.config;
+            (formDataAuthError as any).status = 401;
+            (formDataAuthError as any).isAuthError = false;
+            (formDataAuthError as any).needsFormDataRetry = true;
+            return Promise.reject(formDataAuthError);
+          }
           if (__DEV__) {
             console.log('🔄 Retrying original request with new token');
           }

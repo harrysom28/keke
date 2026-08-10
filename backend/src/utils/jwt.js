@@ -45,10 +45,16 @@ export const generateTokenPair = (payload) => {
 
 /**
  * Verify JWT access token
+ * @param {string} token
+ * @param {{ clockTolerance?: number }} [options] - passed to jwt.verify (seconds of leeway)
  */
-export const verifyAccessToken = (token) => {
+export const verifyAccessToken = (token, options = {}) => {
   try {
-    return jwt.verify(token, JWT_SECRET);
+    const verifyOpts = {};
+    if (typeof options.clockTolerance === 'number' && options.clockTolerance > 0) {
+      verifyOpts.clockTolerance = options.clockTolerance;
+    }
+    return jwt.verify(token, JWT_SECRET, verifyOpts);
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
       throw new AuthenticationError('Access token has expired');

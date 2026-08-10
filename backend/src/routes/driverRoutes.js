@@ -9,7 +9,7 @@ import * as driverController from '../controllers/driverController.js';
 import * as payoutController from '../controllers/payoutController.js';
 import * as paymentController from '../controllers/paymentController.js';
 import * as driverSecurityController from '../controllers/driverSecurityController.js';
-import { protect, restrictTo } from '../middleware/auth.js';
+import { protect, protectDriverRegistration, restrictTo } from '../middleware/auth.js';
 import { requireDriverApproved, requireBankDetails } from '../middleware/onboarding.js';
 import {
   requireTransactionPin,
@@ -88,9 +88,15 @@ function cleanupDriverCreateTemps(req) {
  * never runs. Parsing first lets us return a real 401; the client refreshes
  * and retries the upload successfully. Temp files from disk storage are
  * cleaned up when auth fails so rejected attempts don't fill the volume.
+ *
+ * We also use protectDriverRegistration (2h JWT clockTolerance) so a form
+ * that outlives the normal 15m access token still succeeds on the first
+ * attempt. Without that, the shipped app refreshes the token and retries
+ * the same FormData — React Native often cannot re-read the local image
+ * URIs on retry, which again surfaces as "Network Error".
  */
 function protectDriverCreate(req, res, next) {
-  protect(req, res, (err) => {
+  protectDriverRegistration(req, res, (err) => {
     if (err) cleanupDriverCreateTemps(req);
     next(err);
   });
