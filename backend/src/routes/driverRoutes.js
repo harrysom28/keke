@@ -56,7 +56,14 @@ if (DRIVER_CREATE_USES_CLOUDINARY) {
 
 const driverCreateUpload = multer({
   storage: driverCreateStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  // Was: fileSize 10MB only. Explicit files/fields caps prevent runaway parts
+  // while still fitting 4 compressed JPEGs + text fields from mobile.
+  limits: {
+    fileSize: 10 * 1024 * 1024, // unchanged: 10MB per file
+    files: 8,
+    fields: 40,
+    fieldSize: 1024 * 1024,
+  },
 }).any();
 
 // Parse multipart form (mobile FormData) then normalize to API shape for driver create
@@ -82,18 +89,8 @@ function cleanupDriverCreateTemps(req) {
 /**
  * Authenticate AFTER multer has fully consumed the multipart body.
  *
- * If protect runs first and rejects an expired token while the phone is still
- * uploading 4 images, Node resets the socket and the shipped app surfaces a
- * raw "Network Error" — the 401 never arrives, so the refresh interceptor
- * never runs. Parsing first lets us return a real 401; the client refreshes
- * and retries the upload successfully. Temp files from disk storage are
- * cleaned up when auth fails so rejected attempts don't fill the volume.
- *
- * We also use protectDriverRegistration (2h JWT clockTolerance) so a form
- * that outlives the normal 15m access token still succeeds on the first
- * attempt. Without that, the shipped app refreshes the token and retries
- * the same FormData — React Native often cannot re-read the local image
- * URIs on retry, which again surfaces as "Network Error".
+ * Order matters: parse → protectDriverRegistration (2h expiry grace, this
+ * route only) → validate → controller. Temp files are cleaned on auth failure.
  */
 function protectDriverCreate(req, res, next) {
   protectDriverRegistration(req, res, (err) => {

@@ -1,8 +1,13 @@
-import { verifyAccessToken } from '../utils/jwt.js';
+import {
+  verifyAccessToken,
+  verifyAccessTokenForDriverCreate,
+  DRIVER_CREATE_TOKEN_GRACE_MS,
+} from '../utils/jwt.js';
 import User from '../models/User.js';
 import { isBlacklisted } from '../services/tokenBlacklist.js';
 import { AuthenticationError, AuthorizationError, NotFoundError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
+import logger from '../utils/logger.js';
 
 /**
  * Extract token from request (for use in logout, etc.)
@@ -16,13 +21,22 @@ export const extractTokenFromRequest = (req) => {
   return null;
 };
 
+async function loadActiveUserFromDecoded(decoded) {
+  const user = await User.findById(decoded.id).select('-password');
+
+  if (!user) {
+    throw new NotFoundError('User');
+  }
+
+  if (!user.isActive) {
+    throw new AuthenticationError('Your account has been deactivated. Please contact support.');
+  }
+
+  return user;
+}
+
 /**
- * Protect routes - require authentication
- * @param {{ clockToleranceSec?: number }} [opts]
- *   Optional JWT clockTolerance (seconds). Used by driver registration so a
- *   multi-step photo form that outlives the 15m access token still succeeds
- *   without forcing the mobile client to retry a consumed multipart body
- *   (RN FormData retries surface as a raw "Network Error").
+ * Protect routes - require authentication (strict access-token TTL, no grace).
  */
 export const protect = asyncHandler(async (req, res, next) => {
   const token = extractTokenFromRequest(req);
@@ -32,29 +46,13 @@ export const protect = asyncHandler(async (req, res, next) => {
   }
 
   try {
-    // Check if token was revoked (logout)
     if (await isBlacklisted(token)) {
       throw new AuthenticationError('Token has been revoked. Please login again.');
     }
 
-    const clockToleranceSec = Number(req?.protectClockToleranceSec);
-    const decoded =
-      Number.isFinite(clockToleranceSec) && clockToleranceSec > 0
-        ? verifyAccessToken(token, { clockTolerance: clockToleranceSec })
-        : verifyAccessToken(token);
+    const decoded = verifyAccessToken(token);
+    const user = await loadActiveUserFromDecoded(decoded);
 
-    // Get user from database
-    const user = await User.findById(decoded.id).select('-password');
-
-    if (!user) {
-      throw new NotFoundError('User');
-    }
-
-    if (!user.isActive) {
-      throw new AuthenticationError('Your account has been deactivated. Please contact support.');
-    }
-
-    // Attach user to request
     req.user = user;
     req.userId = user._id;
     next();
@@ -67,13 +65,51 @@ export const protect = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * Driver registration only: accept access tokens expired by up to 2 hours.
- * Signature + blacklist + active-user checks are unchanged.
+ * POST /api/driver/create ONLY.
+ *
+ * Same blacklist + signature + active-user checks as `protect`, but if the
+ * access token is expired, allow it when `exp` is within the last 2 hours.
+ * Every other route keeps the standard 15-minute TTL via `protect`.
+ *
+ * Other multipart upload routes (profile image, vehicle images, documents)
+ * use single-file uploads that finish well within 15m, so they stay on
+ * strict `protect` and do not get this grace.
  */
-export const protectDriverRegistration = (req, res, next) => {
-  req.protectClockToleranceSec = 2 * 60 * 60;
-  return protect(req, res, next);
-};
+export const protectDriverRegistration = asyncHandler(async (req, res, next) => {
+  const token = extractTokenFromRequest(req);
+
+  if (!token) {
+    throw new AuthenticationError('Not authenticated. Please provide a valid token.');
+  }
+
+  try {
+    if (await isBlacklisted(token)) {
+      throw new AuthenticationError('Token has been revoked. Please login again.');
+    }
+
+    const { decoded, tokenAgeMs, usedGrace } = verifyAccessTokenForDriverCreate(token);
+
+    // Date.now() - exp*1000: negative while still valid, positive after expiry.
+    logger.info('driver/create auth token age', {
+      userId: decoded?.id,
+      tokenAgeMs,
+      usedGrace,
+      graceMs: DRIVER_CREATE_TOKEN_GRACE_MS,
+      path: req.originalUrl || req.url,
+    });
+
+    const user = await loadActiveUserFromDecoded(decoded);
+    req.user = user;
+    req.userId = user._id;
+    req.driverCreateAuth = { tokenAgeMs, usedGrace };
+    next();
+  } catch (error) {
+    if (error.isOperational) {
+      throw error;
+    }
+    throw new AuthenticationError('Invalid or expired token. Please login again.');
+  }
+});
 
 /**
  * Restrict routes to specific roles

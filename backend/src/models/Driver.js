@@ -10,6 +10,7 @@ const driverSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: [true, 'Driver must be associated with a user'],
+      // One driver profile per user — used as the idempotency key for POST /driver/create
       unique: true,
     },
     licenseNumber: {

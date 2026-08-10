@@ -183,22 +183,27 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
     insurance,
   } = req.body;
 
-  // Check if user already has a driver profile. If the existing record is
-  // already verified/approved, refuse outright — we never overwrite an
-  // active driver record from this endpoint. Otherwise we'll re-use the
-  // existing document via an in-place update further below.
+  // Uniqueness key is Driver.user (1:1 with User). Phone lives on User, not
+  // Driver — idempotency is keyed by userId. licenseNumber / plateNumber are
+  // separate uniqueness constraints (field collisions across drivers).
   //
-  // The previous implementation did `Driver.deleteOne` here followed by
-  // `Driver.create` below. That was unsafe: if the subsequent create threw
-  // (validation, transient DB error, etc.) the user was left with no
-  // driver record at all, losing any prior progress on fields we don't
-  // re-submit on every call (vehicleImages, bankAccount, insurance, etc.).
-  const existingDriver = await Driver.findOne({ user: userId });
+  // Complete profiles → 200 idempotent success (covers server-succeeded /
+  // client-missed-response retries). Partial / pending drafts → update in place.
+  let existingDriver = await Driver.findOne({ user: userId });
   if (
     existingDriver &&
     (existingDriver.verificationStatus === 'approved' || existingDriver.documentsVerified)
   ) {
-    throw new ConflictError('Driver profile already exists');
+    await existingDriver.populate('user', 'name email phone profileImage role');
+    await existingDriver.populate('vehicleDetails.vehicleType');
+    logger.info(`Driver create idempotent hit (already complete) for user ${userId}`);
+    return res.status(200).json({
+      status: 'success',
+      message: 'Driver profile already exists',
+      data: {
+        driver: formatDriverResponse(existingDriver),
+      },
+    });
   }
 
   // Check if user role is driver
@@ -268,10 +273,49 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
     }
   } catch (createErr) {
     if (createErr.code === 11000) {
-      const field = createErr.message?.includes('licenseNumber') ? 'License number' : createErr.message?.includes('plateNumber') ? 'Plate number' : 'Driver';
-      throw new ConflictError(`${field} is already registered. Please use different details.`);
+      // Concurrent retry may have created Driver.user first — reuse that row.
+      const raced = await Driver.findOne({ user: userId });
+      if (raced) {
+        if (raced.verificationStatus === 'approved' || raced.documentsVerified) {
+          await raced.populate('user', 'name email phone profileImage role');
+          await raced.populate('vehicleDetails.vehicleType');
+          logger.info(`Driver create race resolved to complete profile for user ${userId}`);
+          return res.status(200).json({
+            status: 'success',
+            message: 'Driver profile already exists',
+            data: { driver: formatDriverResponse(raced) },
+          });
+        }
+        Object.assign(raced, driverData);
+        try {
+          driver = await raced.save();
+          existingDriver = raced;
+        } catch (saveErr) {
+          if (saveErr.code === 11000) {
+            const field = saveErr.message?.includes('licenseNumber')
+              ? 'License number'
+              : saveErr.message?.includes('plateNumber')
+                ? 'Plate number'
+                : 'Driver';
+            throw new ConflictError(
+              `${field} is already registered. Please use different details.`
+            );
+          }
+          throw saveErr;
+        }
+      } else {
+        const field = createErr.message?.includes('licenseNumber')
+          ? 'License number'
+          : createErr.message?.includes('plateNumber')
+            ? 'Plate number'
+            : 'Driver';
+        throw new ConflictError(
+          `${field} is already registered. Please use different details.`
+        );
+      }
+    } else {
+      throw createErr;
     }
-    throw createErr;
   }
   await driver.populate('user', 'name email phone profileImage role');
   await driver.populate('vehicleDetails.vehicleType');

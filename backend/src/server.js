@@ -96,6 +96,14 @@ if (typeof trustProxyEnv === 'string' && trustProxyEnv.trim() !== '') {
 // Create HTTP server
 const server = createServer(app);
 
+// Long-running POST /api/driver/create (4-photo multipart + Cloudinary).
+// Node defaults historically: timeout 0 (no limit) / headersTimeout 60000 /
+// requestTimeout 300000. We set explicit 180s floors so a misconfigured
+// platform default cannot cut the upload short before the proxy's 180s.
+server.timeout = parseInt(process.env.HTTP_SERVER_TIMEOUT_MS || '180000', 10);
+server.headersTimeout = parseInt(process.env.HTTP_HEADERS_TIMEOUT_MS || '185000', 10);
+server.requestTimeout = parseInt(process.env.HTTP_REQUEST_TIMEOUT_MS || '180000', 10);
+
 // Create Socket.io server
 const io = new Server(server, {
   cors: {
