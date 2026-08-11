@@ -173,6 +173,157 @@ async function persistDriverCreateFileAndGetUrl(file) {
 /**
  * Create driver profile - POST /api/driver/create
  */
+
+/**
+ * Persist KYC / vehicle images after POST /driver/create has already returned 201.
+ * Safe to run in the background — never throws to the HTTP layer.
+ */
+async function finalizeDriverCreateUploads({ driverId, kycUserId, licenseNumber, files, userId }) {
+  let licenseImageUrl = null;
+  let idCardImageUrl = null;
+  let selfieUrl = null;
+  const vehicleImagePush = [];
+  let insuranceDocumentUrl = null;
+  const vehicleDocPush = [];
+
+  const uploadResults = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const url = await persistDriverCreateFileAndGetUrl(file);
+        return { file, url, ok: true };
+      } catch (err) {
+        return {
+          file,
+          url: null,
+          ok: false,
+          error: err?.message || 'Upload rejected',
+        };
+      }
+    })
+  );
+
+  const successfulUploads = [];
+  const failedUploads = [];
+  for (const result of uploadResults) {
+    if (result.ok && result.url) {
+      successfulUploads.push({ file: result.file, url: result.url });
+    } else {
+      failedUploads.push({
+        reason: result.ok ? 'No URL returned from upload' : result.error,
+        fieldname: result.file?.fieldname || 'unknown',
+      });
+    }
+  }
+
+  if (failedUploads.length > 0) {
+    logger.error('Driver document uploads partially or fully failed (background)', {
+      failedUploads,
+      userId,
+      successCount: successfulUploads.length,
+      failCount: failedUploads.length,
+    });
+  }
+
+  for (const { file, url } of successfulUploads) {
+    const cat = categorizeDriverCreateUploadField(file.fieldname);
+    if (!cat) continue;
+
+    const fn = (file.fieldname || '').toLowerCase();
+    if (cat === 'id_image') {
+      if (
+        fn.includes('licence') ||
+        fn.includes('license') ||
+        fn.includes('driver')
+      ) {
+        licenseImageUrl = url;
+      } else {
+        idCardImageUrl = url;
+      }
+    } else if (cat === 'selfie') {
+      selfieUrl = url;
+    } else if (cat === 'vehicle_image') {
+      vehicleImagePush.push({
+        type: 'front',
+        url,
+        createdAt: new Date(),
+      });
+    } else if (cat === 'insurance') {
+      insuranceDocumentUrl = url;
+    } else if (cat === 'vehicle_document') {
+      vehicleDocPush.push({
+        type: mapVehicleDocumentType(file.fieldname),
+        url,
+        uploadedAt: new Date(),
+      });
+    }
+  }
+
+  if (vehicleImagePush.length > 0) {
+    await Driver.findByIdAndUpdate(driverId, {
+      $push: { vehicleImages: { $each: vehicleImagePush } },
+    });
+  }
+
+  const kycSet = { updatedAt: new Date() };
+  if (licenseImageUrl != null) kycSet.licenseImageUrl = licenseImageUrl;
+  if (idCardImageUrl != null) kycSet.idImageUrl = idCardImageUrl;
+  if (selfieUrl != null) kycSet.selfieUrl = selfieUrl;
+
+  if (licenseImageUrl != null || idCardImageUrl != null || selfieUrl != null) {
+    const kycSetOnInsert = {
+      userId: kycUserId,
+      idType: 'drivers_license',
+      idNumber: licenseNumber || 'pending',
+      verificationStatus: 'pending',
+    };
+    if (idCardImageUrl == null) kycSetOnInsert.idImageUrl = 'pending';
+    if (selfieUrl == null) kycSetOnInsert.selfieUrl = 'pending';
+
+    await DriverKyc.findOneAndUpdate(
+      { userId: kycUserId },
+      {
+        $set: kycSet,
+        $setOnInsert: kycSetOnInsert,
+      },
+      { upsert: true, new: true }
+    );
+  }
+
+  if (insuranceDocumentUrl != null || vehicleDocPush.length > 0) {
+    const driverDoc = await Driver.findById(driverId).select('vehicleDetails');
+    const vd = driverDoc?.vehicleDetails || {};
+    const vehicleTypeId = vd.vehicleType?._id || vd.vehicleType;
+    const updateOps = {
+      $setOnInsert: {
+        userId: kycUserId,
+        vehicleType: vehicleTypeId,
+        plateNumber: String(vd.plateNumber || '').toUpperCase(),
+        make: vd.make || null,
+        model: vd.model || null,
+        year: vd.year || null,
+        color: vd.color || null,
+        verificationStatus: 'pending',
+      },
+    };
+    if (insuranceDocumentUrl != null) {
+      updateOps.$set = { insuranceDocumentUrl: insuranceDocumentUrl };
+    }
+    if (vehicleDocPush.length > 0) {
+      updateOps.$push = { vehicleDocuments: { $each: vehicleDocPush } };
+    }
+    await DriverVehicle.findOneAndUpdate({ userId: kycUserId }, updateOps, {
+      upsert: true,
+      new: true,
+    });
+  }
+
+  logger.info(`Background driver-create uploads finished for user ${userId}`, {
+    driverId: String(driverId),
+    successCount: successfulUploads.length,
+    failCount: failedUploads.length,
+  });
+}
+
 export const createDriverProfile = asyncHandler(async (req, res) => {
   const userId = req.user._id;
   const {
@@ -320,202 +471,32 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
   await driver.populate('user', 'name email phone profileImage role');
   await driver.populate('vehicleDetails.vehicleType');
 
-  const files = Array.isArray(req.files) ? req.files : [];
-  // Two SEPARATE buckets for the two ID-flavored images mobile sends:
-  //   - licence_image_name → driver's license document  → licenseImageUrl
-  //   - id_card_image_name → national/government ID     → idCardImageUrl
-  // The previous version coalesced them into a single idImageUrl, which
-  // silently dropped one of the two whenever the driver uploaded both.
-  // Admins need to review both, so we now persist them into distinct
-  // fields on DriverKyc (licenseImageUrl + idImageUrl respectively).
-  let licenseImageUrl = null;
-  let idCardImageUrl = null;
-  let selfieUrl = null;
-  const vehicleImagePush = [];
-  let insuranceDocumentUrl = null;
-  const vehicleDocPush = [];
-
-  // Upload all driver documents to Cloudinary in parallel. Sequential uploads
-  // were taking 12-30s for 4 photos and tripping the mobile client's 60s
-  // timeout, which manifested as a Traefik 502. Each task carries its own
-  // try/catch so `file` (and therefore `file.fieldname`) is always attached
-  // to the result — even when the upload rejects. That lets us use Promise.all
-  // (tasks never reject) and partition on a simple `ok` flag.
-  const uploadResults = await Promise.all(
-    files.map(async (file) => {
-      try {
-        const url = await persistDriverCreateFileAndGetUrl(file);
-        return { file, url, ok: true };
-      } catch (err) {
-        return {
-          file,
-          url: null,
-          ok: false,
-          error: err?.message || 'Upload rejected',
-        };
-      }
-    })
-  );
-
-  const successfulUploads = [];
-  const failedUploads = [];
-
-  for (const result of uploadResults) {
-    if (result.ok && result.url) {
-      successfulUploads.push({ file: result.file, url: result.url });
-    } else {
-      failedUploads.push({
-        reason: result.ok ? 'No URL returned from upload' : result.error,
-        fieldname: result.file?.fieldname || 'unknown',
-      });
-    }
-  }
-
-  if (failedUploads.length > 0) {
-    logger.error('Driver document uploads partially or fully failed', {
-      failedUploads,
-      userId,
-      successCount: successfulUploads.length,
-      failCount: failedUploads.length,
-    });
-    if (successfulUploads.length === 0) {
-      // Surface the actual upload failure to the client. Using AppError
-      // (isOperational = true) keeps the message intact through
-      // sendErrorProd — a plain `Error` here was being rewritten to
-      // "Something went wrong!" and giving us no signal to debug from
-      // the mobile side. Include the first failure reason verbatim so
-      // network / Cloudinary / disk errors are visible to the user.
-      const firstReason = failedUploads[0]?.reason || 'Upload rejected';
-      throw new AppError(
-        `Image upload failed: ${firstReason}. Please try again on a stronger network.`,
-        502
-      );
-    }
-  }
-
-  // Categorize each successful upload into the appropriate KYC / vehicle
-  // bucket. This is the exact field-mapping the old sequential loop used —
-  // only the iteration source changed.
-  for (const { file, url } of successfulUploads) {
-    const cat = categorizeDriverCreateUploadField(file.fieldname);
-    if (!cat) continue;
-
-    const fn = (file.fieldname || '').toLowerCase();
-    if (cat === 'id_image') {
-      // Field-name heuristic decides which of the two physical fields
-      // this image belongs to. The fieldnames the mobile registration
-      // form sends are stable (licence_image_name vs id_card_image_name),
-      // so this is reliable, but we also fall back to substring checks
-      // to tolerate older clients or alternative naming.
-      if (
-        fn.includes('licence') ||
-        fn.includes('license') ||
-        fn.includes('driver')
-      ) {
-        licenseImageUrl = url;
-      } else {
-        idCardImageUrl = url;
-      }
-    } else if (cat === 'selfie') {
-      selfieUrl = url;
-    } else if (cat === 'vehicle_image') {
-      vehicleImagePush.push({
-        type: 'front',
-        url,
-        createdAt: new Date(),
-      });
-    } else if (cat === 'insurance') {
-      insuranceDocumentUrl = url;
-    } else if (cat === 'vehicle_document') {
-      vehicleDocPush.push({
-        type: mapVehicleDocumentType(file.fieldname),
-        url,
-        uploadedAt: new Date(),
-      });
-    }
-  }
-
-  if (vehicleImagePush.length > 0) {
-    await Driver.findByIdAndUpdate(driver._id, {
-      $push: { vehicleImages: { $each: vehicleImagePush } },
-    });
-  }
-
-  const kycUserId = driver.user?._id || driver.user;
-
-  // Persist BOTH ID-flavored images on the same DriverKyc record. We only
-  // overwrite a field if this request actually provided a new value for
-  // it — that way a partial re-submission (e.g. driver retries after a
-  // network blip and only includes 2 of the 4 images) doesn't blow away
-  // images that were already uploaded on a previous attempt.
-  const kycSet = { updatedAt: new Date() };
-  if (licenseImageUrl != null) kycSet.licenseImageUrl = licenseImageUrl;
-  if (idCardImageUrl != null) kycSet.idImageUrl = idCardImageUrl;
-  if (selfieUrl != null) kycSet.selfieUrl = selfieUrl;
-
-  if (licenseImageUrl != null || idCardImageUrl != null || selfieUrl != null) {
-    // 'pending' sentinels keep the schema's `required: true` happy when an
-    // upsert creates a fresh document but the driver only uploaded a subset
-    // of the four images. Critically, a field MUST NOT appear in BOTH $set
-    // and $setOnInsert — MongoDB rejects that with code 40
-    // (ConflictingUpdateOperators) instead of letting $set win on insert,
-    // which 500'd every brand-new driver signup. So we only add the
-    // sentinel for fields we did NOT just receive a real value for.
-    const kycSetOnInsert = {
-      userId: kycUserId,
-      idType: 'drivers_license',
-      idNumber: String(licenseNumber || '').trim() || 'pending',
-      verificationStatus: 'pending',
-    };
-    if (idCardImageUrl == null) kycSetOnInsert.idImageUrl = 'pending';
-    if (selfieUrl == null) kycSetOnInsert.selfieUrl = 'pending';
-
-    await DriverKyc.findOneAndUpdate(
-      { userId: kycUserId },
-      {
-        $set: kycSet,
-        $setOnInsert: kycSetOnInsert,
-      },
-      { upsert: true, new: true }
-    );
-  }
-
-  if (insuranceDocumentUrl != null || vehicleDocPush.length > 0) {
-    const vd = driver.vehicleDetails;
-    const vehicleTypeId = vd.vehicleType?._id || vd.vehicleType;
-    const updateOps = {
-      $setOnInsert: {
-        userId: kycUserId,
-        vehicleType: vehicleTypeId,
-        plateNumber: String(vd.plateNumber || '').toUpperCase(),
-        make: vd.make || null,
-        model: vd.model || null,
-        year: vd.year || null,
-        color: vd.color || null,
-        verificationStatus: 'pending',
-      },
-    };
-    if (insuranceDocumentUrl != null) {
-      updateOps.$set = { insuranceDocumentUrl: insuranceDocumentUrl };
-    }
-    if (vehicleDocPush.length > 0) {
-      updateOps.$push = { vehicleDocuments: { $each: vehicleDocPush } };
-    }
-    await DriverVehicle.findOneAndUpdate({ userId: kycUserId }, updateOps, {
-      upsert: true,
-      new: true,
-    });
-  }
-
-  driver = await Driver.findById(driver._id)
-    .populate('user', 'name email phone profileImage role')
-    .populate('vehicleDetails.vehicleType');
-
-  // Update user role to driver
+  // Flip role before responding so the shipped app can navigate home as a driver
+  // even if Cloudinary is slow or the proxy would have cut a long request.
   user.role = 'driver';
   await user.save();
 
-  logger.info(`Driver profile created for user ${userId}`);
+  const files = Array.isArray(req.files) ? req.files : [];
+  const driverId = driver._id;
+  const kycUserId = driver.user?._id || driver.user;
+  const licenseNumberForKyc = String(licenseNumber || '').trim();
+  // Snapshot multer file descriptors for background work — do not touch req.files
+  // after the response is sent.
+  const filesSnapshot = files.map((f) => ({
+    fieldname: f.fieldname,
+    originalname: f.originalname,
+    mimetype: f.mimetype,
+    size: f.size,
+    path: f.path,
+    buffer: f.buffer,
+  }));
+
+  logger.info(`Driver profile created for user ${userId}`, {
+    driverId: String(driverId),
+    fileCount: filesSnapshot.length,
+    fileFields: filesSnapshot.map((f) => f.fieldname),
+    auth: req.driverCreateAuth || null,
+  });
 
   res.status(201).json({
     status: 'success',
@@ -524,7 +505,27 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
       driver: formatDriverResponse(driver),
     },
   });
+
+  // Upload KYC / vehicle images AFTER the response. Holding the HTTP
+  // connection open through parallel Cloudinary uploads was still getting
+  // cut by Dokploy/Traefik defaults (~60s), which the shipped app surfaces
+  // as axios "Network Error" with no response. Images are not required by
+  // the createDriver validator; admins can re-request docs if uploads fail.
+  if (filesSnapshot.length > 0) {
+    setImmediate(() => {
+      finalizeDriverCreateUploads({
+        driverId,
+        kycUserId,
+        licenseNumber: licenseNumberForKyc,
+        files: filesSnapshot,
+        userId,
+      }).catch((err) => {
+        logger.error(`Background driver-create uploads failed for user ${userId}: ${err?.message || err}`);
+      });
+    });
+  }
 });
+
 
 /**
  * Get driver profile - GET /api/driver/profile

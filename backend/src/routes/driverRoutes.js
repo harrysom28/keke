@@ -19,6 +19,7 @@ import {
 import { validationRules, validate } from '../middleware/validation.js';
 import { limiters } from '../middleware/rateLimiter.js';
 import { normalizeDriverCreateBody } from '../middleware/driverCreateBody.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -68,11 +69,31 @@ const driverCreateUpload = multer({
 
 // Parse multipart form (mobile FormData) then normalize to API shape for driver create
 function parseDriverCreateBody(req, res, next) {
+  const contentType = String(req.headers['content-type'] || '');
+  const contentLength = req.headers['content-length'];
+  logger.info('driver/create request received', {
+    contentType: contentType.slice(0, 80),
+    contentLength: contentLength || null,
+    hasAuth: Boolean(req.headers.authorization || req.headers['x-auth-token']),
+    method: req.method,
+    path: req.originalUrl || req.url,
+  });
+
   if (!req.is('multipart/form-data')) {
     return normalizeDriverCreateBody(req, res, next);
   }
   driverCreateUpload(req, res, (err) => {
     if (err) return next(err);
+    const files = Array.isArray(req.files) ? req.files : [];
+    logger.info('driver/create multer parsed', {
+      fileCount: files.length,
+      fields: files.map((f) => ({
+        fieldname: f.fieldname,
+        size: f.size,
+        mimetype: f.mimetype,
+      })),
+      bodyKeys: Object.keys(req.body || {}),
+    });
     normalizeDriverCreateBody(req, res, next);
   });
 }

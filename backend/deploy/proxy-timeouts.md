@@ -3,7 +3,11 @@
 # There is no Nginx/Traefik config checked into this repo. Production sits
 # behind Dokploy's reverse proxy (typically Traefik). Defaults for many
 # proxies are ~60s read timeout and 1m body size — too low for 4 compressed
-# JPEGs on slow mobile data while Cloudinary uploads run server-side.
+# JPEGs on slow mobile data.
+#
+# App note: Cloudinary uploads now run AFTER the 201 response (background),
+# so proxy read timeout mainly covers receiving the multipart body + DB
+# write, not Cloudinary. Body size and upload-duration limits still matter.
 #
 # BEFORE (typical Dokploy/Traefik/Nginx defaults — confirm in your panel):
 #   client_max_body_size / maxRequestBodyBytes : 1m

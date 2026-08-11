@@ -2,11 +2,13 @@ import jwt from 'jsonwebtoken';
 import { AuthenticationError } from './errors.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRE = process.env.JWT_EXPIRE || '15m';
+// Prefer JWT_EXPIRE=2h in Dokploy. Default was 15m; the shipped driver
+// registration form routinely exceeds that before the final multipart POST.
+const JWT_EXPIRE = process.env.JWT_EXPIRE || '2h';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 const JWT_REFRESH_EXPIRE = process.env.JWT_REFRESH_EXPIRE || '7d';
 
-/** Driver registration multipart form can outlive the 15m access TTL. */
+/** Extra grace on POST /driver/create only if access TTL still elapses mid-form. */
 export const DRIVER_CREATE_TOKEN_GRACE_MS = 2 * 60 * 60 * 1000;
 
 if (!JWT_SECRET || !JWT_REFRESH_SECRET) {
