@@ -51,3 +51,4 @@ dump.rdb
 
 # Docker volumes / local overrides (keep .dockerignore committed)
 # .dockerignore
+.data/
