@@ -241,6 +241,21 @@ export const getDriverProfileDetails = asyncHandler(async (req, res) => {
   });
 });
 
+/** Android applicationId — must match mobile/app.json `expo.android.package`. */
+const ANDROID_PACKAGE = process.env.ANDROID_PACKAGE_NAME || 'com.kekeride.app';
+
+function buildReferralUrl(referralCode) {
+  if (!referralCode) return null;
+  const storeUrl =
+    process.env.PLAY_STORE_URL ||
+    `https://play.google.com/store/apps/details?id=${ANDROID_PACKAGE}`;
+  const referrer = encodeURIComponent(
+    `utm_source=invite&utm_medium=share&utm_content=${referralCode}`
+  );
+  const sep = storeUrl.includes('?') ? '&' : '?';
+  return `${storeUrl}${sep}referrer=${referrer}`;
+}
+
 /**
  * Get referral code - GET /api/user/profile/referral-code
  */
@@ -263,7 +278,7 @@ export const getReferralCode = asyncHandler(async (req, res) => {
     status: 'success',
     data: {
       referral_code: user.referralCode || null,
-      referral_url: user.referralCode ? `https://app.keke.com/invite?code=${user.referralCode}` : null,
+      referral_url: buildReferralUrl(user.referralCode),
     },
   });
 });

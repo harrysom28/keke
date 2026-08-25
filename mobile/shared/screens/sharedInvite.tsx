@@ -18,6 +18,7 @@ import { router } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import apiClient from "@/utils/apiClient";
+import { inviteShareUrl } from "@/utils/inviteShareUrl";
 
 const SharedInvite = () => {
   const [referralCode, setReferralCode] = useState<string | null>(null);
@@ -69,7 +70,7 @@ const SharedInvite = () => {
     `When your friend signs up with your referral code and completes their first ride, you'll both get a reward after ${required} successful invites.`;
 
   const shareMessage = referralCode
-    ? `Join me on Keke Ride! Use my invite code ${referralCode} when you sign up. ${referralUrl || ""}`
+    ? `Join me on Keke Ride! Use my invite code ${referralCode} when you sign up. ${inviteShareUrl(referralUrl, referralCode)}`
     : "Join me on Keke Ride - the ride-hailing app!";
 
   const onShare = async () => {

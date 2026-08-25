@@ -20,6 +20,7 @@ import { Checkbox } from "expo-checkbox";
 
 import EmptyData from "@/components/emptyData";
 import apiClient from "@/utils/apiClient";
+import { inviteShareUrl } from "@/utils/inviteShareUrl";
 import { router } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
@@ -226,9 +227,10 @@ const SharedInviteList = () => {
     }
   };
 
+  const shareLink = inviteShareUrl(referralUrl, referralCode);
   const shareMessage =
-    referralCode && referralUrl
-      ? `Join me on Keke Ride! Use my invite code ${referralCode} when you sign up. ${referralUrl}`
+    referralCode && shareLink
+      ? `Join me on Keke Ride! Use my invite code ${referralCode} when you sign up. ${shareLink}`
       : referralCode
         ? `Join me on Keke Ride! Use my invite code ${referralCode} when you sign up.`
         : "Join me on Keke Ride - the ride-hailing app!";
