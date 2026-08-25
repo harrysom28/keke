@@ -3,6 +3,7 @@ import {
   BackHandler,
   Image,
   Pressable,
+  ScrollView,
   Text,
   TouchableOpacity,
   View,
@@ -33,13 +34,14 @@ import AuthForm from "@/components/AuthForm";
 import Checkbox from "expo-checkbox";
 import { Dropdown } from "react-native-element-dropdown";
 import FormInput from "@/components/formInput";
-import { ScrollView } from "react-native-gesture-handler";
 import apiClient from "@/utils/apiClient";
 import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
-import useImagePicker from "@/hooks/useImagePicker";
+import useImagePicker, {
+  prepareImageForMultipart,
+} from "@/hooks/useImagePicker";
 import { useIsFocused } from "@react-navigation/native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { verticalScale } from "@/constants/Metrics";
@@ -668,57 +670,37 @@ const DriverInfo = () => {
         vehicle_image_name: "vehicle_image_name",
       } as const;
 
+      // Re-prepare every photo at submit time. Simulator gallery picks are
+      // usually already file://; physical devices often keep ph:// /
+      // content:// (or bare paths) that RN multipart cannot read — axios
+      // then reports "Network Error" with no HTTP response even though the
+      // API is fine (as proven by the simulator 201).
       for (const [stateKey, formKey] of Object.entries(imageFieldMap)) {
         const img = state[stateKey as keyof typeof state] as {
           uri?: string;
           type?: string;
           name?: string;
         } | null;
-        if (img?.uri) {
-          const uri = img.uri;
-          // RN multipart cannot read ph:// / content:// / assets-library:// —
-          // those fail client-side as axios "Network Error" with no HTTP response.
-          if (
-            uri.startsWith("ph://") ||
-            uri.startsWith("content://") ||
-            uri.startsWith("assets-library://")
-          ) {
-            showMessage({
-              type: "warning",
-              message:
-                "One of your photos could not be prepared for upload. Please retake it and try again.",
-            });
-            return;
+        if (!img?.uri) continue;
+        try {
+          const prepared = await prepareImageForMultipart(img);
+          if (__DEV__) {
+            console.log(`${formKey} URI scheme:`, prepared.uri.split("://")[0]);
           }
-          const ext = uri.split(".").pop()?.split("?")[0] || "jpg";
           data.append(formKey, {
-            uri,
-            type: img.type || mimeFromUri(uri),
-            name: img.name || `${formKey}.${ext}`,
+            uri: prepared.uri,
+            type: prepared.type || mimeFromUri(prepared.uri),
+            name: prepared.name || `${formKey}.jpg`,
           } as unknown as Blob);
+        } catch (prepErr) {
+          console.warn(`Failed to prepare ${formKey}:`, prepErr);
+          showMessage({
+            type: "warning",
+            message:
+              "One of your photos could not be prepared for upload. Please retake it and try again.",
+          });
+          return;
         }
-      }
-
-      // TEMPORARY diagnostic: log the URI scheme of each image part
-      // right before we POST. We expect `file://` for compressed assets
-      // out of expo-image-manipulator; `ph://` (Photos library) or
-      // `assets-library://` indicates the compression fallback returned
-      // the original gallery URI, which the native multipart layer
-      // cannot read and surfaces as `ERR_NETWORK` with no response.
-      // Remove once the registration upload is verified working.
-      if (__DEV__) {
-        const imageFieldMap2 = [
-          "licence_image_name",
-          "id_card_image_name",
-          "image_name",
-          "vehicle_image_name",
-        ];
-        imageFieldMap2.forEach((key) => {
-          const img = state[key as keyof typeof state] as {
-            uri?: string;
-          } | null;
-          console.log(`${key} URI scheme:`, img?.uri?.split("://")[0]);
-        });
       }
 
       // Relative path so apiClient baseURL + FormData Content-Type strip apply
@@ -1184,6 +1166,9 @@ const DriverInfo = () => {
             })}
           >
             <ScrollView
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
               contentContainerStyle={tw`flex-col pr-2.5 pb-3`}
               showsVerticalScrollIndicator
               persistentScrollbar
