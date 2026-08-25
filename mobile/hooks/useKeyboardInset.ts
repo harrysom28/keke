@@ -1,5 +1,26 @@
 import { useEffect, useState } from "react";
-import { Keyboard, KeyboardEvent, Platform } from "react-native";
+import { Dimensions, Keyboard, KeyboardEvent, Platform } from "react-native";
+
+/**
+ * Visible window height sitting above the keyboard.
+ * Android `adjustResize` already shrinks `windowHeight`; do not subtract again.
+ */
+export function heightAboveKeyboard(
+  windowHeight: number,
+  keyboardHeight: number
+): number {
+  if (keyboardHeight <= 0) {
+    return windowHeight;
+  }
+  const screenHeight = Dimensions.get("screen").height;
+  const windowAlreadyResized =
+    Platform.OS === "android" &&
+    windowHeight < screenHeight - keyboardHeight * 0.35;
+  if (windowAlreadyResized) {
+    return windowHeight;
+  }
+  return Math.max(240, windowHeight - keyboardHeight);
+}
 
 /**
  * Keyboard height while visible. Use with bottom-anchored sheets (e.g. transparent

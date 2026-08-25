@@ -2,10 +2,7 @@ import {
   ActivityIndicator,
   Image,
   ImageBackground,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StatusBar,
   Text,
   TouchableOpacity,
@@ -28,6 +25,7 @@ import { requestUserNotificationPermission } from "@/utils/notifications";
 import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
+import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
 import { formatPhoneForDisplay } from "@/utils/phoneFormat";
 import { useDispatch, useSelector } from "react-redux";
 import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
@@ -269,29 +267,22 @@ const OtpCode = () => {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+    <ImageBackground
+      source={require("@/assets/images/register-bg.png")}
+      style={tw.style(`flex-1 flex-col text-white`, {
+        width: WINDOW_WIDTH,
+      })}
     >
-      <ImageBackground
-        source={require("@/assets/images/register-bg.png")}
-        style={tw.style(`flex-1 flex-col text-white`, {
-          width: WINDOW_WIDTH,
-        })}
-      >
-        <ScrollView
-          style={tw`flex-1`}
-          contentContainerStyle={{
-            flexGrow: 1,
-            justifyContent: "space-between",
-            paddingTop: 54,
-            paddingBottom: 32,
-            paddingHorizontal: 24,
-          }}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+    <KeyboardFormScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={{
+        flexGrow: 1,
+        justifyContent: "space-between",
+        paddingTop: 54,
+        paddingBottom: 32,
+        paddingHorizontal: 24,
+      }}
+    >
           <View>
             <StatusBar barStyle="dark-content" />
 
@@ -392,9 +383,8 @@ const OtpCode = () => {
               </Text>
             )}
           </TouchableOpacity>
-        </ScrollView>
+        </KeyboardFormScrollView>
       </ImageBackground>
-    </KeyboardAvoidingView>
   );
 };
 

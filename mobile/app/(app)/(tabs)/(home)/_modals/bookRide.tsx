@@ -2,6 +2,7 @@ import {
   ActivityIndicator,
   BackHandler,
   Dimensions,
+  Keyboard,
   Modal,
   Platform,
   ScrollView,
@@ -16,7 +17,7 @@ import { Path, Svg } from "react-native-svg";
 import RNDateTimePicker, {
   DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
-import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { AntDesign, MaterialCommunityIcons } from "@expo/vector-icons";
 import { AppContext } from "@/app/context";
@@ -34,6 +35,7 @@ import tw from "@/lib/tailwind";
 import { useDispatch, useSelector } from "react-redux";
 import { useFocusEffect } from "expo-router";
 import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
+import { heightAboveKeyboard, useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
 import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
@@ -173,6 +175,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
     setSelectedDate(nextSelection.dayOffset);
     setSelectedTime(nextSelection.time);
     setShowTimePicker(false);
+    setLocationSearchField(null);
     setState((prev) => ({
       ...prev,
       payment_type: defaultUiPaymentKey(publicConfig.paymentMethods),
@@ -191,6 +194,31 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   // Keep this sheet tall, but avoid forcing a near-fullscreen height on smaller content.
   const screenHeight = Dimensions.get('window').height;
   const validHeight = Math.min(Math.max(screenHeight * 0.85, 550), screenHeight * 0.95);
+  const keyboardInset = useKeyboardInset(true);
+  const [locationSearchField, setLocationSearchField] = useState<"pickup" | "dropoff" | null>(null);
+  const searchBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchPinned = locationSearchField != null;
+  const sheetHeight = searchPinned
+    ? Math.max(280, heightAboveKeyboard(screenHeight, keyboardInset) - 8)
+    : validHeight;
+  const resultsMaxHeight = searchPinned
+    ? Math.max(160, sheetHeight - 160)
+    : 280;
+
+  const handleLocationSearchFocus = (field: "pickup" | "dropoff") => {
+    if (searchBlurTimer.current) {
+      clearTimeout(searchBlurTimer.current);
+      searchBlurTimer.current = null;
+    }
+    setLocationSearchField(field);
+  };
+
+  const handleLocationSearchBlur = () => {
+    if (searchBlurTimer.current) clearTimeout(searchBlurTimer.current);
+    searchBlurTimer.current = setTimeout(() => {
+      setLocationSearchField(null);
+    }, Platform.OS === "android" ? 220 : 120);
+  };
 
   /** Percent widths collapse inside nested ScrollView + bottom sheet on iOS — use px widths. */
   const vehicleGridLayout = useMemo(() => {
@@ -844,13 +872,13 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
         </Pressable>
       </Modal>
       <BottomSheet
-        height={validHeight}
+        height={sheetHeight}
         ref={bottomSheetRef}
         animationType="spring"
         backdropMaskColor="#19191900"
         openDuration={1000}
         closeDuration={1000}
-        disableKeyboardHandling={false}
+        disableKeyboardHandling={true}
         disableBodyPanning={true}
         style={tw.style(`px-5 py-4 rounded-t-[32px] bg-white`)}
         closeOnDragDown={false}
@@ -858,7 +886,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
         <View
           style={{
             flex: 1,
-            minHeight: Math.min(validHeight - 48, screenHeight * 0.9),
+            minHeight: Math.min(sheetHeight - 48, screenHeight * 0.9),
           }}
         >
           {/* Header */}
@@ -886,13 +914,19 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
           <ScrollView
             style={{ flex: 1 }}
             contentContainerStyle={{
-              paddingBottom: sheetFooterBottomPadding(insets.bottom),
+              paddingBottom: searchPinned
+                ? 12
+                : sheetFooterBottomPadding(insets.bottom),
             }}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            automaticallyAdjustKeyboardInsets={!searchPinned}
             showsVerticalScrollIndicator={false}
             nestedScrollEnabled
           >
             {/* Date + time */}
+            {!searchPinned ? (
+            <>
             <ScrollView
                   horizontal
                   nestedScrollEnabled
@@ -1054,7 +1088,11 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                   })}
                 </ScrollView>
 
+            </>
+            ) : null}
+
             {/* Pickup Location Card - Same as Find a Ride */}
+            {!(searchPinned && locationSearchField === "dropoff") ? (
             <View style={tw`bg-[#F5F5F5] rounded-[10px] p-2.5 mb-2`}>
               <View style={tw`flex-row justify-between items-center mb-1.5`}>
                 <Text style={tw.style(`text-[11px] text-[#C8C7CC] uppercase`, { fontFamily: "RobotoRegular" })}>
@@ -1086,7 +1124,12 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                   userLat={location?.latitude != null && location?.longitude != null ? location.latitude : 6.3249}
                   userLng={location?.latitude != null && location?.longitude != null ? location.longitude : 8.1137}
                   showClearButton={false}
+                  resultsMaxHeight={resultsMaxHeight}
+                  onFocus={() => handleLocationSearchFocus("pickup")}
+                  onBlur={handleLocationSearchBlur}
                   onPlaceSelected={(place) => {
+                    Keyboard.dismiss();
+                    setLocationSearchField(null);
                     const locationData = {
                       place_id: place.place_id || null,
                       name: place.name || "",
@@ -1127,8 +1170,10 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                 />
               </View>
             </View>
+            ) : null}
 
             {/* Destination Location Card - Same as Find a Ride */}
+            {!(searchPinned && locationSearchField === "pickup") ? (
             <View style={tw`bg-[#F5F5F5] rounded-[10px] p-2.5 mb-2`}>
               <Text style={tw.style(`text-[11px] text-[#C8C7CC] uppercase mb-1.5`, { fontFamily: "RobotoRegular" })}>
                 Drop-off
@@ -1140,7 +1185,12 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                   userLat={location?.latitude != null && location?.longitude != null ? location.latitude : 6.3249}
                   userLng={location?.latitude != null && location?.longitude != null ? location.longitude : 8.1137}
                   showClearButton={false}
+                  resultsMaxHeight={resultsMaxHeight}
+                  onFocus={() => handleLocationSearchFocus("dropoff")}
+                  onBlur={handleLocationSearchBlur}
                   onPlaceSelected={(place) => {
+                    Keyboard.dismiss();
+                    setLocationSearchField(null);
                     const locationData = {
                       place_id: place.place_id || null,
                       name: place.name || "",
@@ -1168,7 +1218,10 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
                 />
               </View>
             </View>
+            ) : null}
 
+            {!searchPinned ? (
+            <>
             {/* Select Vehicle Type Section */}
             <Text style={tw.style(`text-[15px] text-[#242E42] mb-2`, { fontFamily: "RobotoBold" })}>
               Select Vehicle Type
@@ -1312,10 +1365,13 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
               fareTotal={fareSummary?.totalFare}
               variant="cards"
             />
+            </>
+            ) : null}
 
           </ScrollView>
 
           {/* Schedule Ride button - fixed footer so always visible (not pushed below fare breakdown) */}
+          {!searchPinned ? (
           <View
             style={[
               tw`px-0 bg-white`,
@@ -1348,6 +1404,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
               )}
             </Pressable>
           </View>
+          ) : null}
         </View>
       </BottomSheet>
     </>

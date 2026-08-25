@@ -1,11 +1,6 @@
 import {
   ActivityIndicator,
-  Image,
   ImageBackground,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
   StatusBar,
   Text,
   TouchableOpacity,
@@ -27,6 +22,7 @@ import { RESET_PASSWORD } from "@/constants";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
+import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
 
 const SetPassword = () => {
   const router = useRouter();
@@ -72,29 +68,22 @@ const SetPassword = () => {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+    <ImageBackground
+      source={require("@/assets/images/register-bg.png")}
+      style={tw.style(`flex-1 flex-col text-white`, {
+        width: WINDOW_WIDTH,
+      })}
     >
-      <ImageBackground
-        source={require("@/assets/images/register-bg.png")}
-        style={tw.style(`flex-1 flex-col text-white`, {
-          width: WINDOW_WIDTH,
-        })}
+      <KeyboardFormScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          flexGrow: 1,
+          justifyContent: "space-between",
+          paddingTop: 54,
+          paddingBottom: 32,
+          paddingHorizontal: 24,
+        }}
       >
-        <ScrollView
-          style={tw`flex-1`}
-          contentContainerStyle={{
-            flexGrow: 1,
-            justifyContent: "space-between",
-            paddingTop: 54,
-            paddingBottom: 32,
-            paddingHorizontal: 24,
-          }}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
           <View>
             <StatusBar barStyle="dark-content" />
 
@@ -188,9 +177,8 @@ const SetPassword = () => {
               </Text>
             )}
           </TouchableOpacity>
-        </ScrollView>
+        </KeyboardFormScrollView>
       </ImageBackground>
-    </KeyboardAvoidingView>
   );
 };
 

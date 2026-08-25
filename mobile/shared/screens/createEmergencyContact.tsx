@@ -1,11 +1,8 @@
 import {
   ActivityIndicator,
   ImageBackground,
-  KeyboardAvoidingView,
   KeyboardTypeOptions,
-  Platform,
   Pressable,
-  ScrollView,
   StatusBar,
   Text,
   TextInput,
@@ -25,6 +22,7 @@ import apiClient from "@/utils/apiClient";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
+import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
 import { useIsFocused } from "@react-navigation/native";
 
 interface IProps {
@@ -223,16 +221,10 @@ const SharedCreateEmergencyContact = ({ params }) => {
           </Text>
         </View>
       </View>
-      <KeyboardAvoidingView
+      <KeyboardFormScrollView
         style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
       >
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
-          showsVerticalScrollIndicator={false}
-        >
           <View style={tw`flex-col mt-14 gap-y-2 pt-4 pb-5 px-6`}>
             <InputItem
               value={state.name}
@@ -289,8 +281,7 @@ const SharedCreateEmergencyContact = ({ params }) => {
               </Text>
             )}
           </Pressable>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardFormScrollView>
     </ImageBackground>
   );
 };

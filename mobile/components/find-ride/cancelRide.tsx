@@ -5,7 +5,6 @@ import {
   ImageBackground,
   Modal,
   Platform,
-  KeyboardAvoidingView,
   Pressable,
   StatusBar,
   Text,
@@ -24,6 +23,7 @@ import {
   SafeAreaProvider,
 } from "react-native-safe-area-context";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
 import tw from "@/lib/tailwind";
 import apiClient from "@/utils/apiClient";
 
@@ -239,18 +239,13 @@ function CancelRideModalInner({
             Cancel Ride
           </Text>
         </View>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+        <KeyboardFormScrollView
           style={{ flex: 1 }}
+          bounces={false}
+          contentContainerStyle={{
+            paddingBottom: Math.max(insets.bottom + 24, 40),
+          }}
         >
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            bounces={false}
-            contentContainerStyle={{
-              paddingBottom: Math.max(insets.bottom + 24, 40),
-            }}
-          >
           <Text
             style={tw.style("text-base text-[#000000A1] my-5", {
               fontFamily: "RobotoMedium",
@@ -345,8 +340,7 @@ function CancelRideModalInner({
               </Text>
             )}
           </Pressable>
-          </ScrollView>
-        </KeyboardAvoidingView>
+          </KeyboardFormScrollView>
       </ImageBackground>
     </>
   );

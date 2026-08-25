@@ -9,8 +9,6 @@ import {
   BackHandler,
   Dimensions,
   Keyboard,
-  KeyboardEvent,
-  Platform,
   StatusBar,
   View,
 } from "react-native";
@@ -43,6 +41,7 @@ import {
   cancelUnpaidCardRide,
   collectRideCardPayment,
 } from "@/utils/openRideCardPayment";
+import { heightAboveKeyboard, useKeyboardInset } from "@/hooks/useKeyboardInset";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -66,7 +65,10 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   const dispatch = useDispatch();
   const screenHeight = Dimensions.get('window').height;
   const [height, setHeight] = useState<number>(Math.round(screenHeight * 0.6));
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const keyboardHeight = useKeyboardInset(sheetOpen);
+  const [locationSearchActive, setLocationSearchActive] = useState(false);
+  const locationSearchActiveRef = useRef(false);
+  locationSearchActiveRef.current = locationSearchActive;
   const [step, setStep] = useState<number>(1);
   const contentHeightRef = useRef(0);
   const criteriaSignatureRef = useRef("");
@@ -78,6 +80,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   const vehicleTypeId = rideData?.vehicle_type_id ?? null;
 
   const handleContentLayout = useCallback((event: any) => {
+    if (locationSearchActiveRef.current) return;
     const measured = event?.nativeEvent?.layout?.height;
     if (!measured || measured <= 50) return;
 
@@ -103,6 +106,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     contentHeightRef.current = 0;
     setHeight(Math.round(screenHeight * 0.6));
     setStep(1);
+    setLocationSearchActive(false);
     dispatch(setAppData({ isBooking: false }));
     clearDropoffDraft();
     onSheetClose?.();
@@ -135,24 +139,8 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   useEffect(() => {
     contentHeightRef.current = 0;
     setHeight(Math.round(screenHeight * 0.6));
+    setLocationSearchActive(false);
   }, [step, ride.status, screenHeight]);
-
-  useEffect(() => {
-    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
-    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
-
-    const showSub = Keyboard.addListener(showEvent, (e: KeyboardEvent) => {
-      setKeyboardHeight(e.endCoordinates.height);
-    });
-    const hideSub = Keyboard.addListener(hideEvent, () => {
-      setKeyboardHeight(0);
-    });
-
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
 
   useEffect(() => {
     const signature = [
@@ -460,6 +448,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
             back={() => handleBack()}
             initialDropoff={initialDropoff}
             locationSheetActive={sheetOpen}
+            onSearchFocusChange={setLocationSearchActive}
           />
         );
         
@@ -585,11 +574,12 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     
     // Ensure it's a reasonable value (between 200px and screen height)
     heightValue = Math.max(200, Math.min(heightValue, screenHeight));
-    if (keyboardHeight > 0) {
+    if (locationSearchActive || keyboardHeight > 0) {
       heightValue = Math.min(
-        heightValue + keyboardHeight,
+        heightAboveKeyboard(screenHeight, keyboardHeight) - 8,
         Math.round(screenHeight * 0.98)
       );
+      heightValue = Math.max(280, heightValue);
     }
     return Math.round(heightValue);
   };
@@ -625,7 +615,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         backdropMaskColor="#19191900"
         openDuration={1000}
         closeDuration={1000}
-        disableKeyboardHandling={false}
+        disableKeyboardHandling={true}
         // Android: PanResponder on the sheet body steals/conflicts with TextInput & ScrollView touches
         // on some devices (e.g. Samsung). Drag-to-close still works via the handle bar.
         disableBodyPanning={true}
@@ -649,7 +639,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       backdropMaskColor="#19191900"
       openDuration={1000}
       closeDuration={1000}
-      disableKeyboardHandling={false}
+      disableKeyboardHandling={true}
       disableBodyPanning={true}
       style={tw`gap-y-2 px-6 pt-1 pb-2 rounded-t-[40px] bg-white`}
       closeOnDragDown={true}

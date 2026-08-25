@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { TextInput, View, Text, ActivityIndicator, Keyboard, Platform } from 'react-native';
+import { TextInput, View, Text, ActivityIndicator, Keyboard, Platform, ScrollView } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
 import { searchPlaces, searchPlacesWithLocation, getPlaceDetails, PlacePrediction } from '@/utils/placesApi';
 import apiClient from '@/utils/apiClient';
@@ -29,6 +29,9 @@ interface CustomPlacesAutocompleteProps {
   }) => void;
   onClear?: () => void;
   onFocus?: () => void;
+  onBlur?: () => void;
+  /** Cap the suggestion list so it stays above the keyboard when the field is pinned. */
+  resultsMaxHeight?: number;
   /** When true, generates a session token on focus and passes it to search/details for cost-efficient billing */
   useSessionToken?: boolean;
   autoFocus?: boolean;
@@ -55,6 +58,8 @@ export default function CustomPlacesAutocomplete({
   onPlaceSelected,
   onClear,
   onFocus,
+  onBlur,
+  resultsMaxHeight = 280,
   useSessionToken = true,
   autoFocus = false,
   initialValue = '',
@@ -403,6 +408,7 @@ export default function CustomPlacesAutocomplete({
                 setShowResults(false);
               }
             }, Platform.OS === 'android' ? 200 : 100);
+            onBlur?.();
           }}
         />
         
@@ -423,9 +429,11 @@ export default function CustomPlacesAutocomplete({
       </View>
 
       {showResults && !listClosedBySelection && (predictions.length > 0 || (query.length === 0 && quickPicks.length > 0)) && (
-        <View
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
           style={{
-            maxHeight: 280,
+            maxHeight: resultsMaxHeight,
             backgroundColor: 'white',
             borderRadius: 8,
             marginTop: 4,
@@ -434,7 +442,6 @@ export default function CustomPlacesAutocomplete({
             shadowOffset: { width: 0, height: 2 },
             shadowOpacity: 0.1,
             shadowRadius: 4,
-            overflow: 'hidden',
           }}
         >
           {query.length === 0 && quickPicks.length > 0 && (
@@ -507,7 +514,7 @@ export default function CustomPlacesAutocomplete({
               </View>
             </TouchableOpacity>
           ))}
-        </View>
+        </ScrollView>
       )}
     </View>
   );

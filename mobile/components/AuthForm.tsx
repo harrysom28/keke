@@ -1,19 +1,16 @@
 import {
   Image,
   ImageBackground,
-  Keyboard,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   StatusBar,
   Text,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { WINDOW_WIDTH, verticalScale } from "@/constants/Metrics";
 
 import React from "react";
 import tw from "@/lib/tailwind";
+import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
 
 interface Props {
   Tab?: string[];
@@ -88,70 +85,70 @@ const AuthForm = ({
   );
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss} style={{ flex: 1 }}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+    <ImageBackground
+      source={require("@/assets/images/register-bg.png")}
+      style={tw.style(`flex-1 flex-col text-white bg-white`, {
+        width: WINDOW_WIDTH,
+      })}
+    >
+      <StatusBar barStyle="light-content" />
+      <KeyboardFormScrollView
         style={{ flex: 1 }}
+        contentContainerStyle={{
+          flexGrow: 1,
+          justifyContent: centerCard ? "center" : "flex-start",
+          paddingBottom: centerCard ? verticalScale(24) : verticalScale(90),
+        }}
       >
-        <ImageBackground
-          source={require("@/assets/images/register-bg.png")}
-          style={tw.style(`flex-1 flex-col text-white bg-white`, {
-            width: WINDOW_WIDTH,
-            paddingBottom: centerCard ? verticalScale(24) : verticalScale(90),
-          })}
-        >
-          <StatusBar barStyle="light-content" />
-
-          {centerCard ? (
-            <>
-              <View
-                style={tw.style(`absolute top-0 left-0 right-0`, {
+        {centerCard ? (
+          <>
+            <View
+              style={tw.style(`absolute top-0 left-0 right-0`, {
+                width: WINDOW_WIDTH,
+              })}
+            >
+              <Image
+                source={require("@/assets/images/auth.png")}
+                resizeMode="cover"
+                style={tw.style({
                   width: WINDOW_WIDTH,
+                  height: verticalScale(height),
                 })}
-              >
-                <Image
-                  source={require("@/assets/images/auth.png")}
-                  resizeMode="cover"
-                  style={tw.style({
-                    width: WINDOW_WIDTH,
-                    height: verticalScale(height),
-                  })}
-                />
-              </View>
+              />
+            </View>
 
-              <View style={tw`flex-1 justify-center px-0`}>
-                <View style={cardStyle}>{cardContent}</View>
-                {footer}
-              </View>
-            </>
-          ) : (
-            <>
-              <View>
-                <Image
-                  source={require("@/assets/images/auth.png")}
-                  resizeMode="cover"
-                  style={tw.style({
-                    width: WINDOW_WIDTH,
-                    height: verticalScale(height),
-                  })}
-                />
-              </View>
-
-              <View
-                style={[
-                  cardStyle,
-                  { marginTop: -verticalScale(cardOverlap) },
-                ]}
-              >
-                {cardContent}
-              </View>
-
+            <View style={tw`flex-1 justify-center px-0`}>
+              <View style={cardStyle}>{cardContent}</View>
               {footer}
-            </>
-          )}
-        </ImageBackground>
-      </KeyboardAvoidingView>
-    </TouchableWithoutFeedback>
+            </View>
+          </>
+        ) : (
+          <>
+            <View>
+              <Image
+                source={require("@/assets/images/auth.png")}
+                resizeMode="cover"
+                style={tw.style({
+                  width: WINDOW_WIDTH,
+                  height: verticalScale(height),
+                })}
+              />
+            </View>
+
+            <View
+              style={[
+                cardStyle,
+                { marginTop: -verticalScale(cardOverlap) },
+              ]}
+            >
+              {cardContent}
+            </View>
+
+            {footer}
+          </>
+        )}
+      </KeyboardFormScrollView>
+    </ImageBackground>
   );
 };
 

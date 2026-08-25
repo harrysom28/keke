@@ -4,12 +4,9 @@ import {
   Image,
   ImageBackground,
   Keyboard,
-  KeyboardAvoidingView,
   KeyboardTypeOptions,
   Modal,
-  Platform,
   Pressable,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -40,6 +37,7 @@ import { router } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import { getErrorMessage } from "@/utils/errorHandler";
 import tw from "@/lib/tailwind";
+import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
 import { useIsFocused } from "@react-navigation/native";
 import { useSelector } from "react-redux";
 import { AuthState } from "@/store/AuthSlice";
@@ -533,12 +531,7 @@ const DailyActivities = () => {
           </View>
         </View>
       </Modal>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
-      >
-        <ImageBackground
+      <ImageBackground
           style={tw.style(`bg-white`, {
             flex: 1,
           })}
@@ -563,11 +556,9 @@ const DailyActivities = () => {
               <View style={tw`w-10`} />
             </View>
           </View>
-          <ScrollView
+          <KeyboardFormScrollView
             style={tw`flex-1`}
             contentContainerStyle={{ flexGrow: 1, paddingBottom: 32 }}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
           >
             {loading ? (
               <View>
@@ -744,9 +735,8 @@ const DailyActivities = () => {
             </Pressable>
           </View>
             )}
-          </ScrollView>
+          </KeyboardFormScrollView>
         </ImageBackground>
-      </KeyboardAvoidingView>
       <Portal>
         <BottomSheet
           index={-1}

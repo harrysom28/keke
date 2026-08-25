@@ -6,10 +6,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  ScrollView,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
 } from "react-native";
 import { AntDesign } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
@@ -19,6 +16,7 @@ import { Linking } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import apiClient from "@/utils/apiClient";
 import { SUPPORT_EMAIL } from "@/constants";
+import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
 
 const ContactScreen = () => {
   const { rideId, subject } = useLocalSearchParams<{ rideId?: string; subject?: string }>();
@@ -129,11 +127,7 @@ const ContactScreen = () => {
         </View>
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={tw`flex-1`}
-      >
-        <ScrollView contentContainerStyle={tw`px-6 py-4 pb-8`}>
+      <KeyboardFormScrollView style={tw`flex-1`} contentContainerStyle={tw`px-6 py-4 pb-8`}>
           <Text
             style={tw.style(`text-base text-[#8F92A1] mb-6`, {
               fontFamily: "RobotoRegular",
@@ -364,8 +358,7 @@ const ContactScreen = () => {
               Sunday: Closed
             </Text>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardFormScrollView>
     </ImageBackground>
   );
 };

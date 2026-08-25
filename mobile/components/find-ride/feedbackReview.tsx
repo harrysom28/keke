@@ -2,7 +2,6 @@ import {
   ActivityIndicator,
   Dimensions,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Pressable,
   ScrollView,
@@ -192,6 +191,8 @@ const ReviewSheet = ({ temp, action }: Props) => {
           <ScrollView
             style={tw`flex-1`}
             keyboardShouldPersistTaps="always"
+            keyboardDismissMode="on-drag"
+            automaticallyAdjustKeyboardInsets
             showsVerticalScrollIndicator={false}
             contentContainerStyle={tw`pb-4`}
           >
@@ -219,8 +220,7 @@ const ReviewSheet = ({ temp, action }: Props) => {
               You rated {temp?.driver?.driver_name} {rating} star(s)
             </Text>
 
-            <KeyboardAvoidingView behavior="height">
-              <TextInput
+            <TextInput
                 value={review}
                 onChangeText={(text) => setReview(text)}
                 style={tw.style(
@@ -234,7 +234,6 @@ const ReviewSheet = ({ temp, action }: Props) => {
                 placeholderTextColor="#D0D0D0"
                 multiline
               />
-            </KeyboardAvoidingView>
 
             <Text
               style={tw.style(`text-center text-xl text-[#5A5A5A]`, {

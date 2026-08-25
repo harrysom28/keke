@@ -7,7 +7,6 @@ import {
   Image,
   ImageBackground,
   Keyboard,
-  KeyboardAvoidingView,
   KeyboardTypeOptions,
   Modal,
   Platform,
@@ -31,6 +30,7 @@ import { getApiUrlWithOverride } from "@/utils/apiUrlOverride";
 import { router, useNavigation } from "expo-router";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
+import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
 import useImagePicker from "@/hooks/useImagePicker";
 import { formatPhoneForDisplay, normalisePhoneForStorage } from "@/utils/phoneFormat";
 import { useIsFocused } from "@react-navigation/native";
@@ -331,16 +331,10 @@ function UpdateProfileModal({
             <AntDesign name="close" size={20} color="white" />
           </TouchableOpacity>
         </View>
-        <KeyboardAvoidingView
+        <KeyboardFormScrollView
           style={tw`flex-1`}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+          contentContainerStyle={tw`flex-col gap-y-5 px-4 pt-6`}
         >
-          <ScrollView
-            contentContainerStyle={tw`flex-col gap-y-5 px-4 pt-6 pb-8`}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
             <View style={tw`w-full items-center mt-4 mb-1`}>
               <TouchableOpacity
                 onPress={showImagePicker}
@@ -468,8 +462,7 @@ function UpdateProfileModal({
                 </Text>
               )}
             </TouchableOpacity>
-          </ScrollView>
-        </KeyboardAvoidingView>
+          </KeyboardFormScrollView>
       </View>
     </Modal>
   );

@@ -1,7 +1,7 @@
 import { AntDesign, Entypo, FontAwesome, Fontisto } from "@expo/vector-icons";
 import { AppDetailsState, setRideData, type IUtils, type IRide } from "@/store/AppSlice";
-import React, { useContext, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Keyboard, Text, TextInput, View } from "react-native";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Keyboard, Platform, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 
 import { ScrollView, TouchableOpacity } from "react-native-gesture-handler";
@@ -23,6 +23,7 @@ import apiClient from "@/utils/apiClient";
 import { getCachedWallet, setCachedWallet } from "@/utils/walletCache";
 import { router } from "expo-router";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { heightAboveKeyboard, useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { AuthState } from "@/store/AuthSlice";
 import PaymentMethodSelector from "@/components/PaymentMethodSelector";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
@@ -45,10 +46,13 @@ interface Props {
   } | null;
   /** Find Ride renders inside a Portal; `useIsFocused()` can stay false while the sheet is open. */
   locationSheetActive?: boolean;
+  onSearchFocusChange?: (active: boolean) => void;
 }
 
-export const LocationView = ({ action, back, initialDropoff, locationSheetActive = false }: Props) => {
+export const LocationView = ({ action, back, initialDropoff, locationSheetActive = false, onSearchFocusChange }: Props) => {
   const insets = useCombinedSafeInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const keyboardInset = useKeyboardInset(locationSheetActive);
   const isFocused = useIsFocused();
   const screenLive = isFocused || locationSheetActive;
   const dispatch = useDispatch();
@@ -82,6 +86,39 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
   const [selectedPayment, setSelectedPayment] = useState(() =>
     defaultUiPaymentKey(publicConfig.paymentMethods)
   );
+  const [focusedField, setFocusedField] = useState<"pickup" | "dropoff" | null>(
+    null
+  );
+  const searchBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchPinned = focusedField != null;
+  const resultsMaxHeight = searchPinned
+    ? Math.max(160, heightAboveKeyboard(windowHeight, keyboardInset) - 200)
+    : 280;
+
+  const handleSearchFocus = (field: "pickup" | "dropoff") => {
+    if (searchBlurTimer.current) {
+      clearTimeout(searchBlurTimer.current);
+      searchBlurTimer.current = null;
+    }
+    setFocusedField(field);
+  };
+
+  const handleSearchBlur = () => {
+    if (searchBlurTimer.current) clearTimeout(searchBlurTimer.current);
+    searchBlurTimer.current = setTimeout(() => {
+      setFocusedField(null);
+    }, Platform.OS === "android" ? 220 : 120);
+  };
+
+  useEffect(() => {
+    onSearchFocusChange?.(searchPinned);
+  }, [onSearchFocusChange, searchPinned]);
+
+  useEffect(() => {
+    return () => {
+      if (searchBlurTimer.current) clearTimeout(searchBlurTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     const initialDropoffName = initialDropoff?.name?.trim();
@@ -414,6 +451,8 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
   };
 
   const handleQuickSelect = async (locationData: any, label: string) => {
+    Keyboard.dismiss();
+    setFocusedField(null);
     // Recent places are destinations. Picking pickup when GPS hasn't labeled yet caused
     // intermittent "select location" errors (dropoff stayed empty).
     ensurePickupDraft();
@@ -640,6 +679,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
   return (
     <>
       <View style={tw`flex-row gap-x-3`}>
+        {!searchPinned ? (
         <View style={tw`flex-col items-center pt-1`}>
           <Fontisto
             name="radio-btn-active"
@@ -653,8 +693,10 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
           />
           <Entypo name="location-pin" size={24} color="black" />
         </View>
+        ) : null}
 
         <View style={tw`flex-col gap-y-3 flex-1 pr-2`}>
+          {!(searchPinned && focusedField === "dropoff") ? (
           <View style={tw`pb-3 border-b border-[#EFEFEF]`}>
             <View style={tw`flex-row justify-between items-center mb-2`}>
               <Text
@@ -728,8 +770,12 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
                   userLat={currentLocation.latitude}
                   userLng={currentLocation.longitude}
                   showClearButton={false}
+                  resultsMaxHeight={resultsMaxHeight}
+                  onFocus={() => handleSearchFocus("pickup")}
+                  onBlur={handleSearchBlur}
                   onPlaceSelected={(place) => {
                     Keyboard.dismiss();
+                    setFocusedField(null);
                     const displayValue = place.name || place.formatted_address || "Selected location";
                     console.log('📝 Setting pickup display value:', displayValue);
                     setEditingPickup(false);
@@ -759,6 +805,8 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
               )}
             </View>
           </View>
+          ) : null}
+          {!(searchPinned && focusedField === "pickup") ? (
           <View style={tw`relative`}>
             <Text
               style={tw.style(`text-[13px] text-[#C8C7CC] uppercase mb-2`, {
@@ -816,8 +864,12 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
                   userLng={currentLocation.longitude}
                   autoFocus={locationSheetActive && (editingDropoff || !selected.dropoff)}
                   showClearButton={false}
+                  resultsMaxHeight={resultsMaxHeight}
+                  onFocus={() => handleSearchFocus("dropoff")}
+                  onBlur={handleSearchBlur}
                   onPlaceSelected={async (place) => {
                     Keyboard.dismiss();
+                    setFocusedField(null);
                     const displayValue = place.name || place.formatted_address || "Selected location";
                     const destCoords = { name: place.name || displayValue, long: String(place.long), lat: String(place.lat) };
                     setEditingDropoff(false);
@@ -860,9 +912,10 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
               )}
             </View>
           </View>
+          ) : null}
 
           {/* Live fare preview (non-blocking) */}
-          {fareLoading ? (
+          {!searchPinned && (fareLoading ? (
             <View style={tw`mt-3 bg-white rounded-[12px] border border-[#EFEFEF] p-4`}>
               <View style={tw`flex-row items-center justify-between`}>
                 <Text style={tw.style(`text-[13px] text-[#242E42]`, { fontFamily: "RobotoMedium" })}>
@@ -942,7 +995,8 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
                 {fareError}
               </Text>
             </View>
-          ) : null}
+          ) : null
+          )}
         </View>
       </View>
       <ScrollView
@@ -952,7 +1006,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
         keyboardShouldPersistTaps="handled"
         nestedScrollEnabled
       >
-        {recentPlaces.length > 0 && !selected.dropoff && (
+        {recentPlaces.length > 0 && !selected.dropoff && focusedField !== "pickup" && (
           <>
         <Text
           style={tw.style(`text-[13px] text-[#C8C7CC] uppercase mb-2 mt-1`, {
@@ -1023,6 +1077,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
       </ScrollView>
       
       {/* Fixed Navigation Button */}
+      {!searchPinned ? (
       <View
         style={[
           tw`px-5 pt-3 bg-white border-t border-[#F0F0F0]`,
@@ -1111,6 +1166,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
           <AntDesign name="right" size={20} color="white" />
       </TouchableOpacity>
       </View>
+      ) : null}
     </>
   );
 };
