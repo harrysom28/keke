@@ -1,4 +1,4 @@
-import { Stack } from "expo-router";
+import { router, Stack } from "expo-router";
 import React, { useEffect, useMemo } from "react";
 import { Vibration } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
@@ -102,6 +102,19 @@ function DriverSessionHost() {
 }
 
 export default function AppLayout() {
+  const { user } = useSelector(AuthState);
+  const isDriver = user?.profile?.role === "driver";
+
+  useEffect(() => {
+    if (!isDriver) {
+      router.replace("/(app)/(tabs)/(home)/home");
+    }
+  }, [isDriver]);
+
+  if (!isDriver) {
+    return null;
+  }
+
   return (
     <>
       <DriverSessionHost />

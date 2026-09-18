@@ -380,6 +380,13 @@ export const handleNavigation = (payload: NotificationPayload): void => {
     screen === "ride_request";
 
   if (isRideRequest) {
+    const role = AppStore.getState()?.Auth?.user?.profile?.role;
+    if (role !== "driver") {
+      // Not a driver account — a ride-offer-shaped event has no business
+      // navigating this user anywhere. Ignore it instead of silently
+      // routing into the driver dashboard.
+      return;
+    }
     requestDriverOfferRefresh(AppStore.dispatch);
     markInitialDriverRouteHandled();
     navigateToRoute("/(driver)/(tabs)/(dashboard)/home", rideId);

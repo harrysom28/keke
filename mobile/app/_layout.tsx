@@ -27,7 +27,7 @@ LogBox.ignoreLogs([
   "VirtualizedLists should never be nested",
 ]);
 
-import FlashMessage from "react-native-flash-message";
+import FlashMessage, { showMessage } from "react-native-flash-message";
 import apiClient from "@/utils/apiClient";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import GlobalContext from "./context";
@@ -40,11 +40,19 @@ import { PersistGate } from "redux-persist/es/integration/react";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { PortalProvider } from "@gorhom/portal";
 import { Provider } from "react-redux";
-import { Stack, useNavigationContainerRef } from "expo-router";
+import {
+  router,
+  Stack,
+  useNavigationContainerRef,
+  useSegments,
+} from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
+import SplashLoading from "@/components/SplashLoading";
 import { requestManager } from "@/utils/requestManager";
 import { pusherManager } from "@/utils/pusherManager";
+import { stopCurrentLocationWatch } from "@/hooks/useCurrentLocation";
+import { LocationEngine } from "@/src/engines/locationEngine";
 import { useDispatch, useSelector } from "react-redux";
 import { AuthState } from "@/store/AuthSlice";
 import { bootstrapI18n } from "@/lib/i18n";
@@ -105,6 +113,48 @@ const Navigation = () => {
       <Stack.Screen name="+not-found" />
     </Stack>
   );
+};
+
+const GlobalAuthGuard = () => {
+  const { token, refreshToken } = useSelector(AuthState);
+  const segments = useSegments();
+  const isAuthRoute = segments[0] === "(auth)";
+  const previousTokenRef = useRef<string | null>(token);
+
+  useEffect(() => {
+    if (token) {
+      previousTokenRef.current = token;
+      return;
+    }
+
+    if (!previousTokenRef.current) {
+      return;
+    }
+
+    // A failed refresh clears both tokens. Intentional logout currently clears
+    // the access token first, so wait for the complete session-death signal.
+    if (refreshToken) {
+      return;
+    }
+
+    previousTokenRef.current = null;
+
+    if (isAuthRoute) {
+      return;
+    }
+
+    pusherManager.unsubscribeAll();
+    stopCurrentLocationWatch();
+    LocationEngine.stop();
+
+    showMessage({
+      type: "warning",
+      message: "Your session has expired. Please log in again.",
+    });
+    router.replace("/(auth)/login");
+  }, [isAuthRoute, refreshToken, token]);
+
+  return null;
 };
 
 const NotificationBootstrap = () => {
@@ -396,6 +446,7 @@ function RootLayout() {
           <Provider store={AppStore}>
             <PersistGate
               persistor={persistor}
+              loading={<SplashLoading />}
               onBeforeLift={async () => {
                 const stored = await Promise.race([
                   getStoredTokens(),
@@ -433,6 +484,7 @@ function RootLayout() {
                   <PortalProvider>
                     <Navigation />
                     <LocationDisclosureHost />
+                    <GlobalAuthGuard />
                     <NotificationBootstrap />
                   </PortalProvider>
                 </BottomSheetModalProvider>
