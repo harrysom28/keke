@@ -38,6 +38,12 @@ import {
 } from '../services/driverNotificationService.js';
 import RideOffer from '../models/RideOffer.js';
 import mongoose from 'mongoose';
+import { offerUnassignedScheduledRide } from '../services/scheduledRideService.js';
+import {
+  isScheduledRideInDispatchWindow,
+  isScheduledRideOverdue,
+} from '../utils/scheduledRide.js';
+import { DRIVER_LOCATION_MAX_AGE_MS } from '../utils/driverSearchRadius.js';
 
 /**
  * Map multipart field name from mobile / driver create to upload category.
@@ -332,6 +338,8 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
     vehicleDetails,
     bankAccount,
     insurance,
+    city,
+    state,
   } = req.body;
 
   // Uniqueness key is Driver.user (1:1 with User). Phone lives on User, not
@@ -474,6 +482,14 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
   // Flip role before responding so the shipped app can navigate home as a driver
   // even if Cloudinary is slow or the proxy would have cut a long request.
   user.role = 'driver';
+  // Driver signup collects these on its location step. There is no
+  // onboarding/driver/stage1 call in that flow, so this is the only place they
+  // land — without it the driver has no city and city-targeted notifications
+  // (evaluateTargetingRules) skip them. Only overwrite when actually sent.
+  const cityValue = typeof city === 'string' ? city.trim() : '';
+  const stateValue = typeof state === 'string' ? state.trim() : '';
+  if (cityValue) user.city = cityValue;
+  if (stateValue) user.state = stateValue;
   await user.save();
 
   const files = Array.isArray(req.files) ? req.files : [];
@@ -820,11 +836,13 @@ export const getLocations = asyncHandler(async (req, res) => {
 
   if (type === 'drivers' || !type) {
     const MAX_DRIVERS = 500;
+    const locationFreshSince = new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS);
     const drivers = await Driver.find({
       isOnline: true,
       isAvailable: true,
       documentsVerified: true,
       verificationStatus: 'approved',
+      'currentLocation.lastUpdated': { $gte: locationFreshSince },
     })
       .limit(MAX_DRIVERS)
       .populate('user', 'name phone profileImage')
@@ -1676,7 +1694,7 @@ export const acceptRide = asyncHandler(async (req, res) => {
 
     // Lock the ride (only if still in matching and unassigned).
     ride = await Ride.findOneAndUpdate(
-      { _id: offer.ride_id, status: { $in: ['searching', 'requested'] }, driver: null },
+      { _id: offer.ride_id, status: { $in: ['searching', 'requested', 'scheduled'] }, driver: null },
       {
         $set: {
           driver: driver._id,
@@ -1953,11 +1971,8 @@ export const rejectRide = asyncHandler(async (req, res) => {
     throw new ValidationError('Ride cannot be cancelled');
   }
 
-  // Scheduled bookings: cancel the ride — do not return to instant matching pool
-  if (
-    ride.isScheduled &&
-    ['accepted', 'driver_en_route', 'arrived', 'scheduled'].includes(ride.status)
-  ) {
+  // After the driver has arrived, a scheduled bail is a real cancellation.
+  if (ride.isScheduled && ride.status === 'arrived') {
     const riderId = ride.rider?._id ?? ride.rider;
     const fareAmount = ride.fare?.totalFare ?? 0;
     const hasWalletHold = await UserWalletTransaction.findOne({
@@ -2023,11 +2038,128 @@ export const rejectRide = asyncHandler(async (req, res) => {
       logger.error(`Failed to update driver cancellation rate: ${error.message}`);
     }
 
-    logger.info(`Scheduled ride ${rideId} cancelled by driver ${driver._id}`);
+    logger.info(`Scheduled ride ${rideId} cancelled by driver ${driver._id} after arrival`);
 
     return res.json({
       status: 'success',
       message: 'Scheduled booking cancelled successfully',
+      data: {
+        ride: formatRideForDriver(ride),
+      },
+    });
+  }
+
+  // Assigned scheduled booking before arrival: unassign and rematch. Keep any
+  // wallet hold — processCancellation is per-ride and would block later settle.
+  if (
+    ride.isScheduled &&
+    ['accepted', 'driver_en_route', 'scheduled'].includes(ride.status)
+  ) {
+    const inDispatchWindow = isScheduledRideInDispatchWindow(ride.scheduledAt);
+    const overdue = isScheduledRideOverdue(ride.scheduledAt);
+    const resetStatus = inDispatchWindow ? 'searching' : 'scheduled';
+    const preferredIsCancellingDriver =
+      ride.preferredDriver && String(ride.preferredDriver) === String(driver._id);
+
+    await RideOffer.deleteMany({
+      ride_id: ride._id,
+      driver_id: { $ne: driver._id },
+    });
+    await RideOffer.updateMany(
+      { ride_id: ride._id, driver_id: driver._id, status: { $ne: 'rejected' } },
+      { $set: { status: 'rejected', rejected_at: new Date() } }
+    );
+
+    ride.driver = null;
+    ride.status = resetStatus;
+    ride.acceptedByDriver = false;
+    ride.acceptedAt = null;
+    ride.attempts = 0;
+    ride.notifiedDriverIds = [driver._id];
+    if (preferredIsCancellingDriver) {
+      ride.preferredDriver = null;
+    }
+    ride.statusHistory.push({
+      status: resetStatus,
+      timestamp: new Date(),
+      note: `Driver ${driver._id} cancelled scheduled booking: ${reason || 'No reason provided'}`,
+    });
+    await ride.save();
+
+    const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
+    await restoreDriverAvailabilityAfterTrip(driver);
+
+    await ride.populate('rider', 'name phone profileImage rating deviceToken');
+    await ride.populate('vehicleType');
+
+    if (inDispatchWindow) {
+      const excludeIds = [driver._id.toString()];
+      setImmediate(() => {
+        offerUnassignedScheduledRide(ride._id, {
+          excludeDriverIds: excludeIds,
+          overdue,
+        }).catch((err) =>
+          logger.error(
+            `Scheduled rematch after driver cancel failed for ${ride._id}: ${err.message}`
+          )
+        );
+      });
+    }
+
+    try {
+      const { sendToUser } = await import('../services/notificationService.js');
+      await sendToUser(ride.rider, 'rider', {
+        title: 'Finding you another driver',
+        message:
+          'Your driver cancelled — we\'re finding you another driver.',
+        type: 'alert',
+        priority: 'high',
+        screen: 'home',
+        ride_id: ride._id,
+        event_key: 'scheduled_finding_driver',
+        data: { subType: 'finding_new_driver', rideId: ride._id.toString() },
+      });
+    } catch (err) {
+      logger.error(`Scheduled rematch notification failed: ${err.message}`);
+    }
+
+    try {
+      const { getSocketService } = await import('../services/socketService.js');
+      const socketService = getSocketService();
+      if (socketService) {
+        await socketService.emitRideStatusUpdate(ride, resetStatus, null);
+        // In-window rematch uses searching so the rider app's existing
+        // driver-cancel handler keeps the booking and shows "finding another driver".
+        // Far-out stays `scheduled` — do not emit a terminal cancel.
+        if (inDispatchWindow) {
+          await socketService.emitRideCancelled(
+            ride,
+            'driver',
+            reason || 'Driver cancelled'
+          );
+        }
+      }
+    } catch (emitErr) {
+      logger.warn(`Scheduled rematch realtime emit failed: ${emitErr.message}`);
+    }
+
+    try {
+      const { updateDriverCancellationRate } = await import('../services/driverStatisticsService.js');
+      await updateDriverCancellationRate(driver._id);
+    } catch (error) {
+      logger.error(`Failed to update driver cancellation rate: ${error.message}`);
+    }
+
+    logger.info(
+      `Scheduled ride ${rideId} unassigned after driver ${driver._id} cancel ` +
+        `(status=${resetStatus}, inWindow=${inDispatchWindow})`
+    );
+
+    return res.json({
+      status: 'success',
+      message: inDispatchWindow
+        ? 'Booking released. Finding another driver.'
+        : 'Booking released. We will assign another driver before pickup.',
       data: {
         ride: formatRideForDriver(ride),
       },

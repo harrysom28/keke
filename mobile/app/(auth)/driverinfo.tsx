@@ -16,12 +16,13 @@ import {
 } from "@/constants";
 import { isAuthError, isNetworkError } from "@/utils/errorHandler";
 import { UserMessages } from "@/constants/userMessages";
-import { City, Country, State } from "country-state-city";
+import { NIGERIA_STATES, findNigeriaState } from "@/constants/nigeriaLocations";
 import React, {
   Fragment,
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -34,7 +35,7 @@ import AuthForm from "@/components/AuthForm";
 import Checkbox from "expo-checkbox";
 import { Dropdown } from "react-native-element-dropdown";
 import FormInput from "@/components/formInput";
-import apiClient from "@/utils/apiClient";
+import apiClient, { postFormData } from "@/utils/apiClient";
 import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
@@ -133,6 +134,8 @@ interface SProps {
   onChange: (val: string) => void;
   value: string;
   disabled?: boolean;
+  search?: boolean;
+  searchPlaceholder?: string;
 }
 
 const SelectItem = ({
@@ -142,6 +145,8 @@ const SelectItem = ({
   onChange,
   value = "",
   disabled = false,
+  search = false,
+  searchPlaceholder,
 }: SProps) => {
   return (
     <View style={tw`flex-col gap-y-1`}>
@@ -159,7 +164,11 @@ const SelectItem = ({
         )}
         mode="modal"
         data={data}
-        search={false}
+        search={search}
+        searchPlaceholder={searchPlaceholder}
+        inputSearchStyle={tw.style(`text-black text-sm rounded-[8px]`, {
+          fontFamily: "RobotoMedium",
+        })}
         maxHeight={300}
         labelField={"label"}
         valueField={"value"}
@@ -197,18 +206,35 @@ const normalizeGenderForEnum = (g: string) => {
   return x === "male" || x === "female" ? x : "";
 };
 
+function isDriverProfileAlreadyCreated(status?: number, message?: string) {
+  if (status !== 409) return false;
+  const lower = String(message || "").toLowerCase();
+  const isFieldConflict =
+    lower.includes("license number") ||
+    lower.includes("licence number") ||
+    lower.includes("plate number");
+  return (
+    !isFieldConflict &&
+    (lower.includes("already exists") || lower.includes("already registered"))
+  );
+}
+
 const CheckItem = ({
   item,
   isChecked,
   setChecked,
 }: {
-  item: {};
+  item: { name?: string };
   isChecked: boolean;
   setChecked: (value: boolean) => void;
 }) => {
+  const toggle = () => setChecked(!isChecked);
+
   return (
     <Pressable
-      onPress={() => setChecked(!isChecked)}
+      onPress={toggle}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: isChecked }}
       style={tw`flex-row justify-between items-center  py-3.5`}
     >
       <Text
@@ -218,14 +244,29 @@ const CheckItem = ({
       >
         {item?.name}
       </Text>
+      {/* The box swallows the row press, so it needs its own handler. */}
       <Checkbox
         style={tw.style(`bg-[#3C8F7C4D] border-[1.5px] border-base-green`)}
         value={isChecked}
-        // onValueChange={setChecked}
+        onValueChange={setChecked}
+        hitSlop={12}
       />
     </Pressable>
   );
 };
+
+/** Empty state for the town list: nothing here is selectable, so it is not a row. */
+const CityListHint = ({ text }: { text: string }) => (
+  <View style={tw`flex-1 items-center justify-center px-4`}>
+    <Text
+      style={tw.style(`text-[#0000009E] text-sm text-center`, {
+        fontFamily: "RobotoRegular",
+      })}
+    >
+      {text}
+    </Text>
+  </View>
+);
 
 const Levels = [
   {
@@ -324,19 +365,16 @@ const DriverInfo = () => {
   // The ref updates synchronously, so the second tap sees the latch and bails.
   const inFlight = useRef(false);
 
-  const CountryIndex = Country.getAllCountries().find(
-    (i) => i.name === user?.profile?.country
-  );
-  const States =
-    CountryIndex === undefined
-      ? [{ name: "Please Select a Country" }]
-      : State.getStatesOfCountry(CountryIndex?.isoCode);
-
-  const StateIndex = States.find((i) => i.name === state.state);
-  const Cities =
-    StateIndex === undefined
-      ? [{ name: "Please Select a state" }]
-      : City.getCitiesOfState(CountryIndex?.isoCode, StateIndex?.isoCode);
+  // Resolved through an alias table so a profile saved with an older state
+  // spelling still matches — see findNigeriaState.
+  const selectedState = findNigeriaState(state.state);
+  const [citySearch, setCitySearch] = useState("");
+  const cityOptions = useMemo(() => {
+    const lgas = selectedState?.lgas ?? [];
+    const query = citySearch.trim().toLowerCase();
+    if (!query) return lgas;
+    return lgas.filter((lga) => lga.name.toLowerCase().includes(query));
+  }, [selectedState, citySearch]);
 
   useEffect(() => {
     if (selectedImage !== null) {
@@ -618,51 +656,6 @@ const DriverInfo = () => {
         // upload attempt surface the real error via the catch below.
       }
 
-      const data = new FormData();
-
-      const imageFields = [
-        "licence_image_name",
-        "id_card_image_name",
-        "image_name",
-        "vehicle_image_name",
-      ];
-      // Vehicle fields are sent nested under vehicleDetails[*] below — the
-      // createDriver validator in backend/src/controllers/driverController.js
-      // reads them off `req.body.vehicleDetails`, not as top-level keys. We
-      // exclude them from the flat loop so we don't double-send and so the
-      // server-side body shape exactly matches the validator chain.
-      const vehicleDetailsFields = [
-        "vehicle_name",
-        "vehicle_model",
-        "vehicle_year",
-        "vehicle_color",
-        "vehicle_type_id",
-        "licence_plate_number",
-      ];
-      Object.keys(state).forEach((key) => {
-        if (
-          !imageFields.includes(key) &&
-          !vehicleDetailsFields.includes(key) &&
-          state[key as keyof typeof state] !== null &&
-          state[key as keyof typeof state] !== undefined
-        ) {
-          data.append(key, state[key as keyof typeof state] as string);
-        }
-      });
-
-      // Nested vehicleDetails payload. FormData accepts bracket-notation
-      // keys; the backend's multipart parser rebuilds them into a nested
-      // object so the validator sees `vehicleDetails.make` etc.
-      data.append("vehicleDetails[make]", state.vehicle_name);
-      data.append("vehicleDetails[model]", state.vehicle_model);
-      data.append("vehicleDetails[year]", state.vehicle_year);
-      data.append("vehicleDetails[color]", state.vehicle_color);
-      data.append(
-        "vehicleDetails[plateNumber]",
-        state.licence_plate_number
-      );
-      data.append("vehicleDetails[vehicleType]", state.vehicle_type_id);
-
       const imageFieldMap = {
         licence_image_name: "licence_image_name",
         id_card_image_name: "id_card_image_name",
@@ -670,11 +663,16 @@ const DriverInfo = () => {
         vehicle_image_name: "vehicle_image_name",
       } as const;
 
+      const preparedImages: Array<{
+        formKey: string;
+        uri: string;
+        type: string;
+        name: string;
+      }> = [];
+
       // Re-prepare every photo at submit time. Simulator gallery picks are
       // usually already file://; physical devices often keep ph:// /
-      // content:// (or bare paths) that RN multipart cannot read — axios
-      // then reports "Network Error" with no HTTP response even though the
-      // API is fine (as proven by the simulator 201).
+      // content:// (or bare paths) that RN multipart cannot read.
       for (const [stateKey, formKey] of Object.entries(imageFieldMap)) {
         const img = state[stateKey as keyof typeof state] as {
           uri?: string;
@@ -687,11 +685,12 @@ const DriverInfo = () => {
           if (__DEV__) {
             console.log(`${formKey} URI scheme:`, prepared.uri.split("://")[0]);
           }
-          data.append(formKey, {
+          preparedImages.push({
+            formKey,
             uri: prepared.uri,
             type: prepared.type || mimeFromUri(prepared.uri),
             name: prepared.name || `${formKey}.jpg`,
-          } as unknown as Blob);
+          });
         } catch (prepErr) {
           console.warn(`Failed to prepare ${formKey}:`, prepErr);
           showMessage({
@@ -703,24 +702,85 @@ const DriverInfo = () => {
         }
       }
 
-      // Relative path so apiClient baseURL + FormData Content-Type strip apply
-      // consistently (absolute CREATE_DRIVER URLs bypass some axios defaults).
-      await apiClient.post("driver/create", data, {
-        // Safety net for slow networks even after on-device compression.
-        // Backend uploads to Cloudinary in parallel; 180s covers large JPEGs
-        // on Android mobile data where TLS + multipart can spike latency.
-        timeout: 180000,
-        onUploadProgress: (progressEvent) => {
-          const percent = Math.round(
-            (progressEvent.loaded * 100) / (progressEvent.total || 1)
-          );
-          console.log(`Upload progress: ${percent}%`);
+      // JSON first: the same fields as a normal API call. Login / vehicle
+      // types already work on the device; a 4-photo multipart is what Android
+      // XHR was turning into "Can't reach Keke Ride" even after the profile
+      // existed. Images are optional on the server — attach them next.
+      const jsonBody = {
+        first_name: state.first_name,
+        last_name: state.last_name,
+        gender: state.gender,
+        city: state.city,
+        state: state.state,
+        union_number: state.union_number,
+        licenseNumber: String(state.union_number || "").trim(),
+        licenseExpiry: new Date(
+          Date.now() + 365 * 24 * 60 * 60 * 1000
+        ).toISOString(),
+        vehicleDetails: {
+          make: state.vehicle_name,
+          model: state.vehicle_model,
+          year: parseInt(String(state.vehicle_year), 10),
+          plateNumber: state.licence_plate_number,
+          color: state.vehicle_color,
+          vehicleType: state.vehicle_type_id,
         },
-      });
+      };
+
+      try {
+        await apiClient.post("driver/create", jsonBody, { timeout: 30000 });
+      } catch (createErr: unknown) {
+        const createRes = createErr as {
+          response?: { status?: number; data?: { message?: string } };
+          message?: string;
+        };
+        const createMsg =
+          createRes?.response?.data?.message || createRes?.message || "";
+        if (
+          !isDriverProfileAlreadyCreated(
+            createRes?.response?.status,
+            typeof createMsg === "string" ? createMsg : ""
+          )
+        ) {
+          throw createErr;
+        }
+      }
+
+      let photosUploaded = preparedImages.length === 0;
+      if (preparedImages.length > 0) {
+        const data = new FormData();
+        data.append("vehicleDetails[make]", state.vehicle_name);
+        data.append("vehicleDetails[model]", state.vehicle_model);
+        data.append("vehicleDetails[year]", state.vehicle_year);
+        data.append("vehicleDetails[color]", state.vehicle_color);
+        data.append("vehicleDetails[plateNumber]", state.licence_plate_number);
+        data.append("vehicleDetails[vehicleType]", state.vehicle_type_id);
+        if (state.union_number) {
+          data.append("union_number", state.union_number);
+        }
+        for (const file of preparedImages) {
+          data.append(file.formKey, {
+            uri: file.uri,
+            type: file.type,
+            name: file.name,
+          } as unknown as Blob);
+        }
+        try {
+          await postFormData("driver/create", data, { timeout: 180000 });
+          photosUploaded = true;
+        } catch (photoErr) {
+          console.warn(
+            "Driver photos upload failed after profile create:",
+            photoErr
+          );
+        }
+      }
 
       showMessage({
-        type: "success",
-        message: "Driver registration completed successfully",
+        type: photosUploaded ? "success" : "warning",
+        message: photosUploaded
+          ? "Driver registration completed successfully"
+          : "Account created. Some photos could not be uploaded — you can add them later from Account Settings.",
       });
       await queueLocationDisclosureIfNeeded("driver");
       router.navigate("/");
@@ -738,7 +798,8 @@ const DriverInfo = () => {
       };
       console.log(
         "Driver registration error:",
-        e?.response?.data || e?.message
+        e?.response?.data || e?.message,
+        (err as { code?: string })?.code
       );
 
       let message: string =
@@ -782,32 +843,19 @@ const DriverInfo = () => {
         if (typeof raw === "string" && raw) message = raw;
       }
 
-      // A 409 for the driver profile itself means a prior submit attempt
-      // succeeded on the backend even though the client never saw the 2xx
-      // (e.g. mobile network dropped the response, or the container
-      // restarted right after persisting the driver doc). Treat it as
-      // success and let the user continue. License/plate uniqueness
-      // collisions are real validation errors the user must fix, so those
-      // still surface as a danger flash.
-      if (e?.response?.status === 409) {
-        const lower = message.toLowerCase();
-        const isFieldConflict =
-          lower.includes("license number") ||
-          lower.includes("licence number") ||
-          lower.includes("plate number");
-        const isProfileConflict =
-          !isFieldConflict &&
-          (lower.includes("already exists") ||
-            lower.includes("already registered"));
-        if (isProfileConflict) {
-          showMessage({
-            type: "success",
-            message: "Driver registration already completed",
-          });
-          await queueLocationDisclosureIfNeeded("driver");
-          router.navigate("/");
-          return;
-        }
+      if (
+        isDriverProfileAlreadyCreated(
+          e?.response?.status,
+          message
+        )
+      ) {
+        showMessage({
+          type: "success",
+          message: "Driver registration already completed",
+        });
+        await queueLocationDisclosureIfNeeded("driver");
+        router.navigate("/");
+        return;
       }
 
       showMessage({
@@ -862,7 +910,7 @@ const DriverInfo = () => {
         if (!state.state) {
           validationMessage = "Please select a state.";
         } else if (!state.city) {
-          validationMessage = "Please enter a city.";
+          validationMessage = "Please select your town or city.";
         }
         break;
 
@@ -1143,18 +1191,38 @@ const DriverInfo = () => {
             </Text>
             <SelectItem
               label=""
+              search
+              searchPlaceholder="Search states"
               placeholder="Select Preference state"
-              data={States.map(({ name }) => ({
+              data={NIGERIA_STATES.map(({ name }) => ({
                 label: name,
                 value: name,
               }))}
-              value={state.state}
-              onChange={(state) => setState((prev) => ({ ...prev, state }))}
+              value={selectedState?.name ?? ""}
+              onChange={(nextState) => {
+                // The old city belongs to the old state — never carry it over.
+                setCitySearch("");
+                setState((prev) => ({ ...prev, state: nextState, city: "" }));
+              }}
             />
           </View>
+          <Text
+            style={tw.style(`text-black text-base`, {
+              fontFamily: "RobotoMedium",
+            })}
+          >
+            Town / City
+          </Text>
+          <FormInput
+            value={citySearch}
+            onChangeText={setCitySearch}
+            placeholder="Search your town or city"
+            editable={!!selectedState}
+            height={40}
+          />
           <View
             style={tw.style(` mt-1 bg-white py-2 px-2 rounded-[8px]`, {
-              height: verticalScale(150),
+              height: verticalScale(220),
               shadowColor: "#000",
               shadowOffset: {
                 width: 0,
@@ -1165,28 +1233,34 @@ const DriverInfo = () => {
               elevation: 8,
             })}
           >
-            <ScrollView
-              nestedScrollEnabled
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-              contentContainerStyle={tw`flex-col pr-2.5 pb-3`}
-              showsVerticalScrollIndicator
-              persistentScrollbar
-            >
-              {Cities.map((item, idx) => (
-                <CheckItem
-                  key={item?.name}
-                  item={item}
-                  isChecked={state.city === item?.name}
-                  setChecked={(bool) =>
-                    setState((prev) => ({
-                      ...prev,
-                      city: bool ? item?.name : "",
-                    }))
-                  }
-                />
-              ))}
-            </ScrollView>
+            {!selectedState ? (
+              <CityListHint text="Select a state to see its towns and cities" />
+            ) : cityOptions.length === 0 ? (
+              <CityListHint text={`No match for "${citySearch.trim()}"`} />
+            ) : (
+              <ScrollView
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                contentContainerStyle={tw`flex-col pr-2.5 pb-3`}
+                showsVerticalScrollIndicator
+                persistentScrollbar
+              >
+                {cityOptions.map((lga) => (
+                  <CheckItem
+                    key={lga.id}
+                    item={lga}
+                    isChecked={state.city === lga.name}
+                    setChecked={(bool) =>
+                      setState((prev) => ({
+                        ...prev,
+                        city: bool ? lga.name : "",
+                      }))
+                    }
+                  />
+                ))}
+              </ScrollView>
+            )}
           </View>
         </View>
       )}

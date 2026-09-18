@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import { AntDesign, Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { City, Country, State } from "country-state-city";
+import { NIGERIA_STATES, findNigeriaState } from "@/constants/nigeriaLocations";
 import React, { useContext, useEffect, useState } from "react";
 
 import { AppContext } from "@/app/context";
@@ -89,6 +90,8 @@ interface SProps {
   data: Array<{ label: string; value: string }>;
   onChange: (val: string) => void;
   value: string;
+  search?: boolean;
+  searchPlaceholder?: string;
 }
 
 const SelectItem = ({
@@ -96,6 +99,8 @@ const SelectItem = ({
   data = [],
   onChange,
   value = "",
+  search = false,
+  searchPlaceholder,
 }: SProps) => {
   return (
     <Dropdown
@@ -109,7 +114,11 @@ const SelectItem = ({
       data={data}
       value={value}
       placeholder={placeholder}
-      search={false}
+      search={search}
+      searchPlaceholder={searchPlaceholder}
+      inputSearchStyle={tw.style(`text-black text-sm rounded-[8px]`, {
+        fontFamily: "RobotoMedium",
+      })}
       maxHeight={300}
       labelField={"label"}
       valueField={"value"}
@@ -166,15 +175,31 @@ function UpdateProfileModal({
   const CountryIndex = Country.getAllCountries().find(
     (i) => i.name === updateState.country
   );
-  const States =
-    CountryIndex === undefined
+  // country-state-city has 424 "cities" for all of Nigeria (8 for Lagos), so the
+  // home market uses the full 774-LGA list instead. Everywhere else it is the
+  // only source we have.
+  const isNigeria = CountryIndex?.isoCode === "NG";
+  const nigeriaState = isNigeria
+    ? findNigeriaState(updateState?.state)
+    : undefined;
+  const foreignStates =
+    CountryIndex && !isNigeria
+      ? State.getStatesOfCountry(CountryIndex.isoCode)
+      : [];
+  const foreignState = foreignStates.find(
+    (i) => i.name === updateState?.state
+  );
+
+  const States: Array<{ name: string }> = isNigeria
+    ? NIGERIA_STATES
+    : CountryIndex === undefined
       ? [{ name: "Please Select a Country" }]
-      : State.getStatesOfCountry(CountryIndex?.isoCode);
-  const StateIndex = States.find((i) => i.name === updateState?.state);
-  const Cities =
-    StateIndex === undefined
-      ? [{ name: "Please Select a state" }]
-      : City.getCitiesOfState("NG", StateIndex?.isoCode);
+      : foreignStates;
+  const Cities: Array<{ name: string }> = isNigeria
+    ? (nigeriaState?.lgas ?? [{ name: "Please Select a state" }])
+    : CountryIndex && foreignState
+      ? City.getCitiesOfState(CountryIndex.isoCode, foreignState.isoCode)
+      : [{ name: "Please Select a state" }];
 
   useEffect(() => {
     if (selectedImage !== null) {
@@ -416,9 +441,12 @@ function UpdateProfileModal({
 
             <SelectItem
               placeholder="Country"
+              search
+              searchPlaceholder="Search countries"
               value={updateState.country}
+              // State and city belong to the old country — clear both.
               onChange={(country) =>
-                setUpdateState((prev) => ({ ...prev, country }))
+                setUpdateState((prev) => ({ ...prev, country, state: "", city: "" }))
               }
               data={Country.getAllCountries().map(({ name }) => ({
                 label: name,
@@ -428,9 +456,11 @@ function UpdateProfileModal({
 
             <SelectItem
               placeholder="State"
-              value={updateState?.state}
+              search
+              searchPlaceholder="Search states"
+              value={isNigeria ? (nigeriaState?.name ?? "") : updateState?.state}
               onChange={(state) =>
-                setUpdateState((prev) => ({ ...prev, state }))
+                setUpdateState((prev) => ({ ...prev, state, city: "" }))
               }
               data={States.map(({ name }) => ({
                 label: name,
@@ -439,6 +469,8 @@ function UpdateProfileModal({
             />
             <SelectItem
               placeholder="City"
+              search
+              searchPlaceholder="Search towns and cities"
               value={updateState?.city}
               onChange={(city) => setUpdateState((prev) => ({ ...prev, city }))}
               data={Cities.map(({ name }) => ({
