@@ -101,6 +101,11 @@ function resetSharedLocationWatch() {
   sharedStartPromise = null;
 }
 
+/** Stop the shared foreground location watch when the authenticated session ends. */
+export function stopCurrentLocationWatch(): void {
+  resetSharedLocationWatch();
+}
+
 async function reverseGeocodeAndPublish(coords: Location.LocationObjectCoords) {
   try {
     const [address] = await Location.reverseGeocodeAsync({
@@ -184,8 +189,21 @@ async function ensureSharedLocationStarted(
     let bestLocation: Location.LocationObject | null = null;
     let attempts = 0;
     const maxAttempts = 3;
+    let hasPublishedGpsLocation = false;
 
-    while (attempts < maxAttempts && (!bestLocation || (bestLocation.coords.accuracy || Infinity) > 50)) {
+    try {
+      const lastKnownLocation = await Location.getLastKnownPositionAsync();
+      if (lastKnownLocation) {
+        const coordsToUse = applyDevLocationOverride(lastKnownLocation.coords);
+        sharedBestAccuracy = lastKnownLocation.coords.accuracy || Infinity;
+        publishSharedSnapshot({ location: coordsToUse });
+        void reverseGeocodeAndPublish(coordsToUse);
+      }
+    } catch (lastKnownError) {
+      console.warn("⚠️ Could not get last known location:", lastKnownError);
+    }
+
+    while (attempts < maxAttempts) {
       try {
         const currentLocation = await Promise.race([
           Location.getCurrentPositionAsync({
@@ -199,9 +217,20 @@ async function ensureSharedLocationStarted(
         ]);
 
         const accuracy = currentLocation.coords.accuracy || Infinity;
-        if (!bestLocation || accuracy < (bestLocation.coords.accuracy || Infinity)) {
+        const improvedAccuracy =
+          !bestLocation ||
+          accuracy < (bestLocation.coords.accuracy || Infinity);
+
+        if (improvedAccuracy) {
           bestLocation = currentLocation;
+        }
+
+        if (!hasPublishedGpsLocation || improvedAccuracy) {
+          const coordsToUse = applyDevLocationOverride(currentLocation.coords);
+          hasPublishedGpsLocation = true;
           sharedBestAccuracy = accuracy;
+          publishSharedSnapshot({ location: coordsToUse });
+          void reverseGeocodeAndPublish(coordsToUse);
         }
 
         if (accuracy < 20) {
@@ -224,11 +253,7 @@ async function ensureSharedLocationStarted(
       }
     }
 
-    if (bestLocation) {
-      const coordsToUse = applyDevLocationOverride(bestLocation.coords);
-      publishSharedSnapshot({ location: coordsToUse });
-      await reverseGeocodeAndPublish(coordsToUse);
-    } else {
+    if (!bestLocation) {
       console.warn("⚠️ Could not get immediate location, will use watch");
     }
 

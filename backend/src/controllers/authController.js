@@ -324,16 +324,6 @@ export const loginWithOtp = asyncHandler(async (req, res) => {
 
   const tokens = await issueTokenPairWithSession(freshUser, req);
 
-  // Drivers always start offline after login; they opt in via the Online toggle.
-  if (freshUser.role === 'driver') {
-    try {
-      const { forceDriverOfflineOnLogin } = await import('../services/driverAvailabilityService.js');
-      await forceDriverOfflineOnLogin(freshUser._id);
-    } catch (err) {
-      logger.warn(`forceDriverOfflineOnLogin failed for ${freshUser._id}: ${err.message}`);
-    }
-  }
-
   const canBook =
     freshUser.onboardingStage === 'rider_complete' ||
     freshUser.onboardingStage === 'driver_complete' ||
@@ -481,15 +471,6 @@ export const login = asyncHandler(async (req, res) => {
   await user.save();
 
   const tokens = await issueTokenPairWithSession(user, req);
-
-  if (user.role === 'driver') {
-    try {
-      const { forceDriverOfflineOnLogin } = await import('../services/driverAvailabilityService.js');
-      await forceDriverOfflineOnLogin(user._id);
-    } catch (err) {
-      logger.warn(`forceDriverOfflineOnLogin failed for ${user._id}: ${err.message}`);
-    }
-  }
 
   res.json({
     status: 'success',
@@ -671,6 +652,14 @@ export const logout = asyncHandler(async (req, res) => {
   if (req.user) {
     const user = await User.findById(req.user._id);
     if (user) {
+      if (user.role === 'driver') {
+        try {
+          const { forceDriverOffline } = await import('../services/driverAvailabilityService.js');
+          await forceDriverOffline(user._id);
+        } catch (err) {
+          logger.warn(`forceDriverOffline failed for ${user._id}: ${err.message}`);
+        }
+      }
       user.deviceToken = null;
       await user.save();
 
@@ -1265,15 +1254,6 @@ export const googleAuthCallback = asyncHandler(async (req, res) => {
     }
 
     const tokens = await issueTokenPairWithSession(user, req);
-
-    if (user.role === 'driver') {
-      try {
-        const { forceDriverOfflineOnLogin } = await import('../services/driverAvailabilityService.js');
-        await forceDriverOfflineOnLogin(user._id);
-      } catch (err) {
-        logger.warn(`forceDriverOfflineOnLogin failed for ${user._id}: ${err.message}`);
-      }
-    }
 
     logger.info(`Google authentication successful for user ${user._id}`);
 

@@ -623,8 +623,6 @@ export const findNearbyDrivers = asyncHandler(async (req, res) => {
   }
 
   // Find nearby available drivers (keke-appropriate preview radius)
-  Driver.markStaleDriversOffline().catch(() => {});
-
   const nearbyDrivers = await Driver.findNearbyAvailable(
     latitude,
     longitude,

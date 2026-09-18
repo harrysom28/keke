@@ -8,7 +8,6 @@ import {
   startDriverBackgroundLocation,
   stopDriverBackgroundLocation,
 } from "@/lib/driverBackgroundLocation";
-import { ensureDriverStartsOfflineOnce } from "@/utils/driverStartOffline";
 
 const ONLINE_POLL_MS = 45_000;
 const HEARTBEAT_MS = 30_000;
@@ -33,9 +32,8 @@ export function useDriverSession() {
       setSessionOnline(online);
       return online;
     } catch {
-      sessionOnlineRef.current = false;
-      setSessionOnline(false);
-      return false;
+      // Keep the last known status so a blip does not look like an intentional offline.
+      return sessionOnlineRef.current;
     }
   }, []);
 
@@ -99,8 +97,6 @@ export function useDriverSession() {
     let cancelled = false;
 
     void (async () => {
-      // Start each driver app session offline; driver flips Online manually.
-      await ensureDriverStartsOfflineOnce();
       if (cancelled) return;
       await syncSession();
     })();
@@ -128,7 +124,9 @@ export function useDriverSession() {
       clearInterval(pollId);
       clearInterval(heartbeatId);
       appSub.remove();
-      void stopDriverBackgroundLocation();
+      if (!sessionOnlineRef.current) {
+        void stopDriverBackgroundLocation();
+      }
     };
   }, [sendHeartbeat, syncSession]);
 

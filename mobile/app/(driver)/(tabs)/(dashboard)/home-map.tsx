@@ -186,7 +186,7 @@ export default function HomeScreen() {
       .then(({ data }) => {
         setSessionOnline(Boolean(data?.data?.is_online));
       })
-      .catch(() => setSessionOnline(false));
+      .catch(() => {});
   }, [isFocused]);
 
   // Location heartbeats: useDriverSession in driver/_layout (background + 30s).

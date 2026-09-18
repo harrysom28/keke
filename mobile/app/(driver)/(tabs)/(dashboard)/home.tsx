@@ -354,12 +354,6 @@ const Home = () => {
     let id: ReturnType<typeof setInterval> | null = null;
 
     void (async () => {
-      // Wait for session boot offline so the toggle does not flash Online from a
-      // stale server flag left by a previous session.
-      const { ensureDriverStartsOfflineOnce } = await import(
-        "@/utils/driverStartOffline"
-      );
-      await ensureDriverStartsOfflineOnce();
       if (cancelled) return;
       fetchDriverDashboard();
       getCurrentUserRef.current?.();

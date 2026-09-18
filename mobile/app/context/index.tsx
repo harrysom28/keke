@@ -275,35 +275,43 @@ export default function GlobalContext({
     loading: React.Dispatch<React.SetStateAction<boolean>>
   ) => {
     loading(true);
-    apiClient
-      .post("auth/user/signout", {})
-      .then(({ data }) => {
-        // Use safeShowMessage to ensure message is always a string
-        safeShowMessage({
-          type: "info",
-          message: data?.message || 'Operation completed successfully',
+    void (async () => {
+      try {
+        const { forceDriverOfflineNow } = await import("@/utils/driverStartOffline");
+        await forceDriverOfflineNow();
+      } catch {
+        // Still sign out even if the availability patch fails.
+      }
+      apiClient
+        .post("auth/user/signout", {})
+        .then(({ data }) => {
+          // Use safeShowMessage to ensure message is always a string
+          safeShowMessage({
+            type: "info",
+            message: data?.message || 'Operation completed successfully',
+          });
+        })
+        .catch((err) => {
+          // Safely log error data without rendering
+          const errorData = err?.response?.data;
+          if (errorData) {
+            const errorMessage = errorData?.message ||
+              (typeof errorData?.error === 'string' ? errorData.error : errorData?.error?.message) ||
+              'An error occurred';
+            console.log('LogoutUser/DeleteUser error:', errorMessage);
+          }
+          // Use safeShowMessage to prevent error object rendering issues
+          const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
+          safeShowMessage({
+            type: "danger",
+            message: errorMessage,
+          });
+        })
+        .finally(() => {
+          void clearCache();
+          loading(false);
         });
-      })
-      .catch((err) => {
-        // Safely log error data without rendering
-        const errorData = err?.response?.data;
-        if (errorData) {
-          const errorMessage = errorData?.message || 
-            (typeof errorData?.error === 'string' ? errorData.error : errorData?.error?.message) ||
-            'An error occurred';
-          console.log('LogoutUser/DeleteUser error:', errorMessage);
-        }
-        // Use safeShowMessage to prevent error object rendering issues
-        const errorMessage = getErrorMessage(err, 'An error occurred. Please try again.');
-        safeShowMessage({
-          type: "danger",
-          message: errorMessage,
-        });
-      })
-      .finally(() => {
-        void clearCache();
-        loading(false);
-      });
+    })();
   };
   const DeleteUser = (
     loading: React.Dispatch<React.SetStateAction<boolean>>

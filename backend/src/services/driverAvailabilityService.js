@@ -28,10 +28,10 @@ export async function restoreDriverAvailabilityAfterTrip(driverIdOrDoc) {
 }
 
 /**
- * Drivers start offline after login so they must opt in (and see location prompts).
+ * Intentional offline only (logout, role switch). Do not call on login or app restart.
  * Skips if the driver has an active trip.
  */
-export async function forceDriverOfflineOnLogin(userId) {
+export async function forceDriverOffline(userId) {
   if (!userId) return false;
   const driver = await Driver.findOne({ user: userId }).select('_id');
   if (!driver) return false;
@@ -41,7 +41,7 @@ export async function forceDriverOfflineOnLogin(userId) {
     const activeRide = await Ride.findActiveRideForDriver?.(driver._id);
     if (activeRide) return false;
   } catch {
-    // If ride lookup fails, still prefer starting offline after login.
+    // If ride lookup fails, still prefer going offline on logout.
   }
 
   const result = await Driver.updateOne(
@@ -56,3 +56,6 @@ export async function forceDriverOfflineOnLogin(userId) {
   );
   return (result.modifiedCount || result.nModified || 0) > 0;
 }
+
+/** @deprecated use forceDriverOffline */
+export const forceDriverOfflineOnLogin = forceDriverOffline;

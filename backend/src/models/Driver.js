@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import {
   DRIVER_LOCATION_MAX_AGE_MS,
-  DRIVER_STALE_OFFLINE_MS,
 } from '../utils/driverSearchRadius.js';
 
 const driverSchema = new mongoose.Schema(
@@ -12,6 +11,12 @@ const driverSchema = new mongoose.Schema(
       required: [true, 'Driver must be associated with a user'],
       // One driver profile per user — used as the idempotency key for POST /driver/create
       unique: true,
+    },
+    referredByAgentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Agent',
+      default: null,
+      index: true,
     },
     licenseNumber: {
       type: String,
@@ -260,26 +265,11 @@ driverSchema.methods.addEarnings = async function (amount) {
   await this.save();
 };
 
-/** Mark drivers with stale location heartbeats as offline (fire-and-forget). */
-driverSchema.statics.markStaleDriversOffline = function () {
-  const cutoff = new Date(Date.now() - DRIVER_STALE_OFFLINE_MS);
-  return this.updateMany(
-    {
-      isOnline: true,
-      $or: [
-        { 'currentLocation.lastUpdated': { $lt: cutoff } },
-        { 'currentLocation.lastUpdated': { $exists: false } },
-      ],
-    },
-    { $set: { isOnline: false, isAvailable: false } }
-  ).exec();
-};
-
-// Static method to find nearby available drivers
+// Method to update earnings
 driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, maxDistanceKm = 15) {
   const logger = (await import('../utils/logger.js')).default;
-  // Same window the stale-offline sweeper uses: any driver still counted as
-  // online must also be matchable (see driverSearchRadius.js).
+  // Only drivers with a fresh heartbeat are matchable. The Online toggle itself
+  // stays on until they go offline (see driverSearchRadius.js).
   const locationFreshSince = new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS);
 
   try {
