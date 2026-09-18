@@ -2,7 +2,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  KeyboardAvoidingView,
   InteractionManager,
   Modal,
   FlatList,
@@ -21,6 +20,7 @@ import {
   SafeAreaProvider,
 } from "react-native-safe-area-context";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { CREATE_CHAT, RETRIEVE_CHAT } from "@/constants";
 import React, { memo, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useSelector } from "react-redux";
@@ -475,6 +475,7 @@ function InputBar({
 
 function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
   const insets = useCombinedSafeInsets();
+  const keyboardInset = useKeyboardInset(visible);
   const { user } = useSelector(AuthState);
   const { apiConfig } = useContext(AppContext);
   const [chats, setChats] = useState<any[]>([]);
@@ -753,10 +754,8 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
         titleStyle={{ fontFamily: "RobotoMedium", textAlign: "center" }}
       />
 
-      <KeyboardAvoidingView
+      <View
         style={[styles.root, { paddingLeft: insets.left, paddingRight: insets.right }]}
-        behavior={Platform.OS === "ios" ? "padding" : "padding"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? Math.max(insets.top, 12) + 8 : 0}
       >
         <DriverHeader
           insetsTop={insets.top}
@@ -904,10 +903,10 @@ function DriverChatModalContent({ visible, onClose, data }: Readonly<Props>) {
           onLocation={() =>
             flashMessageRef.current?.showMessage({ type: "info", message: "Share location (coming soon)." })
           }
-          bottomPad={Math.max(insets.bottom, 16)}
+          bottomPad={Math.max(insets.bottom, 16) + keyboardInset}
           placeholder={inputPlaceholder}
         />
-      </KeyboardAvoidingView>
+      </View>
     </>
   );
 }

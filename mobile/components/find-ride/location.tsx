@@ -20,21 +20,9 @@ import {
 import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
 import { geocodeAddress, resolvePickupLabel } from "@/utils/mapsApi";
 import apiClient from "@/utils/apiClient";
-import { getCachedWallet, setCachedWallet } from "@/utils/walletCache";
-import { router } from "expo-router";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import { heightAboveKeyboard, useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { AuthState } from "@/store/AuthSlice";
-import PaymentMethodSelector from "@/components/PaymentMethodSelector";
-import { usePublicConfig } from "@/hooks/usePublicConfig";
-import {
-  configToEnabledMethods,
-  defaultUiPaymentKey,
-  hasNonWalletPaymentOption,
-  isWalletPaymentMethod,
-  mapUiPaymentToApi,
-  preferCashWhenWalletLow,
-} from "@/utils/paymentMethods";
 
 interface Props {
   action: () => void;
@@ -49,7 +37,13 @@ interface Props {
   onSearchFocusChange?: (active: boolean) => void;
 }
 
-export const LocationView = ({ action, back, initialDropoff, locationSheetActive = false, onSearchFocusChange }: Props) => {
+export const LocationView = ({
+  action,
+  back,
+  initialDropoff,
+  locationSheetActive = false,
+  onSearchFocusChange,
+}: Props) => {
   const insets = useCombinedSafeInsets();
   const { height: windowHeight } = useWindowDimensions();
   const keyboardInset = useKeyboardInset(locationSheetActive);
@@ -76,21 +70,13 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
   const [farePreview, setFarePreview] = useState<any | null>(null);
   const [fareLoading, setFareLoading] = useState(false);
   const [fareError, setFareError] = useState<string | null>(null);
-  const [walletAvailableBalance, setWalletAvailableBalance] = useState<number | null>(null);
-  const { config: publicConfig } = usePublicConfig();
-  const enabledPaymentMethods = useMemo(
-    () => configToEnabledMethods(publicConfig.paymentMethods),
-    [publicConfig.paymentMethods]
-  );
-  const nonWalletPaymentAvailable = hasNonWalletPaymentOption(publicConfig.paymentMethods);
-  const [selectedPayment, setSelectedPayment] = useState(() =>
-    defaultUiPaymentKey(publicConfig.paymentMethods)
-  );
   const [focusedField, setFocusedField] = useState<"pickup" | "dropoff" | null>(
     null
   );
   const searchBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchPinned = focusedField != null;
+  const keyboardSearchPinned = searchPinned && keyboardInset > 0;
+
   const resultsMaxHeight = searchPinned
     ? Math.max(160, heightAboveKeyboard(windowHeight, keyboardInset) - 200)
     : 280;
@@ -515,33 +501,18 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
     setFareLoading(true);
     setFareError(null);
 
-    const cachedWallet = getCachedWallet<any>();
-    const walletPromise = cachedWallet
-      ? Promise.resolve(cachedWallet)
-      : apiClient.get("wallet", { timeout: 10000 }).then((res) => {
-          setCachedWallet(res);
-          return res;
-        });
-    Promise.all([
-      apiClient.get("rides/fare-estimate", {
+    apiClient
+      .get("rides/fare-estimate", {
         params: { originLat: oLat, originLng: oLng, destLat: dLat, destLng: dLng },
         timeout: 10000,
-      }),
-      walletPromise,
-    ])
-      .then(([fareRes, walletRes]) => {
+      })
+      .then((fareRes) => {
         if (!mounted) return;
-        const fare = fareRes?.data?.data;
-        const data = walletRes?.data?.data;
-        const available = data?.availableBalance ?? data?.balance;
-        const num = typeof available === "number" ? available : Number(available || 0);
-        setFarePreview(fare || null);
-        setWalletAvailableBalance(Number.isFinite(num) ? num : 0);
+        setFarePreview(fareRes?.data?.data || null);
       })
       .catch(() => {
         if (!mounted) return;
         setFarePreview(null);
-        setWalletAvailableBalance(null);
         setFareError("Unable to load fare preview");
       })
       .finally(() => {
@@ -553,37 +524,6 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
       mounted = false;
     };
   }, [screenLive, (ride?.data as any)?.origin?.lat, (ride?.data as any)?.origin?.long, (ride?.data as any)?.destination?.lat, (ride?.data as any)?.destination?.long]);
-
-  const fareTotal = typeof farePreview?.riderTotal === "number" ? farePreview.riderTotal : Number(farePreview?.riderTotal || 0);
-  const walletOk =
-    walletAvailableBalance != null &&
-    !isNaN(fareTotal) &&
-    fareTotal > 0 &&
-    walletAvailableBalance >= fareTotal;
-  /** When fare is 0 or unknown, do not treat wallet as "insufficient" (walletOk is false for fareTotal===0). */
-  const walletInsufficientForRide =
-    farePreview != null &&
-    walletAvailableBalance != null &&
-    fareTotal > 0 &&
-    walletAvailableBalance < fareTotal;
-  /** Block only when wallet is required (no cash/card/transfer enabled) and balance is low. */
-  const walletBlocksBooking = walletInsufficientForRide && !nonWalletPaymentAvailable;
-  const shortfall =
-    walletAvailableBalance != null && fareTotal > 0
-      ? Math.max(0, Math.ceil(fareTotal - walletAvailableBalance))
-      : 0;
-  const selectedIsWallet = isWalletPaymentMethod(mapUiPaymentToApi(selectedPayment));
-
-  useEffect(() => {
-    setSelectedPayment((prev) =>
-      preferCashWhenWalletLow(
-        publicConfig.paymentMethods,
-        prev,
-        walletAvailableBalance,
-        fareTotal
-      )
-    );
-  }, [publicConfig.paymentMethods, walletAvailableBalance, fareTotal]);
 
   useEffect(() => {
     if (!screenLive) return;
@@ -696,7 +636,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
         ) : null}
 
         <View style={tw`flex-col gap-y-3 flex-1 pr-2`}>
-          {!(searchPinned && focusedField === "dropoff") ? (
+          {!(keyboardSearchPinned && focusedField === "dropoff") ? (
           <View style={tw`pb-3 border-b border-[#EFEFEF]`}>
             <View style={tw`flex-row justify-between items-center mb-2`}>
               <Text
@@ -806,7 +746,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
             </View>
           </View>
           ) : null}
-          {!(searchPinned && focusedField === "pickup") ? (
+          {!(keyboardSearchPinned && focusedField === "pickup") ? (
           <View style={tw`relative`}>
             <Text
               style={tw.style(`text-[13px] text-[#C8C7CC] uppercase mb-2`, {
@@ -915,7 +855,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
           ) : null}
 
           {/* Live fare preview (non-blocking) */}
-          {!searchPinned && (fareLoading ? (
+          {!keyboardSearchPinned && (fareLoading ? (
             <View style={tw`mt-3 bg-white rounded-[12px] border border-[#EFEFEF] p-4`}>
               <View style={tw`flex-row items-center justify-between`}>
                 <Text style={tw.style(`text-[13px] text-[#242E42]`, { fontFamily: "RobotoMedium" })}>
@@ -954,39 +894,8 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
                     <Text style={tw.style(`text-[14px] text-[#242E42]`, { fontFamily: "RobotoBold" })}>
                       {farePreview.display?.Total || ""}
                     </Text>
-                    {selectedIsWallet && walletOk ? (
-                      <Entypo name="check" size={16} color={tw.color("base-green")} />
-                    ) : !selectedIsWallet && fareTotal > 0 ? (
-                      <Entypo name="check" size={16} color={tw.color("base-green")} />
-                    ) : null}
                   </View>
                 </View>
-                {selectedIsWallet && walletInsufficientForRide ? (
-                  <Text style={tw.style(`text-[12px] text-red-600`, { fontFamily: "RobotoMedium" })}>
-                    {nonWalletPaymentAvailable
-                      ? `Wallet balance low — top up ₦${shortfall.toLocaleString()} or choose Cash below`
-                      : `Insufficient balance — Top up ₦${shortfall.toLocaleString()}`}
-                  </Text>
-                ) : null}
-                {fareTotal > 0 && enabledPaymentMethods.length > 0 ? (
-                  <View style={tw`mt-3`}>
-                    <Text
-                      style={tw.style(`text-[12px] text-[#242E42] mb-2`, {
-                        fontFamily: "RobotoMedium",
-                      })}
-                    >
-                      Payment method
-                    </Text>
-                    <PaymentMethodSelector
-                      selected={selectedPayment}
-                      onSelect={setSelectedPayment}
-                      enabledMethods={enabledPaymentMethods}
-                      walletBalance={walletAvailableBalance}
-                      fareTotal={fareTotal}
-                      variant="compact"
-                    />
-                  </View>
-                ) : null}
               </View>
             </View>
           ) : fareError ? (
@@ -1077,7 +986,7 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
       </ScrollView>
       
       {/* Fixed Navigation Button */}
-      {!searchPinned ? (
+      {!keyboardSearchPinned ? (
       <View
         style={[
           tw`px-5 pt-3 bg-white border-t border-[#F0F0F0]`,
@@ -1087,11 +996,9 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
       <TouchableOpacity
           style={tw.style(
             `flex-row justify-center items-center px-6 py-3.5 rounded-full`,
-            selected.pickup && selected.dropoff
-              ? (walletBlocksBooking ? `bg-gray-300` : `bg-base-green`)
-              : `bg-gray-300`
+            selected.pickup && selected.dropoff ? `bg-base-green` : `bg-gray-300`
           )}
-          disabled={!selected.pickup || !selected.dropoff || walletBlocksBooking}
+          disabled={!selected.pickup || !selected.dropoff}
         onPress={async () => {
           if (selected.pickup === "") {
             showMessage({
@@ -1102,13 +1009,6 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
             showMessage({
               type: "warning",
               message: "Please select a dropoff location",
-            });
-          } else if (walletBlocksBooking) {
-            router.push("/(app)/(tabs)/(profile)/wallet");
-          } else if (selectedIsWallet && walletInsufficientForRide) {
-            showMessage({
-              type: "warning",
-              message: "Insufficient wallet balance. Choose Cash or top up your wallet.",
             });
           } else {
             // Safety: block proceeding when Redux origin coords are missing/invalid.
@@ -1155,13 +1055,12 @@ export const LocationView = ({ action, back, initialDropoff, locationSheetActive
 
             const hasResolvedDropoff = await ensureDestinationCoordinates();
             if (!hasResolvedDropoff) return;
-            dispatch(setRideData({ payment_type: selectedPayment } as any));
             action();
           }
         }}
       >
           <Text style={tw.style(`text-white text-[16px] mr-2`, { fontFamily: "RobotoBold" })}>
-            {walletBlocksBooking ? "Top Up Wallet" : "Confirm Booking"}
+            Continue
           </Text>
           <AntDesign name="right" size={20} color="white" />
       </TouchableOpacity>

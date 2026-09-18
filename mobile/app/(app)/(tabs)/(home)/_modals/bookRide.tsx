@@ -6,6 +6,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   useWindowDimensions,
@@ -21,6 +22,7 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } 
 
 import { AntDesign, MaterialCommunityIcons } from "@expo/vector-icons";
 import { AppContext } from "@/app/context";
+import { KeyboardDismissSurface } from "@/components/KeyboardDismissSurface";
 import { REQUEST_RIDE } from "@/constants";
 import apiClient from "@/utils/apiClient";
 import { setAppData, setRideData, AppDetailsState, type IUtils, type IUserLocation } from "@/store/AppSlice";
@@ -35,7 +37,7 @@ import tw from "@/lib/tailwind";
 import { useDispatch, useSelector } from "react-redux";
 import { useFocusEffect } from "expo-router";
 import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
-import { heightAboveKeyboard, useKeyboardInset } from "@/hooks/useKeyboardInset";
+import { heightAboveKeyboard, useKeyboardSheetLayout } from "@/hooks/useKeyboardInset";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
 import { formatAddressForDisplay } from "@/utils/formatAddressForDisplay";
@@ -54,6 +56,9 @@ interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
   getActiveBooking: () => void;
   openVersion: number;
+  /** True while the schedule sheet is actually open — gates GPS + Redux writes. */
+  sheetOpen?: boolean;
+  onSheetClose?: () => void;
 }
 
 type ModeType = "date" | "time" | "datetime" | "countdown";
@@ -134,7 +139,13 @@ const vehicleMatchesScheduleFilter = (vehicle: any) => {
   return keys.some((k) => blob.includes(k));
 };
 
-const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props) => {
+const BookRideSheet = ({
+  bottomSheetRef,
+  getActiveBooking,
+  openVersion,
+  sheetOpen = false,
+  onSheetClose,
+}: Props) => {
   const { width: windowWidth } = useWindowDimensions();
   const insets = useCombinedSafeInsets();
   const dispatch = useDispatch();
@@ -142,7 +153,9 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   const { ride } = useSelector(AppDetailsState);
   const rideUtils = ride.utils as IUtils;
   const userLocation = rideUtils.user_location as IUserLocation | undefined;
-  const { location } = useCurrentLocation({ isFocused: true, purpose: "rider" });
+  // Location snapshots still arrive from Home's shared watcher; effects below must
+  // stay gated on sheetOpen so this always-mounted sheet cannot write rideData.
+  const { location } = useCurrentLocation({ isFocused: sheetOpen, purpose: "rider" });
   const [selectedDate, setSelectedDate] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).dayOffset); // 0=Today, 1=Tomorrow, 2=day after...
   const [selectedTime, setSelectedTime] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).time);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -194,15 +207,21 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
   // Keep this sheet tall, but avoid forcing a near-fullscreen height on smaller content.
   const screenHeight = Dimensions.get('window').height;
   const validHeight = Math.min(Math.max(screenHeight * 0.85, 550), screenHeight * 0.95);
-  const keyboardInset = useKeyboardInset(true);
   const [locationSearchField, setLocationSearchField] = useState<"pickup" | "dropoff" | null>(null);
   const searchBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleCleanupDoneRef = useRef(true);
+
+  useEffect(() => {
+    if (sheetOpen) scheduleCleanupDoneRef.current = false;
+  }, [sheetOpen]);
   const searchPinned = locationSearchField != null;
-  const sheetHeight = searchPinned
-    ? Math.max(280, heightAboveKeyboard(screenHeight, keyboardInset) - 8)
+  const searchBaseHeight = searchPinned
+    ? Math.max(280, Math.round(screenHeight * 0.92))
     : validHeight;
+  const { height: sheetHeight, paddingBottom: keyboardPad } =
+    useKeyboardSheetLayout(searchBaseHeight, sheetOpen);
   const resultsMaxHeight = searchPinned
-    ? Math.max(160, sheetHeight - 160)
+    ? Math.max(160, heightAboveKeyboard(screenHeight, keyboardPad) - 160)
     : 280;
 
   const handleLocationSearchFocus = (field: "pickup" | "dropoff") => {
@@ -296,7 +315,12 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
     setShow(true);
   };
 
-  const handleBack = () => {
+  const resetScheduleDraft = useCallback(() => {
+    if (scheduleCleanupDoneRef.current) {
+      onSheetClose?.();
+      return;
+    }
+    scheduleCleanupDoneRef.current = true;
     const nextSelection = getScheduleSelectionFromDate(getMinimumScheduledDateTime());
     setState({
       pickup_location: "",
@@ -312,9 +336,17 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
     setFareEstimate(null);
     setPickupCoords(null);
     setDropoffCoords(null);
-    bottomSheetRef?.current?.close();
+    // This sheet writes the same rideData.origin/destination keys as Find Ride.
+    // Clear them on close so a GPS tick or stale coords cannot linger for the next flow.
+    dispatch(setRideData({ origin: {}, destination: {} } as any));
     dispatch(setAppData({ isBooking: false }));
-  };
+    onSheetClose?.();
+  }, [dispatch, onSheetClose]);
+
+  const handleBack = useCallback(() => {
+    resetScheduleDraft();
+    bottomSheetRef?.current?.close();
+  }, [bottomSheetRef, resetScheduleDraft]);
 
   // Fetch vehicle types on mount (use apiClient for correct base URL and timeout)
   const fetchVehicleTypes = useCallback(() => {
@@ -357,6 +389,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
 
   // Set pickup location from user's current location - use backend resolver for a readable name
   useEffect(() => {
+    if (!sheetOpen) return;
     if (!location || location.latitude === 0 || location.longitude === 0) return;
 
     const pickupAddress = userLocation?.name || userLocation?.formatted_address;
@@ -376,10 +409,12 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
         }
       })
       .catch(() => {});
-  }, [location, userLocation]);
+  }, [sheetOpen, location, userLocation]);
 
-  // Sync pickup/dropoff to Redux so home map recenters and shows route when Schedule sheet is open
+  // Sync pickup/dropoff to Redux so home map recenters and shows route when Schedule sheet is open.
+  // Gated on sheetOpen — this writes the SAME rideData.origin/destination keys Find Ride owns.
   useEffect(() => {
+    if (!sheetOpen) return;
     const hasValidPickup =
       pickupCoords &&
       typeof pickupCoords.lat === 'number' &&
@@ -415,7 +450,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
           : { lat: '', long: '', name: '' },
       } as any)
     );
-  }, [pickupCoords?.lat, pickupCoords?.lng, dropoffCoords?.lat, dropoffCoords?.lng, state.pickup_location, state.dropoff_location, dispatch]);
+  }, [sheetOpen, pickupCoords?.lat, pickupCoords?.lng, dropoffCoords?.lat, dropoffCoords?.lng, state.pickup_location, state.dropoff_location, dispatch]);
 
   // Fare from server (admin pricing + surge + fee settings)
   useEffect(() => {
@@ -451,6 +486,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
 
   useFocusEffect(
     useCallback(() => {
+      if (!sheetOpen) return;
       const backAction = () => {
         handleBack();
         return true;
@@ -462,7 +498,7 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
       );
 
       return () => backHandler.remove();
-    }, [])
+    }, [handleBack, sheetOpen])
   );
 
   const handleUseCurrentLocation = async () => {
@@ -880,15 +916,24 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
         closeDuration={1000}
         disableKeyboardHandling={true}
         disableBodyPanning={true}
-        style={tw.style(`px-5 py-4 rounded-t-[32px] bg-white`)}
+        style={{
+          ...StyleSheet.flatten(tw.style(`px-5 py-4 rounded-t-[32px] bg-white`)),
+          ...(keyboardPad > 0 ? { paddingBottom: 16 + keyboardPad } : null),
+        }}
         closeOnDragDown={false}
+        android_closeOnBackPress={false}
+        onClose={resetScheduleDraft}
       >
-        <View
-          style={{
-            flex: 1,
-            minHeight: Math.min(sheetHeight - 48, screenHeight * 0.9),
-          }}
-        >
+        <KeyboardDismissSurface>
+          <View
+            style={{
+              flex: 1,
+              minHeight: Math.min(
+                sheetHeight - 48 - keyboardPad,
+                screenHeight * 0.9
+              ),
+            }}
+          >
           {/* Header */}
           <View style={tw`flex-row items-center justify-between mb-2`}>
             <View style={tw`w-[28px]`} />
@@ -1405,7 +1450,8 @@ const BookRideSheet = ({ bottomSheetRef, getActiveBooking, openVersion }: Props)
             </Pressable>
           </View>
           ) : null}
-        </View>
+          </View>
+        </KeyboardDismissSurface>
       </BottomSheet>
     </>
   );

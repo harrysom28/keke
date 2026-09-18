@@ -7,17 +7,19 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
+import { BottomSheetMethods } from "@devvie/bottom-sheet";
 import React, { RefObject, useContext, useState } from "react";
 
 import { AntDesign } from "@expo/vector-icons";
 import { AppContext } from "@/app/context";
+import KeyboardAwareBottomSheet from "@/components/KeyboardAwareBottomSheet";
 import { PAY_CHANGE } from "@/constants";
 import axios from "axios";
 import { showErrorMessage } from "@/utils/errorHandler";
 import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
+import { windowHeightRatio } from "@/hooks/useKeyboardInset";
 
 interface LProps {
   label: string;
@@ -83,20 +85,18 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
   };
 
   return (
-    <BottomSheet
-      height={"60%"}
+    <KeyboardAwareBottomSheet
+      height={windowHeightRatio(0.6)}
       ref={bottomSheetRef}
       animationType="spring"
       backdropMaskColor="#19191900"
       openDuration={1000}
-      disableKeyboardHandling={false}
-      disableBodyPanning={true}
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
       <View style={{ flex: 1 }}>
       <ScrollView
         style={{ flex: 1 }}
-        keyboardShouldPersistTaps="always"
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ flexGrow: 0, paddingBottom: 8 }}
         showsVerticalScrollIndicator={false}
       >
@@ -167,7 +167,7 @@ const PayChangeSheet = ({ ride, bottomSheetRef }: Props) => {
         </Pressable>
       </View>
       </View>
-    </BottomSheet>
+    </KeyboardAwareBottomSheet>
   );
 };
 

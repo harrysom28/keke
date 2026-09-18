@@ -2,6 +2,7 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  ScrollView,
   StatusBar,
   Text,
   TextInput,
@@ -21,20 +22,6 @@ import { showMessage } from "react-native-flash-message";
 import tw from "@/lib/tailwind";
 import { useDispatch } from "react-redux";
 import { useIsFocused } from "@react-navigation/native";
-
-// import { TextInput, View } from "@gorhom/bottom-sheet";
-
-
-
-
-
-
-
-
-
-
-
-
 
 interface SProps {
   show: boolean;
@@ -208,7 +195,12 @@ export const PromoCodeView = ({ back }: Props) => {
         modal={modal}
         action={back}
       />
-      <View style={tw``}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={tw`flex-grow`}
+      >
         <View
           style={tw.style(
             `flex-row items-center bg-[#F6F6F6] w-[99%] py-3 px-4 rounded-t-[16px]`,
@@ -248,6 +240,7 @@ export const PromoCodeView = ({ back }: Props) => {
             )}
             placeholder="Input promo code"
             placeholderTextColor="#C8C7CC"
+            returnKeyType="done"
           />
           <View style={tw`absolute top-2.5 left-4 bg-[#3C8F7C1A] p-1`}>
             <Svg width="24" height="18" viewBox="0 0 24 18" fill="none">
@@ -278,7 +271,7 @@ export const PromoCodeView = ({ back }: Props) => {
             </Text>
           )}
         </Pressable>
-      </View>
+      </ScrollView>
     </>
   );
 };

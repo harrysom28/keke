@@ -9,15 +9,17 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
+import { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { Defs, Line, LinearGradient, Path, Stop, Svg } from "react-native-svg";
 import React, { RefObject, useCallback, useEffect, useState } from "react";
 import { router, useFocusEffect } from "expo-router";
 
+import KeyboardAwareBottomSheet from "@/components/KeyboardAwareBottomSheet";
 import { MapArrowSvg } from "@/svg";
 import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
+import { windowHeightRatio } from "@/hooks/useKeyboardInset";
 
 function ConfirmPayment({
   bottomSheetRef,
@@ -78,7 +80,7 @@ interface Props {
 }
 
 const Payment = ({ bottomSheetRef, display }: Props) => {
-  const [height, setHeight] = useState<string>("60%");
+  const [heightPct, setHeightPct] = useState(0.6);
   const isFocused = useIsFocused();
   const insets = useCombinedSafeInsets();
   const footerPad = sheetFooterBottomPadding(insets.bottom);
@@ -108,22 +110,20 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
   useEffect(() => {
     if (isFocused) {
       if (display === "payment") {
-        setHeight("43%");
+        setHeightPct(0.43);
       } else {
-        setHeight("72%");
+        setHeightPct(0.72);
       }
     }
   }, [display, isFocused]);
 
   return (
-    <BottomSheet
-      height={height}
+    <KeyboardAwareBottomSheet
+      height={windowHeightRatio(heightPct)}
       ref={bottomSheetRef}
       animationType="spring"
       backdropMaskColor="#19191900"
       openDuration={1000}
-      disableKeyboardHandling={false}
-      disableBodyPanning={true}
       style={tw`gap-y-4 px-6 py-2 rounded-t-[40px] bg-white`}
     >
       {display === "payment" ? (
@@ -134,7 +134,7 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
         <View style={{ flex: 1 }}>
         <ScrollView
           style={{ flex: 1 }}
-          keyboardShouldPersistTaps="always"
+          keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ flexGrow: 0, paddingBottom: 8 }}
           showsVerticalScrollIndicator={false}
         >
@@ -245,7 +245,7 @@ const Payment = ({ bottomSheetRef, display }: Props) => {
         </View>
         </View>
       )}
-    </BottomSheet>
+    </KeyboardAwareBottomSheet>
   );
 };
 

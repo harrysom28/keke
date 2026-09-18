@@ -4,7 +4,6 @@ import {
   Pressable,
   StatusBar,
   Text,
-  TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,

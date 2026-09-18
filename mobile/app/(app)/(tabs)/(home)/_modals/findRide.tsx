@@ -7,9 +7,10 @@ import {
 } from "@/store/AppSlice";
 import {
   BackHandler,
-  Dimensions,
   Keyboard,
   StatusBar,
+  useWindowDimensions,
+  StyleSheet,
   View,
 } from "react-native";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
@@ -41,7 +42,7 @@ import {
   cancelUnpaidCardRide,
   collectRideCardPayment,
 } from "@/utils/openRideCardPayment";
-import { heightAboveKeyboard, useKeyboardInset } from "@/hooks/useKeyboardInset";
+import { useKeyboardSheetLayout } from "@/hooks/useKeyboardInset";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -63,11 +64,16 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
-  const screenHeight = Dimensions.get('window').height;
+  // Reactive: a one-shot Dimensions read goes stale across rotation, multi-window
+  // and OEM insets, leaving the cap computed against the wrong screen.
+  const { height: screenHeight } = useWindowDimensions();
+  // Room the sheet can give its content, mirroring `handleContentLayout`'s cap
+  // minus the sheet chrome (close-button row + vertical padding).
+  const contentMaxHeight = Math.max(240, Math.round(screenHeight * 0.92) - 56);
   const [height, setHeight] = useState<number>(Math.round(screenHeight * 0.6));
-  const keyboardHeight = useKeyboardInset(sheetOpen);
   const [locationSearchActive, setLocationSearchActive] = useState(false);
   const locationSearchActiveRef = useRef(false);
+  const keyboardPadRef = useRef(0);
   locationSearchActiveRef.current = locationSearchActive;
   const [step, setStep] = useState<number>(1);
   const contentHeightRef = useRef(0);
@@ -80,7 +86,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   const vehicleTypeId = rideData?.vehicle_type_id ?? null;
 
   const handleContentLayout = useCallback((event: any) => {
-    if (locationSearchActiveRef.current) return;
+    if (locationSearchActiveRef.current || keyboardPadRef.current > 0) return;
     const measured = event?.nativeEvent?.layout?.height;
     if (!measured || measured <= 50) return;
 
@@ -456,24 +462,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         // Vehicle selection with payment and promo
         return (
           <SelectVehicleView
-            onHeightChange={(measuredHeight) => {
-              if (measuredHeight && measuredHeight > 0 && isFinite(measuredHeight)) {
-                // measuredHeight is already in pixels; add buffer so Request Ride button is fully visible
-                const heightValue = Math.round(measuredHeight) + 40;
-                // Clamp between 200px and 95% of screen to show all content
-                const clampedHeight = Math.max(200, Math.min(heightValue, Math.round(screenHeight * 0.95)));
-                contentHeightRef.current = clampedHeight;
-                setHeight(clampedHeight);
-                console.log('📐 Modal height updated:', {
-                  measuredHeight,
-                  clampedHeight,
-                  screenHeight,
-                  percentage: `${((clampedHeight / screenHeight) * 100).toFixed(1)}%`
-                });
-              } else {
-                console.warn('⚠️ Invalid height measured:', measuredHeight);
-              }
-            }}
+            maxContentHeight={contentMaxHeight}
             action={(vehicle: TVehicle, paymentMethod: string, promoCode?: string) => {
               // Extract pricing data
               const vehicleWithPricing = vehicle as any;
@@ -574,15 +563,18 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     
     // Ensure it's a reasonable value (between 200px and screen height)
     heightValue = Math.max(200, Math.min(heightValue, screenHeight));
-    if (locationSearchActive || keyboardHeight > 0) {
-      heightValue = Math.min(
-        heightAboveKeyboard(screenHeight, keyboardHeight) - 8,
-        Math.round(screenHeight * 0.98)
-      );
-      heightValue = Math.max(280, heightValue);
-    }
     return Math.round(heightValue);
   };
+
+  const baseHeight = getValidHeight();
+  // Resizes only once the keyboard reports real coverage; otherwise this returns
+  // `baseHeight` and no padding, so the sheet keeps its measured content height.
+  const { height: sheetHeight, paddingBottom: keyboardPad } =
+    useKeyboardSheetLayout(
+      Number.isFinite(baseHeight) && baseHeight > 0 ? baseHeight : 600,
+      sheetOpen
+    );
+  keyboardPadRef.current = keyboardPad;
 
   // Don't render the BottomSheet at all if there's no valid content
   const content = useMemo(() => RenderView(), [RenderView]);
@@ -590,7 +582,12 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   // If there's no content, don't render anything
   if (!content) return null;
 
-  const validHeight = getValidHeight();
+  const sheetStyle = {
+    ...StyleSheet.flatten(
+      tw`gap-y-2 px-6 pt-1 pb-2 rounded-t-[40px] bg-white`
+    ),
+    ...(keyboardPad > 0 ? { paddingBottom: 8 + keyboardPad } : null),
+  };
 
   const sheetCloseButton = (
     <View style={tw`flex-row justify-end items-center mb-1`}>
@@ -605,7 +602,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     </View>
   );
 
-  if (!validHeight || validHeight <= 0 || isNaN(validHeight) || !isFinite(validHeight)) {
+  if (!sheetHeight || sheetHeight <= 0 || isNaN(sheetHeight) || !isFinite(sheetHeight)) {
     const fallbackHeight = 600;
     return (
       <BottomSheet
@@ -619,7 +616,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         // Android: PanResponder on the sheet body steals/conflicts with TextInput & ScrollView touches
         // on some devices (e.g. Samsung). Drag-to-close still works via the handle bar.
         disableBodyPanning={true}
-        style={tw`gap-y-2 px-6 pt-1 pb-2 rounded-t-[40px] bg-white`}
+        style={sheetStyle}
         closeOnDragDown={true}
         onClose={handleSheetClosed}
       >
@@ -633,7 +630,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
 
   return (
     <BottomSheet
-      height={validHeight}
+      height={sheetHeight}
       ref={bottomSheetRef}
       animationType="spring"
       backdropMaskColor="#19191900"
@@ -641,7 +638,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       closeDuration={1000}
       disableKeyboardHandling={true}
       disableBodyPanning={true}
-      style={tw`gap-y-2 px-6 pt-1 pb-2 rounded-t-[40px] bg-white`}
+      style={sheetStyle}
       closeOnDragDown={true}
       onClose={handleSheetClosed}
     >

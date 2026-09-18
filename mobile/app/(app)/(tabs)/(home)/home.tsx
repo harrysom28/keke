@@ -271,6 +271,7 @@ export default function HomeScreen() {
   /** Measured height of the scheduled-booking preview card for map top padding. */
   const [bookingCardHeight, setBookingCardHeight] = useState(0);
   const [bookRideOpenVersion, setBookRideOpenVersion] = useState(0);
+  const [bookRideSheetOpen, setBookRideSheetOpen] = useState(false);
   const [findRideSheetOpen, setFindRideSheetOpen] = useState(false);
   const [nearby, setNearby] = useState<
     {
@@ -1006,6 +1007,7 @@ export default function HomeScreen() {
     const tryOpen = () => {
       if (bookRideSheetRef?.current?.open) {
         setBookRideOpenVersion((value) => value + 1);
+        setBookRideSheetOpen(true);
         bookRideSheetRef.current.open();
         router.setParams({ openBookRide: undefined });
         setPendingOpenBookRide(false);
@@ -3228,6 +3230,7 @@ export default function HomeScreen() {
             onPress={() => {
               dispatch(setAppData({ isBooking: true }));
               setBookRideOpenVersion((value) => value + 1);
+              setBookRideSheetOpen(true);
               setTimeout(() => bookRideSheetRef?.current?.open(), 100);
             }}
             activeOpacity={0.75}
@@ -3286,6 +3289,8 @@ export default function HomeScreen() {
           bottomSheetRef={bookRideSheetRef}
           getActiveBooking={getActiveBooking}
           openVersion={bookRideOpenVersion}
+          sheetOpen={bookRideSheetOpen}
+          onSheetClose={() => setBookRideSheetOpen(false)}
         />
       </Portal>
       <Portal>

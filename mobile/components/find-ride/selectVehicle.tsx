@@ -1,5 +1,5 @@
 import { ActivityIndicator, Image, Text, View, StyleSheet, Dimensions, TextInput, FlatList, InteractionManager } from "react-native";
-import React, { useCallback, useContext, useEffect, useMemo, useState, useRef } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { AppContext } from "@/app/context";
 import { FareBreakdownModal } from "./fareBreakdown";
@@ -16,7 +16,7 @@ import apiClient from "@/utils/apiClient";
 import { AntDesign, Ionicons } from "@expo/vector-icons";
 import { Path, Svg } from "react-native-svg";
 import { requestManager } from "@/utils/requestManager";
-import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
 import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
 import PaymentMethodSelector from "@/components/PaymentMethodSelector";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
@@ -32,7 +32,11 @@ import { getCachedWallet, setCachedWallet } from "@/utils/walletCache";
 interface Props {
   action: (vehicle: TVehicle, paymentMethod: string, promoCode?: string) => void;
   back?: () => void;
-  onHeightChange?: (height: number) => void;
+  /**
+   * Room available inside the sheet. Caps the content so the list shrinks and
+   * scrolls instead of pushing the pinned action button past the sheet's edge.
+   */
+  maxContentHeight?: number;
 }
 
 interface VehicleWithPricing extends TVehicle {
@@ -81,7 +85,7 @@ const DEFAULT_VEHICLES: TVehicle[] = [
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => {
+const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) => {
   const insets = useCombinedSafeInsets();
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
@@ -128,38 +132,7 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
   }, [publicConfig.paymentMethods, walletAvailableBalance, selectedFareTotal]);
 
   const isFocused = useIsFocused();
-  const contentRef = useRef<View>(null);
-  
-  // Measure content height when content changes (vehicle selected, promo expanded, etc.)
-  useEffect(() => {
-    if (contentRef.current && onHeightChange) {
-      // Longer delay to ensure all vehicles are fully laid out
-      const timeoutId = setTimeout(() => {
-        contentRef.current?.measure((x, y, width, height, pageX, pageY) => {
-          if (height > 0) {
-            // Calculate dynamic padding based on content
-            const basePadding = 40;
-            const selectionPadding = selectedVehicle ? 120 : 0;
-            const promoPadding = (selectedVehicle && showPromoInput) ? 60 : 0;
-            const vehiclesPadding = vehicles.length > 3 ? (vehicles.length - 3) * 20 : 0;
-            
-            const totalHeight = height + basePadding + selectionPadding + promoPadding + vehiclesPadding;
-            onHeightChange(totalHeight);
-            console.log('🔄 Content changed, remeasured height:', { 
-              height, 
-              total: totalHeight,
-              vehiclesCount: vehicles.length,
-              hasSelectedVehicle: !!selectedVehicle,
-              showPromoInput,
-            });
-          }
-        });
-      }, 300); // Increased delay to ensure layout is complete
-      
-      return () => clearTimeout(timeoutId);
-    }
-  }, [selectedVehicle, showPromoInput, vehicles.length, onHeightChange]);
-  
+
   const rideData = ride?.data as any;
   
   const formatPrice = useCallback((cost: number) => {
@@ -490,146 +463,19 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
     const interactionTask = InteractionManager.runAfterInteractions(() => {
       getVehicleData();
     });
-    
-    // Trigger initial height measurement after a short delay
-    if (onHeightChange && contentRef.current) {
-      const timeoutId = setTimeout(() => {
-        if (contentRef.current) {
-          contentRef.current.measure((x, y, width, height, pageX, pageY) => {
-            if (height > 0 && onHeightChange) {
-              // Add extra padding to ensure buttons are visible
-              const extraPadding = selectedVehicle ? 60 : 30;
-              const totalHeight = height + extraPadding;
-              onHeightChange(totalHeight);
-              console.log('📏 Initial height measurement:', { 
-                height, 
-                total: totalHeight,
-                extraPadding,
-                hasSelectedVehicle: !!selectedVehicle
-              });
-            }
-          });
-        }
-      }, 300);
-      
-      return () => {
-        interactionTask.cancel();
-        clearTimeout(timeoutId);
-        // Clear vehicle-related cache when component unmounts
-        console.log('🧹 SelectVehicleView unmounting, clearing cache');
-      };
-    } else {
-      return () => {
-        interactionTask.cancel();
-        // Clear vehicle-related cache when component unmounts
-        console.log('🧹 SelectVehicleView unmounting, clearing cache');
-      };
-    }
-  }, [isFocused, onHeightChange]); // Added onHeightChange to dependencies
 
-  // Track content changes to trigger height remeasurement
-  useEffect(() => {
-    if (onHeightChange && contentRef.current) {
-      // Force a layout recalculation by requesting a layout measurement
-      // This ensures onLayout fires when content changes
-      const timeoutId = setTimeout(() => {
-      // Calculate height based on content
-      const screenHeight = Dimensions.get('window').height;
-      const headerHeight = 65; // More compact header
-      // Height per vehicle card (~65px per card + 10px margin for spacing)
-      const vehicleCardHeight = 75;
-      const vehiclesHeight = vehicles.length * vehicleCardHeight;
-      // Additional height when vehicle is selected (more compact):
-      const selectedButtonHeight = 0; // Removed selected button
-      const paymentSectionHeight = selectedVehicle ? 45 : 0;
-      const promoSectionHeight = selectedVehicle ? (showPromoInput ? 65 : 30) : 0;
-      const requestButtonHeight = selectedVehicle ? 56 : 0; // button + wrapper, enough for full visibility
-      const selectionHeight = selectedButtonHeight + paymentSectionHeight + promoSectionHeight + requestButtonHeight;
-      // Extra padding so last button and safe area are fully visible
-      const bottomPadding = 40;
-      
-      // Calculate total height needed
-      const totalHeight = headerHeight + vehiclesHeight + selectionHeight + bottomPadding;
-      
-      // Set a minimum height and maximum height (95% of screen to show all content)
-      const minHeight = Math.min(480, screenHeight * 0.55);
-      const maxHeight = screenHeight * 0.95; // Increased to 95% to show all content
-      const finalHeight = Math.max(minHeight, Math.min(maxHeight, totalHeight));
-        
-        onHeightChange(finalHeight);
-        console.log('🔄 Content changed, recalculated height:', { 
-          calculated: totalHeight,
-          final: finalHeight,
-          vehiclesCount: vehicles.length,
-          vehiclesHeight,
-          hasSelectedVehicle: !!selectedVehicle,
-          showPromoInput,
-          screenHeight,
-        });
-      }, 300); // Increased delay to ensure layout is complete
-      
-      return () => clearTimeout(timeoutId);
-    }
-  }, [selectedVehicle, showPromoInput, vehicles.length, onHeightChange]);
+    return () => {
+      interactionTask.cancel();
+      // Clear vehicle-related cache when component unmounts
+      console.log('🧹 SelectVehicleView unmounting, clearing cache');
+    };
+  }, [isFocused]);
 
   console.log('🎨 Render state:', { loading, vehiclesCount: vehicles.length, isFocused });
 
   const shouldShowLoadingState = (loading && vehicles.length === 0) || (!vehicles || vehicles.length === 0);
 
   console.log('🎨 Rendering vehicles list with', vehicles.length, 'vehicles');
-
-  // Measure total content height including header and all sections
-  const handleWrapperLayout = (event: any) => {
-    const { height } = event.nativeEvent.layout;
-    if (onHeightChange && height > 0) {
-      // Calculate dynamic height based on content
-      // Base height for header (more compact)
-      const headerHeight = 65;
-      // Height per vehicle card (~65px per card + 10px margin for spacing)
-      const vehicleCardHeight = 75;
-      const vehiclesHeight = vehicles.length * vehicleCardHeight;
-      // Additional height when vehicle is selected (more compact):
-      // - Payment section: ~45px
-      // - Promo section (collapsed): ~30px
-      // - Promo section (expanded): ~65px
-      // - Request Ride button: ~38px
-      const selectedButtonHeight = 0; // Removed selected button
-      const paymentSectionHeight = selectedVehicle ? 45 : 0;
-      const promoSectionHeight = selectedVehicle ? (showPromoInput ? 65 : 30) : 0;
-      const requestButtonHeight = selectedVehicle ? 56 : 0; // button + wrapper, enough for full visibility
-      const selectionHeight = selectedButtonHeight + paymentSectionHeight + promoSectionHeight + requestButtonHeight;
-      // Extra padding so last button and safe area are fully visible
-      const bottomPadding = 40;
-      
-      // Calculate total height needed
-      const totalHeight = headerHeight + vehiclesHeight + selectionHeight + bottomPadding;
-      
-      // Set a minimum height and maximum height (increased by 20%)
-      const screenHeight = Dimensions.get('window').height;
-      const minHeight = Math.min(480, screenHeight * 0.55);
-      const maxHeight = screenHeight * 0.95; // Increased to 95% to show all content
-      // Add buffer so Request Ride button is never clipped
-      const increasedHeight = totalHeight + 48;
-      const finalHeight = Math.max(minHeight, Math.min(maxHeight, increasedHeight));
-      
-      onHeightChange(finalHeight);
-      console.log('📏 onLayout - Total content height calculated:', { 
-        wrapper: height, 
-        calculated: totalHeight,
-        final: finalHeight,
-        headerHeight,
-        vehiclesHeight,
-        vehiclesCount: vehicles.length,
-        selectionHeight,
-        selectedButtonHeight,
-        paymentSectionHeight,
-        promoSectionHeight,
-        requestButtonHeight,
-        hasSelectedVehicle: !!selectedVehicle,
-        showPromoInput,
-      });
-    }
-  };
 
   const renderVehicleItem = useCallback(({ item: vehicle }: { item: VehicleWithPricing }) => {
     const originalPrice = vehicle.cost ?? 0;
@@ -709,7 +555,7 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
   );
 
   const requestButtonPaddingStyle = useMemo(
-    () => ({ paddingBottom: Math.max(insets.bottom + 10, 18) }),
+    () => ({ paddingBottom: sheetFooterBottomPadding(insets.bottom) }),
     [insets.bottom]
   );
 
@@ -724,10 +570,12 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
   }
 
   return (
-    <View 
-      style={[styles.wrapper, { width: '100%' }]}
-      ref={contentRef}
-      onLayout={handleWrapperLayout}
+    <View
+      style={[
+        styles.wrapper,
+        { width: '100%' },
+        maxContentHeight ? { maxHeight: maxContentHeight } : null,
+      ]}
     >
       {/* Header */}
       <View style={styles.header}>
@@ -814,32 +662,6 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
         </>
       )}
 
-      {/* Request Ride Button - At end of content */}
-      {selectedVehicle && (
-        <View style={[styles.requestButtonWrapper, requestButtonPaddingStyle]}>
-          <TouchableOpacity
-            style={[
-              styles.requestButton,
-              selectedIsWallet && walletInsufficientForSelectedFare && styles.requestButtonDisabled,
-            ]}
-            onPress={() => {
-              if (selectedIsWallet && walletInsufficientForSelectedFare) {
-                showMessage({
-                  type: "warning",
-                  message: "Insufficient wallet balance. Switch to Cash or top up your wallet.",
-                });
-                return;
-              }
-              action(selectedVehicle, selectedPayment, promoCode || undefined);
-            }}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.requestButtonText}>Request Ride</Text>
-            <Ionicons name="arrow-forward" size={18} color="white" style={{ marginLeft: 6 }} />
-          </TouchableOpacity>
-        </View>
-      )}
-
       {/* Fare Breakdown Modal */}
       {selectedVehicle && selectedVehicle.cost !== null && selectedVehicle.cost > 0 && (() => {
         const fd = selectedVehicle.fareDetail;
@@ -879,6 +701,32 @@ const SelectVehicleViewComponent = ({ action, back, onHeightChange }: Props) => 
         )}
       >
       </FlatList>
+
+      {/* Pinned footer: stays outside the list so it can never scroll out of view. */}
+      {selectedVehicle && (
+        <View style={[styles.requestButtonWrapper, requestButtonPaddingStyle]}>
+          <TouchableOpacity
+            style={[
+              styles.requestButton,
+              selectedIsWallet && walletInsufficientForSelectedFare && styles.requestButtonDisabled,
+            ]}
+            onPress={() => {
+              if (selectedIsWallet && walletInsufficientForSelectedFare) {
+                showMessage({
+                  type: "warning",
+                  message: "Insufficient wallet balance. Switch to Cash or top up your wallet.",
+                });
+                return;
+              }
+              action(selectedVehicle, selectedPayment, promoCode || undefined);
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.requestButtonText}>Request Ride</Text>
+            <Ionicons name="arrow-forward" size={18} color="white" style={{ marginLeft: 6 }} />
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 };
@@ -928,12 +776,16 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: '#fff',
     width: '100%',
+    // Shrink (and scroll) when the sheet is capped, so the pinned footer below
+    // always keeps its room. Not `flex: 1` — the sheet body has no fixed height.
+    flexShrink: 1,
   },
   scrollContent: {
     paddingHorizontal: 20,
     paddingTop: 2,
-    // Ensure footer/button area isn't clipped on compact screens.
-    paddingBottom: 44,
+    // The action button is a pinned sibling now, so this only needs to clear the
+    // last row rather than reserve space for the footer.
+    paddingBottom: 12,
   },
   vehicleCardContainer: {
     marginBottom: 10,
@@ -1181,7 +1033,10 @@ const styles = StyleSheet.create({
   requestButtonWrapper: {
     marginTop: 0,
     marginBottom: 0,
-    paddingTop: 0,
+    // Outside the list now, so it needs the gutters the list supplied before.
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#F0F0F0',
   },

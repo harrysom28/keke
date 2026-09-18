@@ -1,0 +1,19 @@
+---
+description: Keyboard, bottom sheet, and modal patterns for the React Native app
+globs: mobile/**/*.{tsx,ts}
+alwaysApply: false
+---
+
+# Mobile keyboard and sheets
+
+Do not copy keyboard math, `disableKeyboardHandling`, or `KeyboardAvoidingView` into individual screens. The policy lives in shared primitives.
+
+1. **Full-screen forms** → `KeyboardFormScrollView`. Never wrap it in `KeyboardAvoidingView`. Overlay IME (edge-to-edge Android) is padded via `useKeyboardInset`; `automaticallyAdjustKeyboardInsets` only stays on when that inset is 0. Padding alone does not move a covered field — any scroller with inputs also needs `useFocusedInputReveal`, because Android never scrolls the focused input out of the IME on its own.
+
+2. **`@devvie/bottom-sheet` with inputs** → `KeyboardAwareBottomSheet` and a pixel `height` (`windowHeightRatio(0.6)` etc.). Never set `disableKeyboardHandling={false}`. The library PanResponder fights `TextInput` / `ScrollView` on Android. Edge-to-edge Android overlays the IME: lift with bottom padding from `useKeyboardSheetLayout`, do not shrink height while staying `bottom: 0`.
+
+3. **Transparent bottom modals with inputs** → `KeyboardSheetModal`. Backdrop must stay a sibling of the card (not an ancestor). Offset with the built-in `marginBottom` inset. Do not wrap gesture-handler `TouchableOpacity` in RN `TouchableWithoutFeedback`. Do not add a second `KeyboardAvoidingView`.
+
+4. **Existing screens** (`bookRide`, `findRide`, wallet, feedback review) already follow this policy via `useKeyboardInset` / `heightAboveKeyboard`. When you next touch them, prefer the primitives above instead of adding another local variant.
+
+If a field is covered by the keyboard or taps are flaky, fix the primitive — do not patch one more screen.

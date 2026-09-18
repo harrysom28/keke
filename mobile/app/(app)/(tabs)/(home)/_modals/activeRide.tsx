@@ -59,6 +59,7 @@ const ActiveRideSheet = ({
   const [modal, setModal] = useState<boolean>(false);
   const [chatModal, setChatModal] = useState<boolean>(false);
   const [summaryRide, setSummaryRide] = useState<Record<string, unknown> | null>(null);
+  const [sheetVisible, setSheetVisible] = useState(false);
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastChatKickRef = useRef(0);
   const blankAutoClosedRef = useRef(false);
@@ -425,7 +426,8 @@ const ActiveRideSheet = ({
     setChatModal(true);
   }, [chatOpenSignal]);
 
-  const handleBack = () => {
+  const handleBack = useCallback(() => {
+    setSheetVisible(false);
     bottomSheetRef?.current?.close();
     setTimeout(() => {
       dispatch(
@@ -439,12 +441,33 @@ const ActiveRideSheet = ({
     if (clearMap) {
       clearMap({ navigateHome: true });
     }
-  };
+  }, [bottomSheetRef, clearMap, dispatch, setCurrentView]);
+
+  const minimizeSheet = useCallback(() => {
+    setSheetVisible(false);
+    bottomSheetRef?.current?.close();
+    setTimeout(() => {
+      dispatch(setAppData({ isBooking: false }));
+    }, 200);
+  }, [bottomSheetRef, dispatch]);
+
+  const goToWaiting = useCallback(() => {
+    setCurrentView((prev) => ({ ...prev, screen: "WAITING" }));
+  }, [setCurrentView]);
 
   const rideIdForHook =
     rideDataForWaiting?.ride_id ||
     (rideDataForWaiting as any)?._id ||
     (rideDataForWaiting as any)?.rideId;
+
+  const dismissPanel = useCallback(() => {
+    const screen = currentView?.screen || (rideIdForHook ? "WAITING" : "");
+    if (screen === "SUMMARY" || screen === "REVIEW" || !rideIdForHook) {
+      handleBack();
+      return;
+    }
+    minimizeSheet();
+  }, [currentView?.screen, handleBack, minimizeSheet, rideIdForHook]);
 
   // Self-heal: after reload, Home may open the sheet before `currentView.screen`
   // is restored. If we have a real rideId, ensure we render WAITING.
@@ -694,9 +717,32 @@ const ActiveRideSheet = ({
 
   useFocusEffect(
     useCallback(() => {
+      if (!sheetVisible) return;
+      const screen = currentView?.screen || (rideIdForHook ? "WAITING" : "");
       const backAction = () => {
-        handleBack();
-        return true;
+        switch (screen) {
+          case "SEARCH":
+            setCurrentView((prev) => ({ ...prev, screen: "WAITING" }));
+            return true;
+          case "DRIVERS":
+            setCurrentView((prev) => ({ ...prev, screen: "SEARCH" }));
+            return true;
+          case "DRIVER":
+            goToWaiting();
+            return true;
+          case "SUMMARY":
+          case "REVIEW":
+            handleBack();
+            return true;
+          case "WAITING":
+          default:
+            if (rideIdForHook) {
+              minimizeSheet();
+            } else {
+              handleBack();
+            }
+            return true;
+        }
       };
 
       const backHandler = BackHandler.addEventListener(
@@ -707,7 +753,15 @@ const ActiveRideSheet = ({
       return () => {
         backHandler.remove();
       };
-    }, [currentView?.screen])
+    }, [
+      currentView?.screen,
+      goToWaiting,
+      handleBack,
+      minimizeSheet,
+      rideIdForHook,
+      setCurrentView,
+      sheetVisible,
+    ])
   );
 
   const RenderView = useCallback(() => {
@@ -831,7 +885,7 @@ const ActiveRideSheet = ({
         return (
           <DriverInfoView
             clear={() => setModal(true)}
-            back={handleBack}
+            back={goToWaiting}
             isActive
           />
         );
@@ -908,6 +962,7 @@ const ActiveRideSheet = ({
     temp,
     dispatch,
     handleBack,
+    goToWaiting,
     setModal,
     setChatModal,
     setCurrentView,
@@ -982,6 +1037,9 @@ const ActiveRideSheet = ({
       disableBodyPanning={true}
       style={tw`px-6 py-0 rounded-t-[40px] bg-white`}
       closeOnDragDown={false}
+      android_closeOnBackPress={false}
+      onOpen={() => setSheetVisible(true)}
+      onClose={() => setSheetVisible(false)}
     >
       <DriverChatModal
         data={{
@@ -1070,7 +1128,7 @@ const ActiveRideSheet = ({
         }}
       >
         <TouchableOpacity
-          onPress={handleBack}
+          onPress={dismissPanel}
           style={tw.style(`absolute top-0 right-0 z-50`, {
             paddingTop: 8,
             paddingRight: 8,

@@ -17,8 +17,8 @@ import { AntDesign, Feather, FontAwesome } from "@expo/vector-icons";
 import BottomSheet, {
   BottomSheetBackdrop,
   BottomSheetBackdropProps,
+  BottomSheetScrollView,
   BottomSheetTextInput,
-  BottomSheetView,
 } from "@gorhom/bottom-sheet";
 import React, {
   useCallback,
@@ -38,6 +38,7 @@ import { showMessage } from "react-native-flash-message";
 import { getErrorMessage } from "@/utils/errorHandler";
 import tw from "@/lib/tailwind";
 import { KeyboardFormScrollView } from "@/components/KeyboardFormScrollView";
+import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { useIsFocused } from "@react-navigation/native";
 import { useSelector } from "react-redux";
 import { AuthState } from "@/store/AuthSlice";
@@ -109,6 +110,8 @@ const DailyActivities = () => {
   let isFocused = useIsFocused();
   const bottomSheetRef = useRef<BottomSheet>(null);
   const [modal, setModal] = useState(false);
+  const [bankSheetOpen, setBankSheetOpen] = useState(false);
+  const bankKeyboardInset = useKeyboardInset(bankSheetOpen);
 
   const { apiConfig } = useContext(AppContext);
   const { token } = useSelector(AuthState);
@@ -747,9 +750,16 @@ const DailyActivities = () => {
           handleStyle={tw`bg-white rounded-t-[40px] pt-3 pb-1`}
           backgroundStyle={tw`bg-white rounded-t-[40px]`}
           style={tw`px-4`}
-          //   enablePanDownToClose
+          onChange={(index) => setBankSheetOpen(index >= 0)}
         >
-          <BottomSheetView style={tw`flex-col px-1 pb-4`}>
+          <BottomSheetScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            contentContainerStyle={{
+              paddingBottom: 16 + bankKeyboardInset,
+            }}
+            style={tw`px-1`}
+          >
             {/* Title row rendered INSIDE the content so it can never overlap
                 the form below. Previously this lived in `handleComponent`,
                 which @gorhom/bottom-sheet measures with `handleHeight`; even
@@ -932,7 +942,7 @@ const DailyActivities = () => {
                 )}
               </TouchableOpacity>
             </View>
-          </BottomSheetView>
+          </BottomSheetScrollView>
         </BottomSheet>
       </Portal>
     </>
