@@ -133,6 +133,9 @@ async function pushOfferToDriver(driver, ridePayload, rideId) {
 export async function sendNoDriverFoundOnce(rideId) {
   const ride = await Ride.findById(rideId).populate('rider');
   if (!ride) return;
+  // Scheduled bookings stay in the poller / overdue path — never terminal-cancel
+  // them just because this instant-match round found nobody.
+  if (ride.isScheduled) return;
   if (ride.driver || !MATCHING_STATUSES.includes(ride.status)) return;
   if (ride.noDriverNotified) return;
 
@@ -209,7 +212,7 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
 
   if (driverIds.length === 0) {
     logger.info(`dispatchRide: no drivers for ride ${ride._id}`);
-    await sendNoDriverFoundOnce(ride._id);
+    if (!ride.isScheduled) await sendNoDriverFoundOnce(ride._id);
     return { offersCreated: 0 };
   }
 
@@ -228,7 +231,7 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
 
   if (eligible.length === 0) {
     logger.info(`dispatchRide: no eligible drivers for ride ${ride._id}`);
-    await sendNoDriverFoundOnce(ride._id);
+    if (!ride.isScheduled) await sendNoDriverFoundOnce(ride._id);
     return { offersCreated: 0 };
   }
 
@@ -305,20 +308,22 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
     (async () => {
       try {
         const r = await Ride.findById(ride._id)
-          .select('status driver noDriverNotified attempts createdAt notifiedDriverIds')
+          .select('status driver noDriverNotified attempts createdAt notifiedDriverIds isScheduled')
           .lean();
         if (!r || r.driver || r.status === 'accepted' || r.noDriverNotified) return;
 
         const rideAge = Date.now() - new Date(r.createdAt).getTime();
         const tooManyAttempts = r.attempts >= MAX_DISPATCH_ATTEMPTS;
-        const tooOld = rideAge > RIDE_MAX_AGE_MS;
+        // Booking age is for instant matching only. Scheduled rides are created
+        // hours ahead; the 10-minute cap would kill them after one offer window.
+        const tooOld = !r.isScheduled && rideAge > RIDE_MAX_AGE_MS;
 
         if (tooManyAttempts || tooOld) {
           logger.info(
             `dispatchRide: giving up on ride ${r._id} ` +
-            `(attempts=${r.attempts}/${MAX_DISPATCH_ATTEMPTS}, age=${Math.round(rideAge / 1000)}s)`
+            `(attempts=${r.attempts}/${MAX_DISPATCH_ATTEMPTS}, age=${Math.round(rideAge / 1000)}s, scheduled=${!!r.isScheduled})`
           );
-          await sendNoDriverFoundOnce(ride._id);
+          if (!r.isScheduled) await sendNoDriverFoundOnce(ride._id);
           return;
         }
 
@@ -338,7 +343,7 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
 
         if (newDrivers.length === 0) {
           logger.info(`dispatchRide: no fresh drivers for ride ${ride._id}, giving up`);
-          await sendNoDriverFoundOnce(ride._id);
+          if (!r.isScheduled) await sendNoDriverFoundOnce(ride._id);
           return;
         }
 

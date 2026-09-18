@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import rideMatchingService from './rideMatchingService.js';
 import notificationService from './notificationService.js';
 import { dispatchRide, notifyNoDriverFound } from './driverNotificationService.js';
+import { SCHEDULED_DISPATCH_LEAD_MS } from '../utils/scheduledRide.js';
 
 /**
  * Service to handle scheduled rides
@@ -48,7 +49,7 @@ class ScheduledRideService {
     this.isRunning = true;
     try {
       const now = new Date();
-      const fiveMinutesFromNow = new Date(now.getTime() + 5 * 60 * 1000);
+      const fiveMinutesFromNow = new Date(now.getTime() + SCHEDULED_DISPATCH_LEAD_MS);
 
       // Find scheduled rides that are within 5 minutes of their scheduled time
       // and haven't been assigned a driver yet
@@ -69,7 +70,13 @@ class ScheduledRideService {
 
       for (const ride of scheduledRides) {
         try {
-          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, undefined, 5);
+          const excludeIds = (ride.notifiedDriverIds || []).map((id) => id.toString());
+          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(
+            ride,
+            undefined,
+            5,
+            excludeIds
+          );
 
           if (matchedDrivers.length > 0) {
             setImmediate(() => {
@@ -108,7 +115,13 @@ class ScheduledRideService {
       for (const ride of overdueRides) {
         try {
           // Try to find alternative drivers with larger radius
-          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(ride, undefined, 10);
+          const excludeIds = (ride.notifiedDriverIds || []).map((id) => id.toString());
+          const matchedDrivers = await rideMatchingService.findAndMatchDrivers(
+            ride,
+            undefined,
+            10,
+            excludeIds
+          );
 
           if (matchedDrivers.length > 0) {
             setImmediate(() => {
@@ -168,6 +181,45 @@ class ScheduledRideService {
       this.isRunning = false;
     }
   }
+}
+
+/**
+ * Offer an unassigned scheduled ride to nearby drivers.
+ * Does not cancel the booking if nobody is found — the poller/overdue path owns that.
+ */
+export async function offerUnassignedScheduledRide(
+  rideId,
+  { excludeDriverIds = [], overdue = false } = {}
+) {
+  const rideDoc = await Ride.findById(rideId)
+    .populate('rider', 'name phone profileImage rating deviceToken')
+    .populate('vehicleType');
+
+  if (!rideDoc || rideDoc.driver) return { offered: false };
+  if (!['requested', 'searching', 'scheduled'].includes(rideDoc.status)) {
+    return { offered: false };
+  }
+  if (
+    rideDoc.paymentMethod === 'card' &&
+    String(rideDoc.paymentStatus || '').toLowerCase() === 'pending'
+  ) {
+    return { offered: false };
+  }
+
+  const matchedDrivers = await rideMatchingService.findAndMatchDrivers(
+    rideDoc,
+    undefined,
+    overdue ? 10 : 5,
+    excludeDriverIds
+  );
+
+  if (matchedDrivers.length === 0) {
+    logger.info(`offerUnassignedScheduledRide: no drivers for ${rideId}`);
+    return { offered: false };
+  }
+
+  await dispatchRide(rideDoc, matchedDrivers);
+  return { offered: true, driverCount: matchedDrivers.length };
 }
 
 const scheduledRideService = new ScheduledRideService();
