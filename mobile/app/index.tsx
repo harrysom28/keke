@@ -1,4 +1,3 @@
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import React, { useContext, useEffect } from "react";
 import { router, useRootNavigationState } from "expo-router";
 import { useDispatch, useSelector } from "react-redux";
@@ -8,10 +7,10 @@ import { updateToken, updateUser } from "@/store/AuthSlice";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { WEB_CLIENT_ID } from "@/constants/Keys";
 import { resetSubscription } from "@/store/AppSlice";
-import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import { AppContext } from "@/app/context";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
+import SplashLoading from "@/components/SplashLoading";
 
 const Index = () => {
   const rootNavigationState = useRootNavigationState();
@@ -63,11 +62,7 @@ const Index = () => {
     return () => clearTimeout(timeout);
   }, [dispatch, isFocused, roleLoaded, rootNavigationState?.key, token, user?.profile?.role]);
 
-  return (
-    <View style={tw`flex-1 justify-center items-center`}>
-      <ActivityIndicator color={tw.color("base-green")} size="large" />
-    </View>
-  );
+  return <SplashLoading />;
 };
 
 export default Index;
