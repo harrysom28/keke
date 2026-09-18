@@ -4,6 +4,7 @@ import {
   cacheDirectory,
   copyAsync,
   documentDirectory,
+  getInfoAsync,
 } from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
@@ -194,6 +195,17 @@ export const prepareImageForMultipart = async (
     throw new Error(
       `Photo could not be prepared for upload (${uri.split("://")[0] || "unknown"}). Retake it.`
     );
+  }
+
+  try {
+    const info = await getInfoAsync(uri);
+    if (!info.exists) {
+      throw new Error("Photo file is missing. Please retake it.");
+    }
+  } catch (infoErr) {
+    if (infoErr instanceof Error && infoErr.message.includes("retake")) {
+      throw infoErr;
+    }
   }
 
   return {

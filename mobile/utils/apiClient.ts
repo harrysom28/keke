@@ -88,30 +88,46 @@ apiClient.interceptors.request.use(
       // ignore
     }
 
-    // FormData: let the client set Content-Type (multipart/form-data with boundary)
-    // so file uploads (e.g. user/profile/upload-image) work correctly.
-    // Use duck-typing — in RN, `instanceof FormData` can fail across realms
-    // and leave Content-Type: application/json on the request, which the
-    // native layer rejects as a generic "Network Error" with no response.
+    // FormData on React Native: never send a Content-Type header.
+    //
+    // Deleting Content-Type is not enough. axios dispatchRequest() then does:
+    //   headers.setContentType('application/x-www-form-urlencoded', false)
+    // for every POST, and that `false` rewrite flag only skips the default
+    // when a value is already set. A missing header therefore becomes
+    // urlencoded (or stays application/json from instance defaults).
+    //
+    // Android XHR treats FormData + json/urlencoded (no multipart boundary)
+    // as a failed send — axios reports ERR_NETWORK with no response. iOS
+    // Simulator is more lenient, which is why driver/create can 201 there
+    // and show "Can't reach Keke Ride" on a physical device.
+    //
+    // Setting Content-Type to boolean `false` both blocks that urlencoded
+    // default and is omitted from AxiosHeaders.toJSON(), so the native
+    // stack attaches multipart/form-data with a boundary.
     const data = config.data as { append?: unknown; _parts?: unknown } | undefined;
     const isFormDataBody =
       !!data &&
       ((typeof FormData !== 'undefined' && data instanceof FormData) ||
         (typeof data.append === 'function' && Array.isArray((data as { _parts?: unknown })._parts)));
     if (isFormDataBody) {
-      const headers = config.headers as Record<string, unknown> & {
+      const headers = config.headers as {
+        setContentType?: (value: unknown) => void;
+        set?: (key: string, value: unknown) => void;
         delete?: (key: string) => void;
-        set?: (key: string, value: string) => void;
       };
       if (headers) {
-        if (typeof headers.delete === 'function') {
-          headers.delete('Content-Type');
-          headers.delete('content-type');
+        if (typeof headers.setContentType === 'function') {
+          headers.setContentType(false);
+        } else if (typeof headers.set === 'function') {
+          headers.set('Content-Type', false);
         } else {
-          delete headers['Content-Type'];
-          delete headers['content-type'];
+          delete (headers as Record<string, unknown>)['Content-Type'];
+          delete (headers as Record<string, unknown>)['content-type'];
         }
       }
+      // Don't let axios stringify FormData just because a JSON content-type
+      // leaked through from instance defaults.
+      config.transformRequest = [(body) => body];
       (config as { __isFormData?: boolean }).__isFormData = true;
     }
 
@@ -538,4 +554,87 @@ apiClient.interceptors.response.use(
 );
 
 export default apiClient;
+
+/**
+ * Multipart POST via fetch instead of axios XHR.
+ *
+ * Use this for driver KYC photos: RN fetch lets the native stack set the
+ * multipart boundary, and it does not run axios's POST → urlencoded default.
+ * Callers still go through the same base URL and bearer token as apiClient.
+ */
+export async function postFormData(
+  path: string,
+  formData: FormData,
+  options?: { timeout?: number }
+): Promise<{ status: number; data: unknown }> {
+  const relative = path.replace(/^\//, '');
+  const url = `${API_BASE_URL}${relative}`;
+  const timeout = options?.timeout ?? 180000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
+    'X-Request-Source': 'mobile-app',
+    'X-API-Version': '1.0',
+    'User-Agent': `KekeApp/${Constants.expoConfig?.version || '1.0.0'}`,
+  };
+  try {
+    const { token } = AppStore.getState().Auth;
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  } catch {
+    // ignore
+  }
+
+  if (__DEV__) {
+    console.log(`📤 API Request: POST ${url} (multipart)`);
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    let data: unknown = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { message: text };
+      }
+    }
+    if (__DEV__) {
+      console.log('📥 API Response:', res.status, stripApiUrlForLog(relative));
+    }
+    if (!res.ok) {
+      const payload = data as { message?: string } | null;
+      const err = new Error(payload?.message || `Request failed (${res.status})`) as Error & {
+        response?: { status: number; data: unknown };
+        status?: number;
+      };
+      err.response = { status: res.status, data };
+      err.status = res.status;
+      throw err;
+    }
+    return { status: res.status, data };
+  } catch (e: unknown) {
+    const err = e as { name?: string; message?: string; response?: unknown };
+    if (err?.name === 'AbortError') {
+      const timeoutErr = new Error(`timeout of ${timeout}ms exceeded`) as Error & {
+        code?: string;
+      };
+      timeoutErr.code = 'ECONNABORTED';
+      throw timeoutErr;
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
