@@ -6,6 +6,7 @@
     "export:android": "npm run export:android --prefix mobile",
     "export:ios": "npm run export:ios --prefix mobile",
     "admin": "serve admin -l 3000",
+    "agents": "serve agents -l 3001",
     "eas:android": "cd mobile && eas build --platform android --profile preview",
     "eas:android:production": "cd mobile && eas build --platform android --profile production"
   },

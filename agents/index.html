@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <title>Keke Agents</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' };
+  </script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.10/babel.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="bg-[#F4F7F6]">
+  <div id="root"></div>
+  <script>window.AGENT_API_BASE_URL = 'https://api.getkekeapp.com';</script>
+  <script>
+    (function() {
+      var host = window.location.hostname;
+      var isLocal = host === 'localhost' || host === '127.0.0.1';
+      var apiBase = window.AGENT_API_BASE_URL;
+      if (!apiBase)
+        apiBase = isLocal ? 'http://localhost:8000' : (window.location.protocol + '//' + host + ':8000');
+      window.__CONFIG__ = { API_BASE_URL: apiBase };
+    })();
+  </script>
+  <script src="auth.js"></script>
+  <script src="api.js"></script>
+  <script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

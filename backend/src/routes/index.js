@@ -15,6 +15,7 @@ import messageRoutes from './messageRoutes.js';
 import pusherRoutes from './pusherRoutes.js';
 import uploadRoutes from './uploadRoutes.js';
 import adminRoutes from './adminRoutes.js';
+import agentRoutes from './agentRoutes.js';
 import supportRoutes from './supportRoutes.js';
 import * as pusherController from '../controllers/pusherController.js';
 import * as driverController from '../controllers/driverController.js';
@@ -116,6 +117,7 @@ router.use('/vehicle', vehicleRoutes); // Vehicle routes
 router.use('/schedule', scheduleRoutes); // Scheduled bookings routes
 router.use('/maps', mapsRoutes); // Google Maps proxy routes
 router.use('/admin', adminRoutes); // Admin panel routes
+router.use('/agents', agentRoutes); // Field agent console (additive)
 router.use('/support', supportRoutes); // User support tickets
 router.use('/', paymentRoutes); // Payment routes use root paths matching mobile app endpoints
 router.use('/', profileRoutes); // Profile routes use root paths matching mobile app endpoints

@@ -8,18 +8,27 @@ function DriversPage({ onNavigate, showToast }) {
   const [pagination, setPagination] = useState({ page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
   const [verificationStatus, setVerificationStatus] = useState('');
+  const [agentId, setAgentId] = useState('');
+  const [agents, setAgents] = useState([]);
+
+  useEffect(() => {
+    Api.get('/api/admin/agents').then((res) => {
+      if (!res.error) setAgents(res.data?.data?.agents || []);
+    });
+  }, []);
 
   useEffect(() => {
     setLoading(true);
     const params = new URLSearchParams({ page: pagination.page, limit: 20 });
     if (verificationStatus) params.set('verificationStatus', verificationStatus);
+    if (agentId) params.set('agentId', agentId);
     Api.get('/api/admin/drivers?' + params).then((res) => {
       if (res.error) { showToast(res.error, 'error'); setDrivers([]); return; }
       const d = res.data?.data || res.data;
       setDrivers(d.drivers || []);
       setPagination((p) => ({ ...p, pages: d.pagination?.pages ?? 1 }));
     }).finally(() => setLoading(false));
-  }, [pagination.page, verificationStatus]);
+  }, [pagination.page, verificationStatus, agentId]);
 
   const columns = [
     { key: 'user', label: 'Name', render: (v) => v?.name ?? '—' },
@@ -44,12 +53,18 @@ function DriversPage({ onNavigate, showToast }) {
   return (
     <div className="space-y-4">
       <C.Breadcrumb items={[{ label: 'Drivers' }]} />
-      <div className="flex gap-2">
-        <select value={verificationStatus} onChange={(e) => setVerificationStatus(e.target.value)} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600">
-          <option value="">All</option>
+      <div className="flex gap-2 flex-wrap">
+        <select value={verificationStatus} onChange={(e) => { setVerificationStatus(e.target.value); setPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600">
+          <option value="">All statuses</option>
           <option value="pending">Pending</option>
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
+        </select>
+        <select value={agentId} onChange={(e) => { setAgentId(e.target.value); setPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600">
+          <option value="">All agents</option>
+          {agents.map((a) => (
+            <option key={a.agent_id} value={a.agent_id}>{a.name || a.phone || a.email || a.agent_id}</option>
+          ))}
         </select>
       </div>
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
@@ -62,7 +77,7 @@ function DriversPage({ onNavigate, showToast }) {
   );
 }
 
-function DriverDetailPage({ id, onBack, showToast }) {
+function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
   const [driver, setDriver] = useState(null);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, type: '', reason: '' });
@@ -188,6 +203,15 @@ function DriverDetailPage({ id, onBack, showToast }) {
           <div>
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{u.name || 'Unnamed driver'}</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">{u.email || 'No email'} {u.phone ? `· ${Utils.formatPhoneForDisplay(u.phone)}` : ''}</p>
+            {d.referred_by_agent_id && (
+              <button
+                type="button"
+                onClick={() => onNavigate && onNavigate('agent-detail', d.referred_by_agent_id)}
+                className="mt-1 text-sm text-blue-600 hover:underline"
+              >
+                Referred by agent
+              </button>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <span className={`inline-flex px-2.5 py-1 rounded-full text-sm ${badgeClass(review.overall_verification_status || d.verification_status)}`}>

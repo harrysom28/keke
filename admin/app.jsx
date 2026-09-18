@@ -156,6 +156,7 @@ function App() {
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'users', label: 'Users', icon: '👥' },
     { id: 'drivers', label: 'Drivers', icon: '🚗' },
+    { id: 'agents', label: 'Agents', icon: '🪪' },
     { id: 'rides', label: 'Rides', icon: '🗺️' },
     { id: 'finance', label: 'Finance', icon: '💰' },
     { id: 'offers', label: 'Offers', icon: '🏷️' },
@@ -170,6 +171,8 @@ function App() {
     dashboard: 'Dashboard',
     users: 'Users',
     drivers: 'Drivers',
+    agents: 'Agents',
+    'agent-detail': 'Agent',
     rides: 'Rides',
     finance: 'Finance',
     offers: 'Offers',
@@ -196,6 +199,8 @@ function App() {
   else if (page === 'user-detail') Content = Pages.UserDetail;
   else if (page === 'drivers') Content = Pages.Drivers;
   else if (page === 'driver-detail') Content = Pages.DriverDetail;
+  else if (page === 'agents') Content = Pages.Agents;
+  else if (page === 'agent-detail') Content = Pages.AgentDetail;
   else if (page === 'rides') Content = Pages.Rides;
   else if (page === 'ride-detail') Content = Pages.RideDetail;
   else if (page === 'finance') Content = Pages.Finance;
@@ -243,9 +248,9 @@ function App() {
               type="button"
               title={sidebarCollapsed ? item.label : undefined}
               onClick={() => { setPage(item.id); setDetailId(null); }}
-              className={`admin-nav-item w-full text-left rounded-lg flex items-center gap-2 text-sm transition-colors ${page === item.id ? 'keke-bg-active font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+              className={`admin-nav-item w-full text-left rounded-lg flex items-center gap-2 text-sm transition-colors ${page === item.id || (item.id === 'agents' && page === 'agent-detail') || (item.id === 'drivers' && page === 'driver-detail') ? 'keke-bg-active font-medium' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
               style={{
-                ...(page === item.id ? { color: 'var(--keke-primary-hex)' } : {}),
+                ...(page === item.id || (item.id === 'agents' && page === 'agent-detail') || (item.id === 'drivers' && page === 'driver-detail') ? { color: 'var(--keke-primary-hex)' } : {}),
                 ...(sidebarCollapsed ? { justifyContent: 'center', padding: '0.5rem' } : { paddingLeft: '0.75rem', paddingRight: '0.75rem', paddingTop: '0.5rem', paddingBottom: '0.5rem' }),
               }}
             >
@@ -322,6 +327,7 @@ function App() {
                 setDetailId(null);
                 if (page === 'user-detail') setPage('users');
                 else if (page === 'driver-detail') setPage('drivers');
+                else if (page === 'agent-detail') setPage('agents');
                 else if (page === 'ride-detail') setPage('rides');
                 else if (page === 'ticket-detail') setPage('support');
                 else setPage('dashboard');

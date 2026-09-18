@@ -1,5 +1,6 @@
 import express from 'express';
 import * as adminController from '../controllers/adminController.js';
+import * as adminAgentController from '../controllers/adminAgentController.js';
 import * as notificationController from '../controllers/notificationController.js';
 import * as payoutController from '../controllers/payoutController.js';
 import { protect } from '../middleware/auth.js';
@@ -46,6 +47,13 @@ router.patch('/users/:id', validationRules.mongoId, validate, validationRules.up
 router.patch('/users/:id/activate', validationRules.mongoId, validate, adminController.activateUser);
 router.patch('/users/:id/deactivate', validationRules.mongoId, validate, adminController.deactivateUser);
 router.delete('/users/:id', validationRules.mongoId, validate, adminController.deleteUser);
+
+// Field agents (specific routes before :id)
+router.get('/agents', adminAgentController.listAdminAgents);
+router.post('/agents', adminAgentController.createAdminAgent);
+router.get('/agents/:id', validationRules.mongoId, validate, adminAgentController.getAdminAgent);
+router.patch('/agents/:id', validationRules.mongoId, validate, adminAgentController.updateAdminAgent);
+router.post('/agents/:id/targets', validationRules.mongoId, validate, adminAgentController.createAdminAgentTarget);
 
 // Driver management (specific routes before :id)
 router.get('/drivers', adminController.listDrivers);

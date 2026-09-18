@@ -1,0 +1,36 @@
+:root {
+  --keke-primary: #3C8F7C;
+  --keke-primary-dark: #2f7263;
+  --keke-ink: #12221E;
+  --keke-muted: #5B6B67;
+  --keke-bg: #F4F7F6;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+html, body, #root { height: 100%; }
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--keke-ink);
+  background: var(--keke-bg);
+}
+.keke-btn {
+  background: var(--keke-primary);
+  color: #fff;
+}
+.keke-btn:hover { background: var(--keke-primary-dark); }
+.keke-btn:disabled { opacity: 0.55; }
+.agent-card {
+  background: #fff;
+  border-radius: 1rem;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.06);
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.nav-safe {
+  padding-bottom: calc(4.75rem + var(--safe-bottom));
+}

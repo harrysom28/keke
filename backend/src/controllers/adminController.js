@@ -35,6 +35,7 @@ import {
 } from '../services/paymentMethodsService.js';
 import { getSocketService } from '../services/socketService.js';
 import { processRidePayment, sendPaymentReceipt } from '../services/paymentService.js';
+import mongoose from 'mongoose';
 
 /** Escape user input for safe use in MongoDB $regex (prevents ReDoS and injection). */
 function escapeRegex(str) {
@@ -1102,11 +1103,16 @@ export const deleteUser = asyncHandler(async (req, res) => {
  * List drivers - GET /api/admin/drivers
  */
 export const listDrivers = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, status, verificationStatus, search } = req.query;
+  const { page = 1, limit = 20, status, verificationStatus, search, agentId } = req.query;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.max(1, parseInt(limit, 10) || 20);
   const skip = (pageNum - 1) * limitNum;
   const userFilter = { role: 'driver' };
+
+  if (agentId && mongoose.Types.ObjectId.isValid(agentId)) {
+    const referred = await Driver.find({ referredByAgentId: agentId }).select('user').lean();
+    userFilter._id = { $in: referred.map((d) => d.user) };
+  }
 
   if (search) {
     const safeSearch = escapeRegex(search);
@@ -3060,6 +3066,7 @@ const formatDriverResponse = (driver) => {
     } : null,
     documents_verified: driver.documentsVerified,
     verification_status: driver.verificationStatus,
+    referred_by_agent_id: driver.referredByAgentId?.toString?.() || driver.referredByAgentId || null,
     is_online: driver.isOnline,
     is_available: driver.isAvailable,
     earnings: driver.earnings,

@@ -27,3 +27,6 @@ export { default as PickupPoint } from './PickupPoint.js';
 export { default as UserWallet } from './UserWallet.js';
 export { default as UserWalletTransaction } from './UserWalletTransaction.js';
 export { default as UserNotification } from './UserNotification.js';
+export { default as Agent } from './Agent.js';
+export { default as AgentTarget } from './AgentTarget.js';
+export { default as AgentPayout } from './AgentPayout.js';
