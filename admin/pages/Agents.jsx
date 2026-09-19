@@ -9,6 +9,7 @@ function pct(n) {
 function AgentsPage({ onNavigate, showToast }) {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('active');
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
     email_phone_number: '',
@@ -48,7 +49,18 @@ function AgentsPage({ onNavigate, showToast }) {
     load();
   };
 
-  const columns = [
+  const approve = async (row) => {
+    const res = await Api.patch('/api/admin/agents/' + row.agent_id, { status: 'active' });
+    if (res.error) { showToast(res.error, 'error'); return; }
+    showToast('Agent approved — they can sign in now');
+    load();
+  };
+
+  const pending = agents.filter((a) => a.status === 'pending');
+  const active = agents.filter((a) => a.status !== 'pending');
+  const rows = tab === 'pending' ? pending : active;
+
+  const activeColumns = [
     { key: 'name', label: 'Agent' },
     { key: 'phone', label: 'Phone', render: (v, row) => v || row.email || '—' },
     { key: 'park', label: 'Park / zone', render: (_v, row) => [row.park, row.zone].filter(Boolean).join(' · ') || '—' },
@@ -60,21 +72,58 @@ function AgentsPage({ onNavigate, showToast }) {
     { key: 'status', label: 'Status' },
   ];
 
+  const pendingColumns = [
+    { key: 'name', label: 'Name' },
+    { key: 'phone', label: 'Phone / email', render: (v, row) => v || row.email || '—' },
+    { key: 'zone', label: 'Zone', render: (v, row) => [row.park, row.zone].filter(Boolean).join(' · ') || '—' },
+    { key: 'reason', label: 'Reason', render: (v) => v || '—' },
+    {
+      key: 'approve',
+      label: '',
+      render: (_v, row) => (
+        <button
+          type="button"
+          className="keke-btn-primary px-3 py-1.5 rounded-lg text-sm"
+          onClick={(e) => { e.stopPropagation(); approve(row); }}
+        >
+          Approve
+        </button>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <C.Breadcrumb items={[{ label: 'Agents' }]} />
-      <div className="flex justify-between items-center">
-        <p className="text-sm text-gray-500">Registered is not the same as performing. Sort is active drivers first.</p>
+      <div className="flex justify-between items-center gap-3 flex-wrap">
+        <div className="flex gap-2">
+          {[
+            ['pending', 'Pending', pending.length],
+            ['active', 'Active', active.length],
+          ].map(([id, label, count]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={`px-3 py-1.5 rounded-lg text-sm ${tab === id ? 'keke-btn-primary' : 'border dark:border-gray-600'}`}
+            >
+              {label} ({count})
+            </button>
+          ))}
+        </div>
         <button type="button" onClick={() => setOpen(true)} className="keke-btn-primary px-3 py-2 rounded-lg text-sm">Add agent</button>
       </div>
+      {tab === 'active' && (
+        <p className="text-sm text-gray-500">Registered is not the same as performing. Sort is active drivers first.</p>
+      )}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
         <C.DataTable
-          columns={columns}
-          rows={agents}
+          columns={tab === 'pending' ? pendingColumns : activeColumns}
+          rows={rows}
           keyField="agent_id"
           loading={loading}
           onRowClick={(row) => onNavigate('agent-detail', row.agent_id)}
-          emptyMessage="No agents yet"
+          emptyMessage={tab === 'pending' ? 'No pending applications' : 'No agents yet'}
         />
       </div>
       <C.Modal open={open} onClose={() => setOpen(false)} title="Add agent">
@@ -132,12 +181,17 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
         <div>
           <h2 className="text-xl font-semibold">{a.name || 'Agent'}</h2>
           <p className="text-sm text-gray-500">{a.phone || a.email} · {a.park || a.zone || 'No park'} · {a.status}</p>
+          {a.status === 'pending' && a.reason && (
+            <p className="mt-1 text-sm text-gray-600">{a.reason}</p>
+          )}
         </div>
         <div className="flex gap-2">
           {a.status === 'active' ? (
             <button type="button" onClick={() => setStatus('inactive')} className="px-3 py-1.5 rounded-lg border text-sm">Deactivate</button>
           ) : (
-            <button type="button" onClick={() => setStatus('active')} className="keke-btn-primary px-3 py-1.5 rounded-lg text-sm">Activate</button>
+            <button type="button" onClick={() => setStatus('active')} className="keke-btn-primary px-3 py-1.5 rounded-lg text-sm">
+              {a.status === 'pending' ? 'Approve' : 'Activate'}
+            </button>
           )}
         </div>
       </div>

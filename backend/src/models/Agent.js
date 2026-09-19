@@ -34,7 +34,7 @@ const agentSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['active', 'inactive', 'flagged'],
+      enum: ['pending', 'active', 'inactive', 'flagged'],
       default: 'active',
       index: true,
     },

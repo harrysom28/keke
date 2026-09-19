@@ -6,15 +6,12 @@ import { ValidationError, ConflictError, NotFoundError } from '../utils/errors.j
 import { asyncHandler } from '../utils/errors.js';
 import { logAdminAction } from '../services/auditLogService.js';
 import { findUserByIdentifier } from '../utils/loginIdentifier.js';
-import { statsForAgentIds } from '../services/agentStatsService.js';
+import { statsForAgentIds, ratesFromStats } from '../services/agentStatsService.js';
 import logger from '../utils/logger.js';
 
 function formatAdminAgent(agent, stats, user) {
   const u = user || agent.user || {};
-  const s = stats || { registered: 0, verified: 0, active: 0, rejected: 0, pending: 0 };
-  const registered = s.registered || 0;
-  const verified = s.verified || 0;
-  const active = s.active || 0;
+  const s = ratesFromStats(stats);
   return {
     agent_id: agent._id.toString(),
     user_id: (u._id || agent.user)?.toString?.() || null,
@@ -24,11 +21,12 @@ function formatAdminAgent(agent, stats, user) {
     zone: agent.zone,
     park: agent.park,
     status: agent.status,
+    reason: agent.notes || null,
     bounty_rate: agent.bountyRate,
     start_date: agent.startDate,
     stats: s,
-    verification_rate: registered ? verified / registered : 0,
-    activation_rate: verified ? active / verified : 0,
+    verification_rate: s.verification_rate,
+    activation_rate: s.activation_rate,
   };
 }
 
@@ -95,17 +93,30 @@ export const createAdminAgent = asyncHandler(async (req, res) => {
   }
 
   const existing = await Agent.findOne({ user: user._id });
-  if (existing) throw new ConflictError('This account is already an agent.');
-
-  const agent = await Agent.create({
-    user: user._id,
-    name: name || user.name || null,
-    zone: zone || null,
-    park: park || null,
-    bountyRate: Number(bountyRate) || 0,
-    startDate: new Date(),
-    status: 'active',
-  });
+  let agent;
+  if (existing) {
+    if (existing.status !== 'pending') {
+      throw new ConflictError('This account is already an agent.');
+    }
+    existing.status = 'active';
+    existing.startDate = new Date();
+    if (name) existing.name = name;
+    if (zone) existing.zone = zone;
+    if (park) existing.park = park;
+    if (bountyRate != null && bountyRate !== '') existing.bountyRate = Number(bountyRate) || 0;
+    await existing.save();
+    agent = existing;
+  } else {
+    agent = await Agent.create({
+      user: user._id,
+      name: name || user.name || null,
+      zone: zone || null,
+      park: park || null,
+      bountyRate: Number(bountyRate) || 0,
+      startDate: new Date(),
+      status: 'active',
+    });
+  }
 
   if (targetCount && targetDeadline) {
     await AgentTarget.create({
@@ -146,7 +157,12 @@ export const updateAdminAgent = asyncHandler(async (req, res) => {
   if (park !== undefined) agent.park = park;
   if (bountyRate !== undefined) agent.bountyRate = Number(bountyRate) || 0;
   if (notes !== undefined) agent.notes = notes;
-  if (status && ['active', 'inactive', 'flagged'].includes(status)) agent.status = status;
+  if (status && ['pending', 'active', 'inactive', 'flagged'].includes(status)) {
+    if (status === 'active' && agent.status === 'pending') {
+      agent.startDate = new Date();
+    }
+    agent.status = status;
+  }
   await agent.save();
 
   await logAdminAction({

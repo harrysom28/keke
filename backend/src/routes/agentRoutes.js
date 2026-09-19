@@ -32,12 +32,20 @@ router.post(
   validate,
   agentController.verifyAgentOtp
 );
+router.post(
+  '/apply',
+  limiters.authLimiter,
+  validationRules.applyAgent,
+  validate,
+  agentController.applyAsAgent
+);
 
 router.use(protect);
 router.use(requireAgent);
 
 router.get('/me', agentController.getAgentMe);
 router.patch('/me', agentController.updateAgentMe);
+router.get('/me/drivers', agentController.listMyDrivers);
 router.get('/overview', agentController.getAgentOverview);
 router.get('/drivers', agentController.listAgentDrivers);
 router.get('/drivers/:id', validationRules.mongoId, validate, agentController.getAgentDriver);

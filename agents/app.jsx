@@ -19,9 +19,21 @@ const STATUS_LABELS = {
   rejected: 'Rejected',
 };
 
-function naira(n) {
-  const v = Number(n) || 0;
-  return '₦' + v.toLocaleString('en-NG');
+const STAGE_STYLES = {
+  registered: 'bg-gray-100 text-gray-700',
+  verified: 'bg-sky-100 text-sky-800',
+  active: 'bg-emerald-100 text-emerald-800',
+  rejected: 'bg-red-100 text-red-700',
+};
+const STAGE_LABELS = {
+  registered: 'Registered',
+  verified: 'Verified',
+  active: 'Active',
+  rejected: 'Rejected',
+};
+
+function pct(n) {
+  return Math.round((Number(n) || 0) * 100) + '%';
 }
 
 function Pill({ status }) {
@@ -32,12 +44,30 @@ function Pill({ status }) {
   );
 }
 
+function StagePill({ stage }) {
+  return (
+    <span className={`status-pill ${STAGE_STYLES[stage] || 'bg-gray-100 text-gray-700'}`}>
+      {STAGE_LABELS[stage] || stage}
+    </span>
+  );
+}
+
 function LoginPage({ onLogin }) {
   const [identifier, setIdentifier] = useState('');
   const [otp, setOtp] = useState('');
   const [step, setStep] = useState('id');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [pendingMessage, setPendingMessage] = useState('');
+  const [apply, setApply] = useState({ name: '', zone: '', reason: '' });
+
+  const resetToId = () => {
+    setStep('id');
+    setOtp('');
+    setError('');
+    setPendingMessage('');
+    setApply({ name: '', zone: '', reason: '' });
+  };
 
   const requestCode = async (e) => {
     e.preventDefault();
@@ -48,7 +78,36 @@ function LoginPage({ onLogin }) {
     const res = await Api.post('/api/agents/auth/request-otp', { email_phone_number: value });
     setLoading(false);
     if (res.error) { setError(res.error); return; }
+    const applicationStatus = res.data?.data?.application_status;
+    if (applicationStatus === 'pending') {
+      setPendingMessage('Your application is still pending review.');
+      setStep('pending');
+      return;
+    }
+    if (applicationStatus === 'none') {
+      setStep('apply');
+      return;
+    }
     setStep('otp');
+  };
+
+  const submitApply = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!apply.name.trim()) { setError('Enter your name'); return; }
+    if (!apply.zone.trim()) { setError('Enter the park or zone you would cover'); return; }
+    if (!apply.reason.trim()) { setError('Enter a short line on why'); return; }
+    setLoading(true);
+    const res = await Api.post('/api/agents/apply', {
+      email_phone_number: identifier.trim(),
+      name: apply.name.trim(),
+      zone: apply.zone.trim(),
+      reason: apply.reason.trim(),
+    });
+    setLoading(false);
+    if (res.error) { setError(res.error); return; }
+    setPendingMessage(res.data?.message || 'Your application has been submitted and is pending review.');
+    setStep('pending');
   };
 
   const verify = async (e) => {
@@ -95,6 +154,49 @@ function LoginPage({ onLogin }) {
               {loading ? 'Checking…' : 'Continue'}
             </button>
           </form>
+        ) : step === 'apply' ? (
+          <form onSubmit={submitApply} className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold">Apply to become an agent</h2>
+              <p className="mt-1 text-sm text-gray-600">
+                Applying as <span className="font-medium text-gray-900">{identifier}</span>
+              </p>
+            </div>
+            <input
+              value={apply.name}
+              onChange={(e) => setApply({ ...apply, name: e.target.value })}
+              placeholder="Your name"
+              className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none"
+            />
+            <input
+              value={apply.zone}
+              onChange={(e) => setApply({ ...apply, zone: e.target.value })}
+              placeholder="Park / zone you would cover"
+              className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none"
+            />
+            <input
+              value={apply.reason}
+              onChange={(e) => setApply({ ...apply, reason: e.target.value })}
+              placeholder="One line on why"
+              maxLength={280}
+              className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none"
+            />
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <button type="submit" disabled={loading} className="keke-btn w-full py-3 rounded-xl font-medium">
+              {loading ? 'Submitting…' : 'Submit application'}
+            </button>
+            <button type="button" className="w-full text-sm text-[#3C8F7C]" onClick={resetToId}>
+              Use a different email or phone
+            </button>
+          </form>
+        ) : step === 'pending' ? (
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Application pending</h2>
+            <p className="text-sm text-gray-600">{pendingMessage || 'Your application is still pending review.'}</p>
+            <button type="button" className="w-full text-sm text-[#3C8F7C]" onClick={resetToId}>
+              Use a different email or phone
+            </button>
+          </div>
         ) : (
           <form onSubmit={verify} className="space-y-4">
             <p className="text-sm text-gray-600">We sent a login code to <span className="font-medium text-gray-900">{identifier}</span>.</p>
@@ -112,7 +214,7 @@ function LoginPage({ onLogin }) {
             <button type="submit" disabled={loading} className="keke-btn w-full py-3 rounded-xl font-medium">
               {loading ? 'Signing in…' : 'Let me in'}
             </button>
-            <button type="button" className="w-full text-sm text-[#3C8F7C]" onClick={() => { setStep('id'); setOtp(''); setError(''); }}>
+            <button type="button" className="w-full text-sm text-[#3C8F7C]" onClick={resetToId}>
               Use a different email or phone
             </button>
           </form>
@@ -126,7 +228,7 @@ function Overview({ go }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   useEffect(() => {
-    Api.get('/api/agents/overview').then((res) => {
+    Api.get('/api/agents/me/drivers').then((res) => {
       if (res.error) setError(res.error);
       else setData(res.data?.data || res.data);
     });
@@ -134,47 +236,40 @@ function Overview({ go }) {
   if (error) return <p className="text-red-600 text-sm">{error}</p>;
   if (!data) return <p className="text-gray-500 text-sm">Loading…</p>;
   const s = data.stats || {};
-  const cycle = data.cycle;
-  const pct = cycle && cycle.target_count ? Math.min(100, Math.round((s.verified / cycle.target_count) * 100)) : 0;
+  const drivers = data.drivers || [];
   return (
     <div className="space-y-4">
-      <div className="agent-card p-4">
-        <p className="text-sm text-gray-500">This cycle</p>
-        {cycle ? (
-          <>
-            <div className="flex items-end justify-between mt-1">
-              <h2 className="text-2xl font-semibold">{s.verified || 0} / {cycle.target_count} verified</h2>
-              <span className="text-sm text-gray-500">{cycle.days_remaining}d left</span>
-            </div>
-            <div className="mt-3 h-2 rounded-full bg-gray-100 overflow-hidden">
-              <div className="h-full rounded-full" style={{ width: pct + '%', background: '#3C8F7C' }} />
-            </div>
-            <p className="mt-2 text-xs text-gray-500">
-              {cycle.pace_needed != null ? `${cycle.pace_needed} verified / day to hit the target` : cycle.cycle_name}
-            </p>
-          </>
-        ) : (
-          <p className="mt-1 text-gray-700">No recruitment cycle assigned yet. Keep registering drivers — Harrison can set a target from admin.</p>
-        )}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="agent-card p-4">
+          <p className="text-xs text-gray-500">Referred</p>
+          <p className="text-2xl font-semibold mt-1">{s.registered || 0}</p>
+        </div>
+        <div className="agent-card p-4">
+          <p className="text-xs text-gray-500">Verify rate</p>
+          <p className="text-2xl font-semibold mt-1">{pct(s.verification_rate)}</p>
+        </div>
+        <div className="agent-card p-4">
+          <p className="text-xs text-gray-500">Activate rate</p>
+          <p className="text-2xl font-semibold mt-1">{pct(s.activation_rate)}</p>
+        </div>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        {[
-          ['Registered', s.registered || 0],
-          ['Verified', s.verified || 0],
-          ['Active (7d)', s.active || 0],
-          ['Rejected', s.rejected || 0],
-        ].map(([label, value]) => (
-          <div key={label} className="agent-card p-4">
-            <p className="text-xs text-gray-500">{label}</p>
-            <p className="text-2xl font-semibold mt-1">{value}</p>
+      {drivers.length === 0 ? (
+        <p className="text-sm text-gray-500">No drivers yet. Register one from the field.</p>
+      ) : (
+        drivers.map((d) => (
+          <div key={d.driver_id} className="agent-card p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-medium">{d.name || 'Unnamed'}</p>
+                <p className="text-sm text-gray-500">{d.phone || d.email || '—'}</p>
+              </div>
+              <StagePill stage={d.stage} />
+            </div>
+            {d.next_step && <p className="mt-2 text-sm text-gray-600">{d.next_step}</p>}
+            <p className="mt-1 text-xs text-gray-400">{d.total_rides || 0} rides completed</p>
           </div>
-        ))}
-      </div>
-      <div className="agent-card p-4">
-        <p className="text-sm text-gray-500">Projected bounty (active drivers)</p>
-        <p className="text-2xl font-semibold mt-1">{naira(data.earnings?.projected_owed)}</p>
-        <p className="text-xs text-gray-500 mt-1">{data.earnings?.note}</p>
-      </div>
+        ))
+      )}
       <button type="button" onClick={() => go('register')} className="keke-btn w-full py-3 rounded-xl font-medium">
         Register a driver
       </button>
@@ -327,6 +422,8 @@ function Drivers() {
             </div>
             <Pill status={d.status} />
           </div>
+          {d.next_step && <p className="mt-2 text-sm text-gray-600">{d.next_step}</p>}
+          <p className="mt-1 text-xs text-gray-400">{d.total_rides || 0} rides completed</p>
           {d.status === 'rejected' && d.rejection_reason && (
             <p className="mt-2 text-sm text-red-600">Rejected: {d.rejection_reason}</p>
           )}
@@ -405,7 +502,7 @@ function Profile({ onLogout }) {
 function Shell({ onLogout }) {
   const [page, setPage] = useState('home');
   const agent = Auth.getAgent() || {};
-  const titles = { home: 'Overview', register: 'Register a driver', drivers: 'My drivers', profile: 'Profile' };
+  const titles = { home: 'My drivers', register: 'Register a driver', drivers: 'My drivers', profile: 'Profile' };
   const nav = [
     { id: 'home', label: 'Home' },
     { id: 'register', label: 'Register' },

@@ -220,6 +220,31 @@ export const validationRules = {
       .withMessage('Email or phone number is required'),
   ],
 
+  applyAgent: [
+    body('email_phone_number')
+      .trim()
+      .notEmpty()
+      .withMessage('Email or phone number is required'),
+    body('name')
+      .trim()
+      .notEmpty()
+      .withMessage('Name is required')
+      .isLength({ max: 80 })
+      .withMessage('Name must be 80 characters or fewer'),
+    body('zone')
+      .trim()
+      .notEmpty()
+      .withMessage('Park or zone is required')
+      .isLength({ max: 120 })
+      .withMessage('Park or zone must be 120 characters or fewer'),
+    body('reason')
+      .trim()
+      .notEmpty()
+      .withMessage('A short reason is required')
+      .isLength({ max: 280 })
+      .withMessage('Reason must be 280 characters or fewer'),
+  ],
+
   // OTP-only login
   loginWithOtp: [
     body('email_phone_number')

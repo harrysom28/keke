@@ -15,7 +15,7 @@ Backend must be running (`cd backend && npm run dev`).
 
 Agents who already have a Keke account (rider or driver) enter that **email or phone**. A login OTP is sent on the existing auth path — there is no Firebase account and no password.
 
-Harrison / Samuel add an agent in **Admin → Agents** (or `cd backend && npm run create:agent -- +2348…`).
+If the account is not yet an agent, the console shows an apply form. Admin approves applications in **Admin → Agents → Pending** (or `cd backend && npm run create:agent -- +2348…`).
 
 ## Production (Dokploy)
 

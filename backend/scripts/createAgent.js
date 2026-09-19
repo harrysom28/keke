@@ -34,6 +34,15 @@ const run = async () => {
   }
   const existing = await Agent.findOne({ user: user._id });
   if (existing) {
+    if (existing.status === 'pending') {
+      existing.status = 'active';
+      existing.startDate = new Date();
+      if (zone) existing.zone = zone;
+      if (park) existing.park = park;
+      await existing.save();
+      console.log('Pending application approved:', existing._id.toString(), user.email || user.phone);
+      process.exit(0);
+    }
     console.log('Already an agent:', existing._id.toString(), user.email || user.phone);
     process.exit(0);
   }

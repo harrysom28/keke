@@ -16,6 +16,45 @@ export function driverLifecycleStatus(driver, isRecentlyActive) {
   return 'in_review';
 }
 
+/** REGISTERED → VERIFIED → ACTIVE, matching the admin Agents table. */
+export function driverPipelineStage(driver, isRecentlyActive) {
+  const verification = driver.verificationStatus || 'pending';
+  if (verification === 'rejected') return 'rejected';
+  if (verification === 'approved') return isRecentlyActive ? 'active' : 'verified';
+  return 'registered';
+}
+
+/** Next unmet gate on the same VERIFIED / ACTIVE rules — no new criteria. */
+export function driverNextStep(driver, isRecentlyActive) {
+  const verification = driver.verificationStatus || 'pending';
+  if (verification === 'rejected') {
+    return driver.rejectionReason || 'Rejected';
+  }
+  if (verification !== 'approved') {
+    return 'Awaiting document verification';
+  }
+  if (isRecentlyActive) return null;
+  return Number(driver.totalRides) > 0
+    ? 'No completed rides in the last 7 days'
+    : 'Awaiting first completed ride';
+}
+
+export function ratesFromStats(stats) {
+  const s = stats || { registered: 0, verified: 0, active: 0, rejected: 0, pending: 0 };
+  const registered = s.registered || 0;
+  const verified = s.verified || 0;
+  const active = s.active || 0;
+  return {
+    registered,
+    verified,
+    active,
+    rejected: s.rejected || 0,
+    pending: s.pending || 0,
+    verification_rate: registered ? verified / registered : 0,
+    activation_rate: verified ? active / verified : 0,
+  };
+}
+
 export async function recentlyActiveDriverIds(driverIds, since = new Date(Date.now() - ACTIVE_WINDOW_MS)) {
   if (!driverIds.length) return new Set();
   const ids = await Ride.distinct('driver', {

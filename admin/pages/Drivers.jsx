@@ -62,7 +62,7 @@ function DriversPage({ onNavigate, showToast }) {
         </select>
         <select value={agentId} onChange={(e) => { setAgentId(e.target.value); setPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600">
           <option value="">All agents</option>
-          {agents.map((a) => (
+          {agents.filter((a) => a.status === 'active').map((a) => (
             <option key={a.agent_id} value={a.agent_id}>{a.name || a.phone || a.email || a.agent_id}</option>
           ))}
         </select>

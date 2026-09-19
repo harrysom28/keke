@@ -23,6 +23,9 @@ import {
   statsForAgent,
   recentlyActiveDriverIds,
   driverLifecycleStatus,
+  driverPipelineStage,
+  driverNextStep,
+  ratesFromStats,
 } from '../services/agentStatsService.js';
 
 const { sendEmail, sendSMS } = notificationService;
@@ -112,7 +115,7 @@ export const requestAgentOtp = asyncHandler(async (req, res) => {
 
   if (!user) {
     throw new NotFoundError(
-      'No Keke account found with this email or phone. Sign up in the Keke app first, then ask admin to add you as an agent.'
+      'No Keke account found with this email or phone. Sign up in the Keke app first.'
     );
   }
   if (!user.isActive) {
@@ -121,7 +124,16 @@ export const requestAgentOtp = asyncHandler(async (req, res) => {
 
   const agent = await Agent.findOne({ user: user._id });
   if (!agent) {
-    throw new AuthorizationError('This account is not registered as an agent. Ask Harrison or Samuel to add you.');
+    return res.json({
+      status: 'success',
+      data: { otp_queued: false, application_status: 'none' },
+    });
+  }
+  if (agent.status === 'pending') {
+    return res.json({
+      status: 'success',
+      data: { otp_queued: false, application_status: 'pending' },
+    });
   }
   if (agent.status !== 'active') {
     throw new AuthorizationError('This agent account is not active.');
@@ -209,6 +221,64 @@ export const verifyAgentOtp = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * POST /api/agents/apply
+ * Existing Keke account, not yet an agent → pending Agent row for admin review.
+ */
+export const applyAsAgent = asyncHandler(async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const zone = String(req.body.zone || req.body.park || '').trim();
+  const reason = String(req.body.reason || '').trim();
+  const identifier = String(req.body.email_phone_number || req.body.phone || req.body.email || '').trim();
+
+  if (!identifier) throw new ValidationError('Email or phone number is required');
+  if (!name) throw new ValidationError('Name is required');
+  if (!zone) throw new ValidationError('Park or zone is required');
+  if (!reason) throw new ValidationError('A short reason is required');
+
+  const { user } = await findUserByIdentifier(User, identifier);
+  if (!user) {
+    throw new NotFoundError(
+      'No Keke account found with this email or phone. Sign up in the Keke app first.'
+    );
+  }
+  if (!user.isActive) {
+    throw new AuthenticationError('This account has been deactivated.');
+  }
+
+  const existing = await Agent.findOne({ user: user._id });
+  if (existing) {
+    if (existing.status === 'pending') {
+      return res.json({
+        status: 'success',
+        message: 'Your application is still pending review.',
+        data: { application_status: 'pending' },
+      });
+    }
+    throw new ConflictError('This account is already an agent.');
+  }
+
+  if (!user.name) {
+    user.name = name;
+    await user.save();
+  }
+
+  await Agent.create({
+    user: user._id,
+    name,
+    zone,
+    park: null,
+    notes: reason,
+    status: 'pending',
+  });
+
+  res.status(201).json({
+    status: 'success',
+    message: 'Your application has been submitted and is pending review.',
+    data: { application_status: 'pending' },
+  });
+});
+
 export const getAgentMe = asyncHandler(async (req, res) => {
   await req.agent.populate('user', 'name email phone');
   res.json({
@@ -274,7 +344,11 @@ function formatAgentDriver(driver, isRecentlyActive) {
     driver_id: driver._id.toString(),
     name: user.name || null,
     phone: user.phone || null,
+    email: user.email || null,
     status: driverLifecycleStatus(driver, isRecentlyActive),
+    stage: driverPipelineStage(driver, isRecentlyActive),
+    next_step: driverNextStep(driver, isRecentlyActive),
+    recently_active: !!isRecentlyActive,
     verification_status: driver.verificationStatus,
     rejection_reason: driver.rejectionReason || null,
     plate_number: driver.vehicleDetails?.plateNumber || null,
@@ -287,15 +361,33 @@ function formatAgentDriver(driver, isRecentlyActive) {
   };
 }
 
-export const listAgentDrivers = asyncHandler(async (req, res) => {
-  const { status, search } = req.query;
-  const drivers = await Driver.find({ referredByAgentId: req.agent._id })
+async function loadReferredDrivers(agentId) {
+  const drivers = await Driver.find({ referredByAgentId: agentId })
     .populate('user', 'name phone email')
     .populate('vehicleDetails.vehicleType', 'name displayName')
     .sort({ createdAt: -1 });
-
   const activeSet = await recentlyActiveDriverIds(drivers.map((d) => d._id));
-  let rows = drivers.map((d) => formatAgentDriver(d, activeSet.has(String(d._id))));
+  return drivers.map((d) => formatAgentDriver(d, activeSet.has(String(d._id))));
+}
+
+export const listMyDrivers = asyncHandler(async (req, res) => {
+  const [rows, stats] = await Promise.all([
+    loadReferredDrivers(req.agent._id),
+    statsForAgent(req.agent._id),
+  ]);
+  res.json({
+    status: 'success',
+    data: {
+      stats: ratesFromStats(stats),
+      drivers: rows,
+      count: rows.length,
+    },
+  });
+});
+
+export const listAgentDrivers = asyncHandler(async (req, res) => {
+  const { status, search } = req.query;
+  let rows = await loadReferredDrivers(req.agent._id);
 
   if (status) {
     rows = rows.filter((row) => row.status === status);
@@ -306,6 +398,7 @@ export const listAgentDrivers = asyncHandler(async (req, res) => {
       (row) =>
         (row.name && row.name.toLowerCase().includes(q)) ||
         (row.phone && row.phone.includes(q)) ||
+        (row.email && row.email.toLowerCase().includes(q)) ||
         (row.plate_number && row.plate_number.toLowerCase().includes(q))
     );
   }
