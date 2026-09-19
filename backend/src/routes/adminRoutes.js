@@ -52,6 +52,7 @@ router.delete('/users/:id', validationRules.mongoId, validate, adminController.d
 router.get('/agents', adminAgentController.listAdminAgents);
 router.post('/agents', adminAgentController.createAdminAgent);
 router.get('/agents/:id', validationRules.mongoId, validate, adminAgentController.getAdminAgent);
+router.get('/agents/:id/drivers', validationRules.mongoId, validate, adminAgentController.listAdminAgentDrivers);
 router.patch('/agents/:id', validationRules.mongoId, validate, adminAgentController.updateAdminAgent);
 router.post('/agents/:id/targets', validationRules.mongoId, validate, adminAgentController.createAdminAgentTarget);
 

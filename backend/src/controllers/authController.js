@@ -20,6 +20,7 @@ import {
 } from '../services/escrowWalletService.js';
 const { sendEmail, sendSMS } = notificationService;
 import logger from '../utils/logger.js';
+import { resolveReferralCode, applyReferralToUserData } from '../services/agentReferralService.js';
 
 /** Termii / telco template — must match approved copy (channel dnd, sender N-Alert). */
 const termiiOtpSmsBody = (otp) =>
@@ -89,14 +90,14 @@ export const register = asyncHandler(async (req, res) => {
   const cleanedReferral = typeof referral_code === 'string' ? referral_code.trim() : '';
 
   // Look up existing account and optional referrer in parallel (saves one RTT on new signups with a referral code).
-  const [existingUser, referrerDoc] = await Promise.all([
+  const [existingUser, referral] = await Promise.all([
     User.findOne({
       $or: [
         ...(phoneQuery.length ? [{ phone: { $in: phoneQuery } }] : []),
         ...(email ? [{ email }] : []),
       ],
     }),
-    cleanedReferral ? User.findOne({ referralCode: cleanedReferral }).select('_id') : Promise.resolve(null),
+    cleanedReferral ? resolveReferralCode(cleanedReferral) : Promise.resolve({ userReferrer: null, agent: null }),
   ]);
 
   // Helper to generate/store/send OTP for a user
@@ -223,9 +224,7 @@ export const register = asyncHandler(async (req, res) => {
     deviceToken: device_token,
   };
 
-  if (referrerDoc) {
-    userData.referredBy = referrerDoc._id;
-  }
+  applyReferralToUserData(userData, referral);
 
   const user = await User.create(userData);
 
@@ -433,10 +432,11 @@ export const validateReferralCode = asyncHandler(async (req, res) => {
   if (!code) {
     return res.json({ valid: false, message: 'Referral code is required' });
   }
-  const referrer = await User.findOne({ referralCode: code }).select('_id');
+  const referral = await resolveReferralCode(code);
+  const valid = !!(referral.userReferrer || referral.agent);
   res.json({
-    valid: !!referrer,
-    message: referrer ? 'Referral code is valid' : 'Referral code not found',
+    valid,
+    message: valid ? 'Referral code is valid' : 'Referral code not found',
   });
 });
 
@@ -502,10 +502,10 @@ export const emailRegister = asyncHandler(async (req, res) => {
   const phoneQuery = phoneVariants(phone);
   const userRole = role === 'driver' ? 'driver' : 'passenger';
   const cleanedReferral = typeof referral_code === 'string' ? referral_code.trim() : '';
-  let referrerDoc = null;
+  let referral = { userReferrer: null, agent: null };
   if (cleanedReferral) {
-    referrerDoc = await User.findOne({ referralCode: cleanedReferral }).select('_id');
-    if (!referrerDoc) {
+    referral = await resolveReferralCode(cleanedReferral);
+    if (!referral.userReferrer && !referral.agent) {
       throw new ValidationError('Referral code not found. Please check and try again.');
     }
   }
@@ -540,9 +540,7 @@ export const emailRegister = asyncHandler(async (req, res) => {
     userData.onboardingStage = 'rider_complete';
   }
 
-  if (referrerDoc) {
-    userData.referredBy = referrerDoc._id;
-  }
+  applyReferralToUserData(userData, referral);
 
   const user = await User.create(userData);
 
@@ -829,10 +827,7 @@ export const resendOTP = asyncHandler(async (req, res) => {
     // If a referral code was provided, link the referrer
     const cleanedReferral = typeof referral_code === 'string' ? referral_code.trim() : '';
     if (cleanedReferral) {
-      const referrer = await User.findOne({ referralCode: cleanedReferral });
-      if (referrer) {
-        userData.referredBy = referrer._id;
-      }
+      applyReferralToUserData(userData, await resolveReferralCode(cleanedReferral));
     }
 
     try {

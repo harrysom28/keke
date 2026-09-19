@@ -10,6 +10,7 @@
     "dev:8000": "PORT=8000 nodemon src/server.js",
     "create:admin": "node scripts/createAdmin.js",
     "create:agent": "node scripts/createAgent.js",
+    "backfill:agent-referrals": "node scripts/backfillAgentReferrals.js",
     "fix:phone-index": "node scripts/fixPhoneIndex.js",
     "fix:stale-roles": "node scripts/fix-stale-roles.js",
     "test:email": "node scripts/testEmail.js",

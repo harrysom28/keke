@@ -54,6 +54,16 @@ const agentSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    /** Short shareable code drivers enter at signup. Generated on activation. */
+    referralCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: null,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -64,6 +74,17 @@ const agentSchema = new mongoose.Schema(
 
 agentSchema.virtual('agent_id').get(function () {
   return this._id.toString();
+});
+
+agentSchema.pre('save', async function generateReferralCode(next) {
+  if (this.status !== 'active' || this.referralCode) return next();
+  try {
+    const { generateUniqueAgentReferralCode } = await import('../services/agentReferralService.js');
+    this.referralCode = await generateUniqueAgentReferralCode(this.name);
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 const Agent = mongoose.model('Agent', agentSchema);

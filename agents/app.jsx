@@ -225,6 +225,7 @@ function LoginPage({ onLogin }) {
 }
 
 function Overview({ go }) {
+  const stored = Auth.getAgent() || {};
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -237,8 +238,16 @@ function Overview({ go }) {
   if (!data) return <p className="text-gray-500 text-sm">Loading…</p>;
   const s = data.stats || {};
   const drivers = data.drivers || [];
+  const referralCode = data.referral_code || stored.referral_code;
   return (
     <div className="space-y-4">
+      {referralCode && (
+        <div className="agent-card p-4">
+          <p className="text-xs text-gray-500">Your referral code</p>
+          <p className="text-2xl font-semibold tracking-wide mt-1">{referralCode}</p>
+          <p className="text-xs text-gray-500 mt-1">Drivers enter this at signup.</p>
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3">
         <div className="agent-card p-4">
           <p className="text-xs text-gray-500">Referred</p>
@@ -486,6 +495,9 @@ function Profile({ onLogout }) {
         <p className="text-xs text-gray-500">Signed in as</p>
         <p className="font-medium">{agent.name || 'Agent'}</p>
         <p className="text-sm text-gray-500">{agent.phone || agent.email}</p>
+        {agent.referral_code && (
+          <p className="mt-2 text-sm">Referral code: <span className="font-semibold tracking-wide">{agent.referral_code}</span></p>
+        )}
       </div>
       <input value={form.zone} onChange={(e) => setForm({ ...form, zone: e.target.value })} placeholder="Zone" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
       <input value={form.park} onChange={(e) => setForm({ ...form, park: e.target.value })} placeholder="Park" className="w-full rounded-xl border border-gray-200 px-4 py-3" />

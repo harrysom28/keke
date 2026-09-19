@@ -248,6 +248,12 @@ const userSchema = new mongoose.Schema(
       ref: 'User',
       default: null,
     },
+    referredByAgentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Agent',
+      default: null,
+      index: true,
+    },
     // Device info for push notifications
     deviceId: {
       type: String,

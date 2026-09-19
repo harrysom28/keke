@@ -41,6 +41,7 @@ const run = async () => {
       if (park) existing.park = park;
       await existing.save();
       console.log('Pending application approved:', existing._id.toString(), user.email || user.phone);
+      console.log('Referral code:', existing.referralCode);
       process.exit(0);
     }
     console.log('Already an agent:', existing._id.toString(), user.email || user.phone);
@@ -54,6 +55,7 @@ const run = async () => {
     status: 'active',
   });
   console.log('Agent created:', agent._id.toString());
+  console.log('Referral code:', agent.referralCode);
   console.log('User:', user.name, user.email || user.phone);
   process.exit(0);
 };

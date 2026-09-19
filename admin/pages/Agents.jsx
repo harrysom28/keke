@@ -63,6 +63,7 @@ function AgentsPage({ onNavigate, showToast }) {
   const activeColumns = [
     { key: 'name', label: 'Agent' },
     { key: 'phone', label: 'Phone', render: (v, row) => v || row.email || '—' },
+    { key: 'referral_code', label: 'Code', render: (v) => v || '—' },
     { key: 'park', label: 'Park / zone', render: (_v, row) => [row.park, row.zone].filter(Boolean).join(' · ') || '—' },
     { key: 'registered', label: 'Registered', render: (_v, row) => row.stats?.registered ?? 0 },
     { key: 'verified', label: 'Verified', render: (_v, row) => row.stats?.verified ?? 0 },
@@ -181,6 +182,9 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
         <div>
           <h2 className="text-xl font-semibold">{a.name || 'Agent'}</h2>
           <p className="text-sm text-gray-500">{a.phone || a.email} · {a.park || a.zone || 'No park'} · {a.status}</p>
+          {a.referral_code && (
+            <p className="mt-1 text-sm font-medium">Referral code: {a.referral_code}</p>
+          )}
           {a.status === 'pending' && a.reason && (
             <p className="mt-1 text-sm text-gray-600">{a.reason}</p>
           )}
@@ -196,7 +200,7 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
         </div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[['Registered', s.registered], ['Verified', s.verified], ['Active (7d)', s.active], ['Verify rate', pct(a.verification_rate)]].map(([label, value]) => (
+        {[['Registered', s.registered], ['Verified', s.verified], ['Active', s.active], ['Verify rate', pct(a.verification_rate)]].map(([label, value]) => (
           <div key={label} className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
             <p className="text-xs text-gray-500">{label}</p>
             <p className="text-xl font-semibold">{value ?? 0}</p>
@@ -208,8 +212,8 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
           columns={[
             { key: 'name', label: 'Driver' },
             { key: 'phone', label: 'Phone' },
-            { key: 'verification_status', label: 'Status' },
-            { key: 'plate_number', label: 'Plate' },
+            { key: 'stage', label: 'Stage', render: (v) => (v ? String(v).replace(/^./, (c) => c.toUpperCase()) : 'Registered') },
+            { key: 'next_step', label: 'Next', render: (v) => v || '—' },
             { key: 'total_rides', label: 'Rides' },
           ]}
           rows={data.drivers || []}

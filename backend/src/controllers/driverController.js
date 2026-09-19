@@ -31,6 +31,7 @@ import {
   COMMISSION_DEBT_CEILING,
 } from '../services/walletService.js';
 import { formatOnlineDurationMs } from '../utils/driverOnlineTime.js';
+import { resolveReferralCode } from '../services/agentReferralService.js';
 import {
   dispatchRide,
   notifyNoDriverFound,
@@ -413,6 +414,17 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
       expiryDate: insurance.expiryDate ? new Date(insurance.expiryDate) : null,
       documentUrl: insurance.documentUrl || null,
     };
+  }
+
+  const existingAgentId = existingDriver?.referredByAgentId || null;
+  let referredByAgentId = existingAgentId || user.referredByAgentId || null;
+  const rawReferral = String(req.body.referral_code || req.body.referralCode || '').trim();
+  if (!referredByAgentId && rawReferral) {
+    const { agent } = await resolveReferralCode(rawReferral);
+    referredByAgentId = agent?._id || null;
+  }
+  if (referredByAgentId && !existingAgentId) {
+    driverData.referredByAgentId = referredByAgentId;
   }
 
   let driver;

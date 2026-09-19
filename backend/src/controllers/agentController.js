@@ -19,12 +19,12 @@ import logger from '../utils/logger.js';
 import { findUserByIdentifier, parseLoginIdentifier } from '../utils/loginIdentifier.js';
 import { uploadToCloudinary, getFileUrl } from '../services/fileUploadService.js';
 import { getOrCreateWallet } from '../services/walletService.js';
+import { ensureAgentReferralCode } from '../services/agentReferralService.js';
 import {
   statsForAgent,
   recentlyActiveDriverIds,
-  driverLifecycleStatus,
-  driverPipelineStage,
-  driverNextStep,
+  formatReferredDriver,
+  loadReferredDrivers,
   ratesFromStats,
 } from '../services/agentStatsService.js';
 
@@ -68,6 +68,7 @@ function formatAgent(agent, user) {
     status: agent.status,
     bounty_rate: agent.bountyRate,
     bank_account: agent.bankAccount || {},
+    referral_code: agent.referralCode || null,
   };
 }
 
@@ -280,6 +281,7 @@ export const applyAsAgent = asyncHandler(async (req, res) => {
 });
 
 export const getAgentMe = asyncHandler(async (req, res) => {
+  await ensureAgentReferralCode(req.agent);
   await req.agent.populate('user', 'name email phone');
   res.json({
     status: 'success',
@@ -338,39 +340,8 @@ export const getAgentOverview = asyncHandler(async (req, res) => {
   });
 });
 
-function formatAgentDriver(driver, isRecentlyActive) {
-  const user = driver.user || {};
-  return {
-    driver_id: driver._id.toString(),
-    name: user.name || null,
-    phone: user.phone || null,
-    email: user.email || null,
-    status: driverLifecycleStatus(driver, isRecentlyActive),
-    stage: driverPipelineStage(driver, isRecentlyActive),
-    next_step: driverNextStep(driver, isRecentlyActive),
-    recently_active: !!isRecentlyActive,
-    verification_status: driver.verificationStatus,
-    rejection_reason: driver.rejectionReason || null,
-    plate_number: driver.vehicleDetails?.plateNumber || null,
-    vehicle_type: driver.vehicleDetails?.vehicleType?.displayName
-      || driver.vehicleDetails?.vehicleType?.name
-      || null,
-    park: driver.vehicleDetails?.make || null,
-    created_at: driver.createdAt,
-    total_rides: driver.totalRides || 0,
-  };
-}
-
-async function loadReferredDrivers(agentId) {
-  const drivers = await Driver.find({ referredByAgentId: agentId })
-    .populate('user', 'name phone email')
-    .populate('vehicleDetails.vehicleType', 'name displayName')
-    .sort({ createdAt: -1 });
-  const activeSet = await recentlyActiveDriverIds(drivers.map((d) => d._id));
-  return drivers.map((d) => formatAgentDriver(d, activeSet.has(String(d._id))));
-}
-
 export const listMyDrivers = asyncHandler(async (req, res) => {
+  await ensureAgentReferralCode(req.agent);
   const [rows, stats] = await Promise.all([
     loadReferredDrivers(req.agent._id),
     statsForAgent(req.agent._id),
@@ -381,6 +352,7 @@ export const listMyDrivers = asyncHandler(async (req, res) => {
       stats: ratesFromStats(stats),
       drivers: rows,
       count: rows.length,
+      referral_code: req.agent.referralCode || null,
     },
   });
 });
@@ -422,7 +394,7 @@ export const getAgentDriver = asyncHandler(async (req, res) => {
     status: 'success',
     data: {
       driver: {
-        ...formatAgentDriver(driver, activeSet.has(String(driver._id))),
+        ...formatReferredDriver(driver, activeSet.has(String(driver._id)), kyc),
         license_number: driver.licenseNumber,
         vehicle_details: driver.vehicleDetails,
         kyc_status: kyc?.verificationStatus || null,
@@ -505,7 +477,7 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
     return res.status(200).json({
       status: 'success',
       message: 'Driver already exists — tagged to you',
-      data: { driver: formatAgentDriver(driver, false), existing: true },
+      data: { driver: formatReferredDriver(driver, false), existing: true },
     });
   }
 
@@ -601,6 +573,6 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
   res.status(201).json({
     status: 'success',
     message: 'Driver registered',
-    data: { driver: formatAgentDriver(driver, false), existing: false },
+    data: { driver: formatReferredDriver(driver, false), existing: false },
   });
 });
