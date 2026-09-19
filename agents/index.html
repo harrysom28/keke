@@ -16,14 +16,15 @@
 </head>
 <body class="bg-[#F4F7F6]">
   <div id="root"></div>
-  <script>window.AGENT_API_BASE_URL = 'https://api.getkekeapp.com';</script>
+  <!-- Config: served locally, talk to the local API on port 8000 — never to
+       production data. Set window.AGENT_API_BASE_URL above this to override. -->
   <script>
     (function() {
       var host = window.location.hostname;
       var isLocal = host === 'localhost' || host === '127.0.0.1';
       var apiBase = window.AGENT_API_BASE_URL;
       if (!apiBase)
-        apiBase = isLocal ? 'http://localhost:8000' : (window.location.protocol + '//' + host + ':8000');
+        apiBase = isLocal ? 'http://localhost:8000' : 'https://api.getkekeapp.com';
       window.__CONFIG__ = { API_BASE_URL: apiBase };
     })();
   </script>
