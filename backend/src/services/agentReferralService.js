@@ -41,10 +41,31 @@ export async function generateUniqueAgentReferralCode(name) {
 }
 
 export async function ensureAgentReferralCode(agent) {
-  if (!agent || agent.referralCode) return agent;
-  if (agent.status !== 'active') return agent;
-  agent.referralCode = await generateUniqueAgentReferralCode(agent.name);
-  await agent.save();
+  if (!agent || agent.status !== 'active') return agent;
+
+  if (typeof agent.user?.save !== 'function') {
+    await agent.populate('user', 'name email phone referralCode');
+  }
+  const user = typeof agent.user?.save === 'function' ? agent.user : null;
+  const userCode = user?.referralCode ? String(user.referralCode).trim().toUpperCase() : '';
+
+  if (userCode) {
+    if (agent.referralCode !== userCode) {
+      agent.referralCode = userCode;
+      await agent.save();
+    }
+    return agent;
+  }
+
+  if (!agent.referralCode) {
+    agent.referralCode = await generateUniqueAgentReferralCode(agent.name || user?.name);
+    await agent.save();
+  }
+
+  if (user && !user.referralCode && agent.referralCode) {
+    user.referralCode = agent.referralCode;
+    await user.save({ validateBeforeSave: false });
+  }
   return agent;
 }
 

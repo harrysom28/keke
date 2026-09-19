@@ -21,7 +21,7 @@ dotenv.config({ path: join(__dirname, '../.env') });
 const run = async () => {
   const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/keke';
   await mongoose.connect(mongoUri);
-  const agents = await Agent.find({}).populate('user', 'name phone email');
+  const agents = await Agent.find({}).populate('user', 'name phone email referralCode');
   for (const agent of agents) {
     const before = agent.referralCode;
     await ensureAgentReferralCode(agent);

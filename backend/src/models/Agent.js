@@ -79,8 +79,14 @@ agentSchema.virtual('agent_id').get(function () {
 agentSchema.pre('save', async function generateReferralCode(next) {
   if (this.status !== 'active' || this.referralCode) return next();
   try {
+    const User = (await import('./User.js')).default;
     const { generateUniqueAgentReferralCode } = await import('../services/agentReferralService.js');
-    this.referralCode = await generateUniqueAgentReferralCode(this.name);
+    let userCode = null;
+    if (this.user) {
+      const user = await User.findById(this.user).select('referralCode name');
+      userCode = user?.referralCode ? String(user.referralCode).trim().toUpperCase() : null;
+    }
+    this.referralCode = userCode || await generateUniqueAgentReferralCode(this.name);
     next();
   } catch (err) {
     next(err);

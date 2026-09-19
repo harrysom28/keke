@@ -32,7 +32,7 @@ function formatAdminAgent(agent, stats, user) {
 }
 
 export const listAdminAgents = asyncHandler(async (req, res) => {
-  const agents = await Agent.find({}).populate('user', 'name email phone isActive').sort({ createdAt: -1 });
+  const agents = await Agent.find({}).populate('user', 'name email phone isActive referralCode').sort({ createdAt: -1 });
   await Promise.all(agents.map((agent) => ensureAgentReferralCode(agent)));
   await syncReferredDriversForAgents(agents);
   const statsMap = await statsForAgentIds(agents.map((a) => a._id));
@@ -47,7 +47,7 @@ export const listAdminAgents = asyncHandler(async (req, res) => {
 });
 
 export const getAdminAgent = asyncHandler(async (req, res) => {
-  const agent = await Agent.findById(req.params.id).populate('user', 'name email phone isActive');
+  const agent = await Agent.findById(req.params.id).populate('user', 'name email phone isActive referralCode');
   if (!agent) throw new NotFoundError('Agent');
   await ensureAgentReferralCode(agent);
   await syncReferredDriversForAgents([agent]);
@@ -68,7 +68,7 @@ export const getAdminAgent = asyncHandler(async (req, res) => {
 });
 
 export const listAdminAgentDrivers = asyncHandler(async (req, res) => {
-  const agent = await Agent.findById(req.params.id).populate('user', 'name email phone isActive');
+  const agent = await Agent.findById(req.params.id).populate('user', 'name email phone isActive referralCode');
   if (!agent) throw new NotFoundError('Agent');
   await ensureAgentReferralCode(agent);
   await syncReferredDriversForAgents([agent]);
@@ -155,7 +155,7 @@ export const createAdminAgent = asyncHandler(async (req, res) => {
   });
   logger.info(`Admin ${req.user._id} created agent ${agent._id} for user ${user._id}`);
 
-  await agent.populate('user', 'name email phone isActive');
+  await agent.populate('user', 'name email phone isActive referralCode');
   res.status(201).json({
     status: 'success',
     message: 'Agent created. They can sign in with their existing email or phone.',
@@ -190,7 +190,7 @@ export const updateAdminAgent = asyncHandler(async (req, res) => {
     req,
   });
 
-  await agent.populate('user', 'name email phone isActive');
+  await agent.populate('user', 'name email phone isActive referralCode');
   const statsMap = await statsForAgentIds([agent._id]);
   res.json({
     status: 'success',

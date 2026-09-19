@@ -282,7 +282,7 @@ export const applyAsAgent = asyncHandler(async (req, res) => {
 
 export const getAgentMe = asyncHandler(async (req, res) => {
   await ensureAgentReferralCode(req.agent);
-  await req.agent.populate('user', 'name email phone');
+  await req.agent.populate('user', 'name email phone referralCode');
   res.json({
     status: 'success',
     data: { agent: formatAgent(req.agent, req.agent.user) },
@@ -302,7 +302,7 @@ export const updateAgentMe = asyncHandler(async (req, res) => {
   if (zone !== undefined) req.agent.zone = zone;
   if (park !== undefined) req.agent.park = park;
   await req.agent.save();
-  await req.agent.populate('user', 'name email phone');
+  await req.agent.populate('user', 'name email phone referralCode');
   res.json({
     status: 'success',
     data: { agent: formatAgent(req.agent, req.agent.user) },
