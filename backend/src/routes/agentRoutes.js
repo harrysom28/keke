@@ -49,6 +49,13 @@ router.get('/me/drivers', agentController.listMyDrivers);
 router.get('/overview', agentController.getAgentOverview);
 router.get('/drivers', agentController.listAgentDrivers);
 router.get('/drivers/:id', validationRules.mongoId, validate, agentController.getAgentDriver);
+router.patch(
+  '/drivers/:id/documents',
+  upload,
+  validationRules.mongoId,
+  validate,
+  agentController.updateAgentDriverDocuments
+);
 router.post('/drivers', upload, agentController.registerAgentDriver);
 
 export default router;

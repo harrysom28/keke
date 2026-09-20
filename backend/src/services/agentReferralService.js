@@ -80,7 +80,13 @@ export async function resolveReferralCode(code) {
 
   const upper = normalizeCode(cleaned);
   const agentByCode = await Agent.findOne({ referralCode: upper, status: 'active' });
-  if (agentByCode) return { userReferrer: null, agent: agentByCode };
+  if (agentByCode) {
+    const linkedUserId = agentByCode.user?._id || agentByCode.user;
+    const userReferrer = linkedUserId
+      ? await User.findById(linkedUserId).select('_id')
+      : null;
+    return { userReferrer, agent: agentByCode };
+  }
 
   const userReferrer = await User.findOne({
     referralCode: { $regex: `^${escapeRegex(cleaned)}$`, $options: 'i' },
@@ -145,4 +151,97 @@ export async function syncReferredDriversForAgents(agents) {
     });
   }
   if (ops.length) await Driver.bulkWrite(ops, { ordered: false });
+}
+
+function invitedQueryForAgent(agent) {
+  const or = [];
+  const userId = agent?.user?._id || agent?.user;
+  if (userId) or.push({ referredBy: userId });
+  if (agent?._id) or.push({ referredByAgentId: agent._id });
+  return or;
+}
+
+/**
+ * Same people as Invite Friends in the app: anyone who used this agent's
+ * invite code, passengers included. Distinct from Driver REGISTERED.
+ */
+export async function invitedCountsForAgents(agents) {
+  const list = (agents || []).filter(Boolean);
+  const counts = new Map(list.map((agent) => [String(agent._id), 0]));
+  if (!list.length) return counts;
+
+  const userToAgent = new Map();
+  const agentIds = [];
+  for (const agent of list) {
+    agentIds.push(agent._id);
+    const userId = agent.user?._id || agent.user;
+    if (userId) userToAgent.set(String(userId), String(agent._id));
+  }
+
+  const or = [];
+  const userIds = [...userToAgent.keys()];
+  if (userIds.length) or.push({ referredBy: { $in: userIds } });
+  if (agentIds.length) or.push({ referredByAgentId: { $in: agentIds } });
+  if (!or.length) return counts;
+
+  const users = await User.find({ $or: or }).select('_id referredBy referredByAgentId').lean();
+  const seen = new Map();
+  for (const user of users) {
+    const keys = new Set();
+    if (user.referredBy) {
+      const aid = userToAgent.get(String(user.referredBy));
+      if (aid) keys.add(aid);
+    }
+    if (user.referredByAgentId) keys.add(String(user.referredByAgentId));
+    for (const aid of keys) {
+      if (!counts.has(aid)) continue;
+      if (!seen.has(aid)) seen.set(aid, new Set());
+      seen.get(aid).add(String(user._id));
+    }
+  }
+  for (const [aid, set] of seen) counts.set(aid, set.size);
+  return counts;
+}
+
+export async function loadInvitedUsersForAgent(agent, { limit = 50 } = {}) {
+  const or = invitedQueryForAgent(agent);
+  if (!or.length) return [];
+
+  const users = await User.find({ $or: or })
+    .select('name email phone createdAt')
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+
+  const ids = users.map((user) => user._id);
+  const driverUsers = ids.length
+    ? await Driver.find({ user: { $in: ids } }).select('user').lean()
+    : [];
+  const driverSet = new Set(driverUsers.map((row) => String(row.user)));
+
+  return users.map((user) => ({
+    user_id: String(user._id),
+    name: user.name || null,
+    email: user.email || null,
+    phone: user.phone || null,
+    created_at: user.createdAt,
+    is_driver: driverSet.has(String(user._id)),
+  }));
+}
+
+export async function mergeInviteStats(agents, statsMap) {
+  const invitedMap = await invitedCountsForAgents(agents);
+  const next = new Map();
+  for (const agent of agents || []) {
+    const id = String(agent._id);
+    const base = statsMap?.get(id) || {
+      registered: 0,
+      verified: 0,
+      active: 0,
+      rejected: 0,
+      pending: 0,
+    };
+    next.set(id, { ...base, invited: invitedMap.get(id) || 0 });
+  }
+  return next;
 }

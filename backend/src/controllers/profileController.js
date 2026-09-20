@@ -1,4 +1,5 @@
 import User from '../models/User.js';
+import Agent from '../models/Agent.js';
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 import UserSession from '../models/UserSession.js';
@@ -298,7 +299,12 @@ export const getReferralList = asyncHandler(async (req, res) => {
 
   const skip = (page - 1) * limit;
 
-  const referredUsers = await User.find({ referredBy: userId })
+  const agent = await Agent.findOne({ user: userId }).select('_id').lean();
+  const referralQuery = agent
+    ? { $or: [{ referredBy: userId }, { referredByAgentId: agent._id }] }
+    : { referredBy: userId };
+
+  const referredUsers = await User.find(referralQuery)
     .select('name email phone profileImage createdAt isRegCompleted')
     .sort({ createdAt: -1 })
     .skip(skip)
@@ -322,7 +328,7 @@ export const getReferralList = asyncHandler(async (req, res) => {
     })
   );
 
-  const total = await User.countDocuments({ referredBy: userId });
+  const total = await User.countDocuments(referralQuery);
 
   res.json({
     status: 'success',

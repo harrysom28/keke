@@ -6,7 +6,12 @@ import { asyncHandler } from '../utils/errors.js';
 import { logAdminAction } from '../services/auditLogService.js';
 import { findUserByIdentifier } from '../utils/loginIdentifier.js';
 import { statsForAgentIds, ratesFromStats, loadReferredDrivers } from '../services/agentStatsService.js';
-import { ensureAgentReferralCode, syncReferredDriversForAgents } from '../services/agentReferralService.js';
+import {
+  ensureAgentReferralCode,
+  syncReferredDriversForAgents,
+  mergeInviteStats,
+  loadInvitedUsersForAgent,
+} from '../services/agentReferralService.js';
 import logger from '../utils/logger.js';
 
 function formatAdminAgent(agent, stats, user) {
@@ -35,7 +40,10 @@ export const listAdminAgents = asyncHandler(async (req, res) => {
   const agents = await Agent.find({}).populate('user', 'name email phone isActive referralCode').sort({ createdAt: -1 });
   await Promise.all(agents.map((agent) => ensureAgentReferralCode(agent)));
   await syncReferredDriversForAgents(agents);
-  const statsMap = await statsForAgentIds(agents.map((a) => a._id));
+  const statsMap = await mergeInviteStats(
+    agents,
+    await statsForAgentIds(agents.map((a) => a._id))
+  );
   const rows = agents.map((agent) =>
     formatAdminAgent(agent, statsMap.get(String(agent._id)), agent.user)
   );
@@ -51,11 +59,13 @@ export const getAdminAgent = asyncHandler(async (req, res) => {
   if (!agent) throw new NotFoundError('Agent');
   await ensureAgentReferralCode(agent);
   await syncReferredDriversForAgents([agent]);
-  const [statsMap, target, drivers] = await Promise.all([
+  const [rawStats, target, drivers, invites] = await Promise.all([
     statsForAgentIds([agent._id]),
     AgentTarget.findOne({ agent: agent._id, status: 'active' }).sort({ deadline: 1 }),
     loadReferredDrivers(agent._id),
+    loadInvitedUsersForAgent(agent),
   ]);
+  const statsMap = await mergeInviteStats([agent], rawStats);
 
   res.json({
     status: 'success',
@@ -63,6 +73,7 @@ export const getAdminAgent = asyncHandler(async (req, res) => {
       agent: formatAdminAgent(agent, statsMap.get(String(agent._id)), agent.user),
       cycle: target,
       drivers,
+      invites,
     },
   });
 });
@@ -72,10 +83,11 @@ export const listAdminAgentDrivers = asyncHandler(async (req, res) => {
   if (!agent) throw new NotFoundError('Agent');
   await ensureAgentReferralCode(agent);
   await syncReferredDriversForAgents([agent]);
-  const [drivers, statsMap] = await Promise.all([
+  const [drivers, rawStats] = await Promise.all([
     loadReferredDrivers(agent._id),
     statsForAgentIds([agent._id]),
   ]);
+  const statsMap = await mergeInviteStats([agent], rawStats);
   res.json({
     status: 'success',
     data: {

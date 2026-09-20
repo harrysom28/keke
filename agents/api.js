@@ -103,7 +103,10 @@
       }, false);
     },
     patch: function (path, body) {
-      return request(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }, false);
+      return request(path, {
+        method: 'PATCH',
+        body: body instanceof FormData ? body : (body ? JSON.stringify(body) : undefined),
+      }, false);
     },
   };
 })(typeof window !== 'undefined' ? window : this);

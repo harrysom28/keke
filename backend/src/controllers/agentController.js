@@ -19,9 +19,15 @@ import logger from '../utils/logger.js';
 import { findUserByIdentifier, parseLoginIdentifier } from '../utils/loginIdentifier.js';
 import { uploadToCloudinary, getFileUrl } from '../services/fileUploadService.js';
 import { getOrCreateWallet } from '../services/walletService.js';
-import { ensureAgentReferralCode } from '../services/agentReferralService.js';
+import {
+  ensureAgentReferralCode,
+  syncReferredDriversForAgents,
+  mergeInviteStats,
+  loadInvitedUsersForAgent,
+} from '../services/agentReferralService.js';
 import {
   statsForAgent,
+  statsForAgentIds,
   recentlyActiveDriverIds,
   formatReferredDriver,
   loadReferredDrivers,
@@ -98,12 +104,106 @@ async function persistAgentUpload(file) {
   return null;
 }
 
+async function collectAgentUploads(files) {
+  let selfieUrl = null;
+  let idImageUrl = null;
+  let licenseImageUrl = null;
+  const vehicleImages = [];
+
+  for (const file of files || []) {
+    try {
+      const url = await persistAgentUpload(file);
+      if (!url) continue;
+      const field = String(file.fieldname || '').toLowerCase();
+      if (field.includes('selfie')) selfieUrl = url;
+      else if (field.includes('vehicle')) vehicleImages.push({ type: 'front', url, createdAt: new Date() });
+      else if (field.includes('licence') || field.includes('license')) licenseImageUrl = url;
+      else idImageUrl = url;
+    } catch (err) {
+      logger.warn(`Agent driver upload failed (${file.fieldname}): ${err.message}`);
+    }
+  }
+
+  return { selfieUrl, idImageUrl, licenseImageUrl, vehicleImages };
+}
+
+async function applyAgentDriverUploads({ driver, user, files, licenseNumber }) {
+  const { selfieUrl, idImageUrl, licenseImageUrl, vehicleImages } = await collectAgentUploads(files);
+
+  if (vehicleImages.length) {
+    driver.vehicleImages = vehicleImages;
+    await driver.save();
+  }
+
+  if (selfieUrl || idImageUrl || licenseImageUrl) {
+    await DriverKyc.findOneAndUpdate(
+      { userId: user._id },
+      {
+        $set: {
+          ...(idImageUrl ? { idImageUrl } : {}),
+          ...(licenseImageUrl ? { licenseImageUrl } : {}),
+          ...(selfieUrl ? { selfieUrl } : {}),
+        },
+        $setOnInsert: {
+          userId: user._id,
+          idType: 'drivers_license',
+          idNumber: licenseNumber || 'pending',
+          ...(!idImageUrl ? { idImageUrl: 'pending' } : {}),
+          ...(!selfieUrl ? { selfieUrl: 'pending' } : {}),
+          verificationStatus: 'pending',
+        },
+      },
+      { upsert: true, new: true }
+    );
+  }
+
+  if (selfieUrl && user && !user.profileImage) {
+    user.profileImage = selfieUrl;
+    await user.save({ validateBeforeSave: false });
+  }
+
+  return { selfieUrl, idImageUrl, licenseImageUrl, vehicleImages };
+}
+
+async function serializeAgentDriver(driver) {
+  const userId = driver.user?._id || driver.user;
+  const [activeSet, kyc] = await Promise.all([
+    recentlyActiveDriverIds([driver._id]),
+    DriverKyc.findOne({ userId }).lean(),
+  ]);
+  return {
+    ...formatReferredDriver(driver, activeSet.has(String(driver._id)), kyc),
+    license_number: driver.licenseNumber,
+    vehicle_details: driver.vehicleDetails,
+    kyc_status: kyc?.verificationStatus || null,
+    kyc_rejection: kyc?.rejectionReason || null,
+  };
+}
+
 function vehicleDefaults(vehicleType) {
   const label = `${vehicleType?.name || ''} ${vehicleType?.displayName || ''}`.toLowerCase();
   if (label.includes('okada') || label.includes('bike') || label.includes('motor')) {
     return { make: 'Okada', model: 'Motorcycle' };
   }
   return { make: 'Keke', model: 'Tricycle' };
+}
+
+function hasUpload(files, part) {
+  return (files || []).some((file) => String(file.fieldname || '').toLowerCase().includes(part));
+}
+
+function applyAgentAttribution(user, req, body) {
+  const agentUserId = req.agent.user || req.user?._id;
+  if (!user.referredBy && agentUserId && String(agentUserId) !== String(user._id)) {
+    user.referredBy = agentUserId;
+  }
+  if (!user.referredByAgentId) user.referredByAgentId = req.agent._id;
+  const gender = String(body.gender || '').trim().toLowerCase();
+  if (['male', 'female', 'other'].includes(gender)) user.gender = gender;
+  const city = String(body.city || '').trim();
+  const state = String(body.state || '').trim();
+  if (city) user.city = city;
+  if (state) user.state = state;
 }
 
 /**
@@ -310,7 +410,9 @@ export const updateAgentMe = asyncHandler(async (req, res) => {
 });
 
 export const getAgentOverview = asyncHandler(async (req, res) => {
-  const stats = await statsForAgent(req.agent._id);
+  await syncReferredDriversForAgents([req.agent]);
+  const statsMap = await mergeInviteStats([req.agent], await statsForAgentIds([req.agent._id]));
+  const stats = statsMap.get(String(req.agent._id)) || await statsForAgent(req.agent._id);
   const target = await AgentTarget.findOne({ agent: req.agent._id, status: 'active' }).sort({ deadline: 1 });
   const days = daysRemaining(target?.deadline);
   const paceNeeded =
@@ -342,15 +444,19 @@ export const getAgentOverview = asyncHandler(async (req, res) => {
 
 export const listMyDrivers = asyncHandler(async (req, res) => {
   await ensureAgentReferralCode(req.agent);
-  const [rows, stats] = await Promise.all([
+  await syncReferredDriversForAgents([req.agent]);
+  const [rows, rawStats, invites] = await Promise.all([
     loadReferredDrivers(req.agent._id),
     statsForAgent(req.agent._id),
+    loadInvitedUsersForAgent(req.agent),
   ]);
+  const statsMap = await mergeInviteStats([req.agent], new Map([[String(req.agent._id), rawStats]]));
   res.json({
     status: 'success',
     data: {
-      stats: ratesFromStats(stats),
+      stats: ratesFromStats(statsMap.get(String(req.agent._id))),
       drivers: rows,
+      invites,
       count: rows.length,
       referral_code: req.agent.referralCode || null,
     },
@@ -358,6 +464,7 @@ export const listMyDrivers = asyncHandler(async (req, res) => {
 });
 
 export const listAgentDrivers = asyncHandler(async (req, res) => {
+  await syncReferredDriversForAgents([req.agent]);
   const { status, search } = req.query;
   let rows = await loadReferredDrivers(req.agent._id);
 
@@ -387,20 +494,39 @@ export const getAgentDriver = asyncHandler(async (req, res) => {
     .populate('vehicleDetails.vehicleType', 'name displayName');
   if (!driver) throw new NotFoundError('Driver');
 
-  const activeSet = await recentlyActiveDriverIds([driver._id]);
-  const kyc = await DriverKyc.findOne({ userId: driver.user?._id || driver.user }).lean();
+  res.json({
+    status: 'success',
+    data: { driver: await serializeAgentDriver(driver) },
+  });
+});
+
+/**
+ * PATCH /api/agents/drivers/:id/documents
+ * Resume KYC photos for a driver already tagged to this agent.
+ */
+export const updateAgentDriverDocuments = asyncHandler(async (req, res) => {
+  const driver = await Driver.findOne({ _id: req.params.id, referredByAgentId: req.agent._id })
+    .populate('user')
+    .populate('vehicleDetails.vehicleType', 'name displayName');
+  if (!driver) throw new NotFoundError('Driver');
+
+  const files = Array.isArray(req.files) ? req.files : [];
+  if (!files.length) throw new ValidationError('Upload at least one document photo');
+
+  const user = driver.user;
+  if (!user) throw new NotFoundError('Driver');
+
+  await applyAgentDriverUploads({
+    driver,
+    user,
+    files,
+    licenseNumber: driver.licenseNumber,
+  });
 
   res.json({
     status: 'success',
-    data: {
-      driver: {
-        ...formatReferredDriver(driver, activeSet.has(String(driver._id)), kyc),
-        license_number: driver.licenseNumber,
-        vehicle_details: driver.vehicleDetails,
-        kyc_status: kyc?.verificationStatus || null,
-        kyc_rejection: kyc?.rejectionReason || null,
-      },
-    },
+    message: 'Documents saved',
+    data: { driver: await serializeAgentDriver(driver) },
   });
 });
 
@@ -415,14 +541,22 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
   const licenseNumber = String(body.licenseNumber || body.union_number || body.license_number || '').trim();
   const plateNumber = String(body.plateNumber || body.plate_number || '').trim().toUpperCase();
   const vehicleTypeId = body.vehicleType || body.vehicle_type;
-  const color = String(body.color || 'Not specified').trim();
+  const color = String(body.color || '').trim();
   const year = parseInt(String(body.year || ''), 10) || new Date().getFullYear();
+  const gender = String(body.gender || '').trim().toLowerCase();
+  const city = String(body.city || '').trim();
+  const state = String(body.state || '').trim();
+  const files = Array.isArray(req.files) ? req.files : [];
 
   if (!name) throw new ValidationError('Driver name is required');
   if (!rawPhone) throw new ValidationError('Driver phone is required');
   if (!licenseNumber) throw new ValidationError('Union / licence number is required');
   if (!plateNumber) throw new ValidationError('Plate number is required');
   if (!vehicleTypeId) throw new ValidationError('Vehicle type is required');
+  if (!color) throw new ValidationError('Vehicle colour is required');
+  if (!['male', 'female', 'other'].includes(gender)) throw new ValidationError('Gender is required');
+  if (!state) throw new ValidationError('State is required');
+  if (!city) throw new ValidationError('Town or city is required');
 
   const parsed = parseLoginIdentifier(rawPhone);
   if (parsed.isEmail || !parsed.phone) {
@@ -444,7 +578,7 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
   const { user: existingUser } = await findUserByIdentifier(User, rawPhone);
   let user = existingUser;
   if (!user) {
-    user = await User.create({
+    user = new User({
       name,
       phone: parsed.phone,
       role: 'driver',
@@ -454,12 +588,15 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
       onboardingStage: 'driver_stage3',
       kycStatus: 'pending',
     });
+    applyAgentAttribution(user, req, body);
+    await user.save();
   } else {
     if (!user.name) user.name = name;
     user.role = 'driver';
     user.isRegCompleted = true;
     if (!user.onboardingStage) user.onboardingStage = 'driver_stage3';
     if (!user.kycStatus) user.kycStatus = 'pending';
+    applyAgentAttribution(user, req, body);
     await user.save();
   }
 
@@ -479,6 +616,15 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
       message: 'Driver already exists — tagged to you',
       data: { driver: formatReferredDriver(driver, false), existing: true },
     });
+  }
+
+  if (
+    !hasUpload(files, 'selfie')
+    || !hasUpload(files, 'vehicle')
+    || !(hasUpload(files, 'license') || hasUpload(files, 'licence'))
+    || !hasUpload(files, 'id_image')
+  ) {
+    throw new ValidationError('Driver photo, licence photo, ID photo, and vehicle photo are required');
   }
 
   try {
@@ -518,52 +664,7 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
     logger.warn(`Wallet create failed for agent-registered driver ${driver._id}: ${err.message}`);
   }
 
-  const files = Array.isArray(req.files) ? req.files : [];
-  let selfieUrl = null;
-  let idImageUrl = null;
-  let licenseImageUrl = null;
-  const vehicleImages = [];
-
-  for (const file of files) {
-    try {
-      const url = await persistAgentUpload(file);
-      if (!url) continue;
-      const field = String(file.fieldname || '').toLowerCase();
-      if (field.includes('selfie')) selfieUrl = url;
-      else if (field.includes('vehicle')) vehicleImages.push({ type: 'front', url, createdAt: new Date() });
-      else if (field.includes('licence') || field.includes('license')) licenseImageUrl = url;
-      else idImageUrl = url;
-    } catch (err) {
-      logger.warn(`Agent driver upload failed (${file.fieldname}): ${err.message}`);
-    }
-  }
-
-  if (vehicleImages.length) {
-    driver.vehicleImages = vehicleImages;
-    await driver.save();
-  }
-
-  if (selfieUrl || idImageUrl || licenseImageUrl) {
-    await DriverKyc.findOneAndUpdate(
-      { userId: user._id },
-      {
-        $set: {
-          ...(idImageUrl ? { idImageUrl } : {}),
-          ...(licenseImageUrl ? { licenseImageUrl } : {}),
-          ...(selfieUrl ? { selfieUrl } : {}),
-        },
-        $setOnInsert: {
-          userId: user._id,
-          idType: 'drivers_license',
-          idNumber: licenseNumber,
-          ...(!idImageUrl ? { idImageUrl: 'pending' } : {}),
-          ...(!selfieUrl ? { selfieUrl: 'pending' } : {}),
-          verificationStatus: 'pending',
-        },
-      },
-      { upsert: true, new: true }
-    );
-  }
+  await applyAgentDriverUploads({ driver, user, files, licenseNumber });
 
   await driver.populate('user', 'name phone email');
   await driver.populate('vehicleDetails.vehicleType', 'name displayName');

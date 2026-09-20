@@ -32,8 +32,40 @@ const STAGE_LABELS = {
   rejected: 'Rejected',
 };
 
+const NG_STATES = [
+  'Abia', 'Adamawa', 'Akwa Ibom', 'Anambra', 'Bauchi', 'Bayelsa', 'Benue', 'Borno',
+  'Cross River', 'Delta', 'Ebonyi', 'Edo', 'Ekiti', 'Enugu', 'FCT', 'Gombe', 'Imo',
+  'Jigawa', 'Kaduna', 'Kano', 'Katsina', 'Kebbi', 'Kogi', 'Kwara', 'Lagos', 'Nasarawa',
+  'Niger', 'Ogun', 'Ondo', 'Osun', 'Oyo', 'Plateau', 'Rivers', 'Sokoto', 'Taraba',
+  'Yobe', 'Zamfara',
+];
+
 function pct(n) {
   return Math.round((Number(n) || 0) * 100) + '%';
+}
+
+function naira(n) {
+  return '₦' + Number(n || 0).toLocaleString();
+}
+
+function fmtDate(value) {
+  if (!value) return '—';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return '—';
+  return dt.toLocaleDateString();
+}
+
+function isDocumentsPending(nextStep) {
+  const text = String(nextStep || '').toLowerCase();
+  return text.includes('document') || text.includes('photo');
+}
+
+function missingDocumentError(selfie, licenseImage, idImage, vehicleImage) {
+  if (!selfie) return 'Please upload a photo of yourself.';
+  if (!licenseImage) return 'Please upload an image of your driver license.';
+  if (!idImage) return 'Please upload an image of your government-issued ID card.';
+  if (!vehicleImage) return 'Please upload a photo of the vehicle.';
+  return '';
 }
 
 function Pill({ status }) {
@@ -227,11 +259,16 @@ function LoginPage({ onLogin }) {
 function Overview({ go }) {
   const stored = Auth.getAgent() || {};
   const [data, setData] = useState(null);
+  const [overview, setOverview] = useState(null);
   const [error, setError] = useState('');
   useEffect(() => {
-    Api.get('/api/agents/me/drivers').then((res) => {
-      if (res.error) setError(res.error);
-      else setData(res.data?.data || res.data);
+    Promise.all([
+      Api.get('/api/agents/me/drivers'),
+      Api.get('/api/agents/overview'),
+    ]).then(([driversRes, overviewRes]) => {
+      if (driversRes.error) setError(driversRes.error);
+      else setData(driversRes.data?.data || driversRes.data);
+      if (!overviewRes.error) setOverview(overviewRes.data?.data || overviewRes.data);
     });
   }, []);
   if (error) return <p className="text-red-600 text-sm">{error}</p>;
@@ -239,6 +276,8 @@ function Overview({ go }) {
   const s = data.stats || {};
   const drivers = data.drivers || [];
   const referralCode = data.referral_code || stored.referral_code;
+  const cycle = overview?.cycle;
+  const earnings = overview?.earnings;
   return (
     <div className="space-y-4">
       {referralCode && (
@@ -248,25 +287,67 @@ function Overview({ go }) {
           <p className="text-xs text-gray-500 mt-1">Drivers enter this at signup.</p>
         </div>
       )}
+      {cycle && (
+        <div className="agent-card p-4">
+          <p className="text-xs text-gray-500">{cycle.cycle_name || 'Recruitment cycle'}</p>
+          <p className="text-lg font-semibold mt-1">Target {cycle.target_count} drivers</p>
+          <p className="mt-2 text-sm text-gray-600">Deadline {fmtDate(cycle.deadline)}</p>
+          {cycle.days_remaining != null && (
+            <p className="text-sm text-gray-600">{cycle.days_remaining} days remaining</p>
+          )}
+          {cycle.pace_needed != null && (
+            <p className="text-sm text-gray-600">{cycle.pace_needed} verified / day to hit target</p>
+          )}
+        </div>
+      )}
+      {earnings && (
+        <div className="agent-card p-4">
+          <p className="text-xs text-gray-500">Bounty</p>
+          <p className="text-lg font-semibold mt-1">{naira(earnings.bounty_rate)} per active driver</p>
+          <p className="mt-1 text-sm text-gray-600">Projected {naira(earnings.projected_owed)}</p>
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3">
         <div className="agent-card p-4">
-          <p className="text-xs text-gray-500">Referred</p>
+          <p className="text-xs text-gray-500">Invites</p>
+          <p className="text-2xl font-semibold mt-1">{s.invited || 0}</p>
+        </div>
+        <div className="agent-card p-4">
+          <p className="text-xs text-gray-500">Drivers</p>
           <p className="text-2xl font-semibold mt-1">{s.registered || 0}</p>
         </div>
         <div className="agent-card p-4">
           <p className="text-xs text-gray-500">Verify rate</p>
           <p className="text-2xl font-semibold mt-1">{pct(s.verification_rate)}</p>
         </div>
-        <div className="agent-card p-4">
-          <p className="text-xs text-gray-500">Activate rate</p>
-          <p className="text-2xl font-semibold mt-1">{pct(s.activation_rate)}</p>
-        </div>
       </div>
+      <p className="text-xs text-gray-500">Invites are people who used your code in the Keke app, including passengers. Drivers are those who completed driver registration.</p>
+      {((data.invites || []).length > 0) && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-gray-700">People who used your code</p>
+          {(data.invites || []).map((invite) => (
+            <div key={invite.user_id} className="agent-card p-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="font-medium">{invite.name || '—'}</p>
+                <p className="text-sm text-gray-500">{invite.phone || invite.email || '—'}</p>
+              </div>
+              <span className={`status-pill ${invite.is_driver ? 'bg-sky-100 text-sky-800' : 'bg-gray-100 text-gray-700'}`}>
+                {invite.is_driver ? 'Driver' : 'Passenger'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       {drivers.length === 0 ? (
         <p className="text-sm text-gray-500">No drivers yet. Register one from the field.</p>
       ) : (
         drivers.map((d) => (
-          <div key={d.driver_id} className="agent-card p-4">
+          <button
+            type="button"
+            key={d.driver_id}
+            onClick={() => go('driver', d.driver_id)}
+            className="agent-card p-4 w-full text-left"
+          >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-medium">{d.name || 'Unnamed'}</p>
@@ -276,7 +357,7 @@ function Overview({ go }) {
             </div>
             {d.next_step && <p className="mt-2 text-sm text-gray-600">{d.next_step}</p>}
             <p className="mt-1 text-xs text-gray-400">{d.total_rides || 0} rides completed</p>
-          </div>
+          </button>
         ))
       )}
       <button type="button" onClick={() => go('register')} className="keke-btn w-full py-3 rounded-xl font-medium">
@@ -311,16 +392,26 @@ function Register({ onDone }) {
     const fd = new FormData();
     fd.append('name', form.name.value.trim());
     fd.append('phone', form.phone.value.trim());
+    fd.append('gender', form.gender.value);
+    fd.append('state', form.state.value);
+    fd.append('city', form.city.value.trim());
     fd.append('union_number', form.union_number.value.trim());
     fd.append('plateNumber', form.plateNumber.value.trim());
     fd.append('vehicleType', form.vehicleType.value);
     fd.append('color', form.color.value.trim());
     const selfie = fileField(form, 'selfie');
+    const licenseImage = fileField(form, 'license_image');
     const idImage = fileField(form, 'id_image');
     const vehicleImage = fileField(form, 'vehicle_image');
-    if (selfie) fd.append('selfie', selfie);
-    if (idImage) fd.append('id_image', idImage);
-    if (vehicleImage) fd.append('vehicle_image', vehicleImage);
+    const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
+    if (photoError) {
+      setError(photoError);
+      return;
+    }
+    fd.append('selfie', selfie);
+    fd.append('license_image', licenseImage);
+    fd.append('id_image', idImage);
+    fd.append('vehicle_image', vehicleImage);
 
     setSaving(true);
     const send = () => Api.post('/api/agents/drivers', fd);
@@ -347,9 +438,21 @@ function Register({ onDone }) {
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <p className="text-sm text-gray-500">Same details the driver app already collects. This driver is tagged to you automatically.</p>
+      <p className="text-sm text-gray-500">Same details the driver app already collects. This driver is tagged to you automatically. They finish bank details in the Keke app, then admin verifies.</p>
       <input name="name" required placeholder="Full name" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
       <input name="phone" required placeholder="Phone number" inputMode="tel" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+      <select name="gender" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
+        <option value="">Gender</option>
+        <option value="male">Male</option>
+        <option value="female">Female</option>
+      </select>
+      <select name="state" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
+        <option value="">State</option>
+        {NG_STATES.map((state) => (
+          <option key={state} value={state}>{state}</option>
+        ))}
+      </select>
+      <input name="city" required placeholder="Town / city" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
       <input name="union_number" required placeholder="Union / licence number" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
       <input name="plateNumber" required placeholder="Plate number" className="w-full rounded-xl border border-gray-200 px-4 py-3 uppercase" />
       <select name="vehicleType" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
@@ -360,15 +463,18 @@ function Register({ onDone }) {
           </option>
         ))}
       </select>
-      <input name="color" placeholder="Colour (optional)" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+      <input name="color" required placeholder="Colour" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
       <label className="block text-sm text-gray-600">Driver photo
-        <input name="selfie" type="file" accept="image/*" capture="user" className="mt-1 block w-full text-sm" />
+        <input name="selfie" type="file" accept="image/*" capture="user" required className="mt-1 block w-full text-sm" />
       </label>
-      <label className="block text-sm text-gray-600">ID / licence photo
-        <input name="id_image" type="file" accept="image/*" className="mt-1 block w-full text-sm" />
+      <label className="block text-sm text-gray-600">Licence photo
+        <input name="license_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
+      </label>
+      <label className="block text-sm text-gray-600">ID card photo
+        <input name="id_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
       </label>
       <label className="block text-sm text-gray-600">Keke / bike photo
-        <input name="vehicle_image" type="file" accept="image/*" className="mt-1 block w-full text-sm" />
+        <input name="vehicle_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
       </label>
       {error && <p className="text-sm text-red-600">{error}</p>}
       {ok && <p className="text-sm text-emerald-700">{ok}</p>}
@@ -388,11 +494,130 @@ function queueOffline() {
   } catch (_) { /* ignore quota */ }
 }
 
-function Drivers() {
+function AddDocumentsForm({ driverId, onDone }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [ok, setOk] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setError('');
+    setOk('');
+    const form = e.target;
+    const selfie = fileField(form, 'selfie');
+    const licenseImage = fileField(form, 'license_image');
+    const idImage = fileField(form, 'id_image');
+    const vehicleImage = fileField(form, 'vehicle_image');
+    const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
+    if (photoError) {
+      setError(photoError);
+      return;
+    }
+    const fd = new FormData();
+    fd.append('selfie', selfie);
+    fd.append('license_image', licenseImage);
+    fd.append('id_image', idImage);
+    fd.append('vehicle_image', vehicleImage);
+    setSaving(true);
+    const res = await Api.patch('/api/agents/drivers/' + driverId + '/documents', fd);
+    setSaving(false);
+    if (res.error) { setError(res.error); return; }
+    setOk(res.data?.message || 'Documents saved');
+    form.reset();
+    if (onDone) onDone(res.data?.data?.driver);
+  };
+
+  return (
+    <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="mt-3 space-y-2">
+      <label className="block text-sm text-gray-600">Driver photo
+        <input name="selfie" type="file" accept="image/*" capture="user" required className="mt-1 block w-full text-sm" />
+      </label>
+      <label className="block text-sm text-gray-600">Licence photo
+        <input name="license_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
+      </label>
+      <label className="block text-sm text-gray-600">ID card photo
+        <input name="id_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
+      </label>
+      <label className="block text-sm text-gray-600">Keke / bike photo
+        <input name="vehicle_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
+      </label>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {ok && <p className="text-sm text-emerald-700">{ok}</p>}
+      <button type="submit" disabled={saving} className="keke-btn w-full py-2.5 rounded-xl font-medium">
+        {saving ? 'Saving…' : 'Save documents'}
+      </button>
+    </form>
+  );
+}
+
+function DriverDetail({ id, onBack }) {
+  const [driver, setDriver] = useState(null);
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    if (!id) return;
+    Api.get('/api/agents/drivers/' + id).then((res) => {
+      if (res.error) { setError(res.error); setDriver(null); return; }
+      setDriver(res.data?.data?.driver || null);
+    });
+  }, [id]);
+  useEffect(() => { load(); }, [load]);
+
+  if (error) {
+    return (
+      <div className="space-y-3">
+        <button type="button" onClick={onBack} className="text-sm text-[#3C8F7C]">← Back</button>
+        <p className="text-sm text-red-600">{error}</p>
+      </div>
+    );
+  }
+  if (!driver) return <p className="text-gray-500 text-sm">Loading…</p>;
+  const vehicle = driver.vehicle_details || {};
+  const vehicleType = vehicle.vehicleType?.displayName || vehicle.vehicleType?.name || driver.vehicle_type || '—';
+  return (
+    <div className="space-y-3">
+      <button type="button" onClick={onBack} className="text-sm text-[#3C8F7C]">← Back</button>
+      <div className="agent-card p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="font-medium">{driver.name || 'Unnamed'}</p>
+            <p className="text-sm text-gray-500">{driver.phone || driver.email || '—'}</p>
+          </div>
+          <StagePill stage={driver.stage} />
+        </div>
+        {driver.next_step && <p className="mt-2 text-sm text-gray-600">{driver.next_step}</p>}
+        <p className="mt-1 text-xs text-gray-400">{driver.total_rides || 0} rides completed</p>
+      </div>
+      <div className="agent-card p-4 space-y-1">
+        <p className="text-xs text-gray-500">Vehicle</p>
+        <p className="text-sm">{vehicle.make || driver.park || '—'} {vehicle.model || ''}</p>
+        <p className="text-sm text-gray-600">{driver.plate_number || vehicle.plateNumber || '—'}</p>
+        <p className="text-sm text-gray-600">{vehicleType}{vehicle.color ? ` · ${vehicle.color}` : ''}</p>
+      </div>
+      {(driver.kyc_status || driver.kyc_rejection || driver.rejection_reason) && (
+        <div className="agent-card p-4 space-y-1">
+          <p className="text-xs text-gray-500">KYC</p>
+          {driver.kyc_status && <p className="text-sm capitalize">{driver.kyc_status}</p>}
+          {driver.kyc_rejection && <p className="text-sm text-red-600">{driver.kyc_rejection}</p>}
+          {driver.rejection_reason && <p className="text-sm text-red-600">Rejected: {driver.rejection_reason}</p>}
+        </div>
+      )}
+      {isDocumentsPending(driver.next_step) && (
+        <div className="agent-card p-4">
+          <p className="text-sm font-medium">Add documents</p>
+          <AddDocumentsForm driverId={driver.driver_id} onDone={(next) => { if (next) setDriver(next); else load(); }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Drivers({ go }) {
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState('');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  const [docsFor, setDocsFor] = useState(null);
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (filter) params.set('status', filter);
@@ -422,7 +647,14 @@ function Drivers() {
       {error && <p className="text-sm text-red-600">{error}</p>}
       {rows.length === 0 && <p className="text-sm text-gray-500">No drivers yet. Register one from the field.</p>}
       {rows.map((d) => (
-        <div key={d.driver_id} className="agent-card p-4">
+        <div
+          key={d.driver_id}
+          role="button"
+          tabIndex={0}
+          onClick={() => go('driver', d.driver_id)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') go('driver', d.driver_id); }}
+          className="agent-card p-4 text-left"
+        >
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="font-medium">{d.name || 'Unnamed'}</p>
@@ -435,6 +667,26 @@ function Drivers() {
           <p className="mt-1 text-xs text-gray-400">{d.total_rides || 0} rides completed</p>
           {d.status === 'rejected' && d.rejection_reason && (
             <p className="mt-2 text-sm text-red-600">Rejected: {d.rejection_reason}</p>
+          )}
+          {isDocumentsPending(d.next_step) && (
+            <div className="mt-3">
+              <button
+                type="button"
+                className="text-sm font-medium text-[#3C8F7C]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDocsFor(docsFor === d.driver_id ? null : d.driver_id);
+                }}
+              >
+                {docsFor === d.driver_id ? 'Close' : 'Add documents'}
+              </button>
+              {docsFor === d.driver_id && (
+                <AddDocumentsForm
+                  driverId={d.driver_id}
+                  onDone={() => { setDocsFor(null); load(); }}
+                />
+              )}
+            </div>
           )}
         </div>
       ))}
@@ -513,8 +765,13 @@ function Profile({ onLogout }) {
 
 function Shell({ onLogout }) {
   const [page, setPage] = useState('home');
+  const [driverId, setDriverId] = useState(null);
   const agent = Auth.getAgent() || {};
-  const titles = { home: 'My drivers', register: 'Register a driver', drivers: 'My drivers', profile: 'Profile' };
+  const go = (next, id) => {
+    setPage(next);
+    setDriverId(id || null);
+  };
+  const titles = { home: 'My drivers', register: 'Register a driver', drivers: 'My drivers', driver: 'Driver', profile: 'Profile' };
   const nav = [
     { id: 'home', label: 'Home' },
     { id: 'register', label: 'Register' },
@@ -528,9 +785,10 @@ function Shell({ onLogout }) {
         <h1 className="text-xl font-semibold">{titles[page]}</h1>
       </header>
       <main className="flex-1 px-5 nav-safe">
-        {page === 'home' && <Overview go={setPage} />}
-        {page === 'register' && <Register onDone={() => setPage('drivers')} />}
-        {page === 'drivers' && <Drivers />}
+        {page === 'home' && <Overview go={go} />}
+        {page === 'register' && <Register onDone={() => go('drivers')} />}
+        {page === 'drivers' && <Drivers go={go} />}
+        {page === 'driver' && <DriverDetail id={driverId} onBack={() => go('drivers')} />}
         {page === 'profile' && <Profile onLogout={onLogout} />}
       </main>
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-gray-100 grid grid-cols-4" style={{ paddingBottom: 'var(--safe-bottom)' }}>
@@ -538,7 +796,7 @@ function Shell({ onLogout }) {
           <button
             key={item.id}
             type="button"
-            onClick={() => setPage(item.id)}
+            onClick={() => go(item.id)}
             className={`py-3 text-xs font-medium ${page === item.id ? 'text-[#3C8F7C]' : 'text-gray-400'}`}
           >
             {item.label}

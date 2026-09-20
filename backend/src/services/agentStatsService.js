@@ -71,11 +71,12 @@ export function driverNextStep(driver, kyc) {
 }
 
 export function ratesFromStats(stats) {
-  const s = stats || { registered: 0, verified: 0, active: 0, rejected: 0, pending: 0 };
+  const s = stats || { registered: 0, verified: 0, active: 0, rejected: 0, pending: 0, invited: 0 };
   const registered = s.registered || 0;
   const verified = s.verified || 0;
   const active = s.active || 0;
   return {
+    invited: s.invited || 0,
     registered,
     verified,
     active,
@@ -150,6 +151,7 @@ export async function statsForAgentIds(agentIds) {
     mongoose.Types.ObjectId.isValid(id)
   );
   const empty = {
+    invited: 0,
     registered: 0,
     verified: 0,
     active: 0,
@@ -186,6 +188,7 @@ export async function statsForAgentIds(agentIds) {
 export async function statsForAgent(agentId) {
   const map = await statsForAgentIds([agentId]);
   return map.get(String(agentId)) || {
+    invited: 0,
     registered: 0,
     verified: 0,
     active: 0,

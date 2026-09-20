@@ -65,7 +65,8 @@ function AgentsPage({ onNavigate, showToast }) {
     { key: 'phone', label: 'Phone', render: (v, row) => v || row.email || '—' },
     { key: 'referral_code', label: 'Code', render: (v) => v || '—' },
     { key: 'park', label: 'Park / zone', render: (_v, row) => [row.park, row.zone].filter(Boolean).join(' · ') || '—' },
-    { key: 'registered', label: 'Registered', render: (_v, row) => row.stats?.registered ?? 0 },
+    { key: 'invited', label: 'Invites', render: (_v, row) => row.stats?.invited ?? 0 },
+    { key: 'registered', label: 'Drivers', render: (_v, row) => row.stats?.registered ?? 0 },
     { key: 'verified', label: 'Verified', render: (_v, row) => row.stats?.verified ?? 0 },
     { key: 'active', label: 'Active', render: (_v, row) => row.stats?.active ?? 0 },
     { key: 'verification_rate', label: 'Verify rate', render: (v) => pct(v) },
@@ -115,7 +116,7 @@ function AgentsPage({ onNavigate, showToast }) {
         <button type="button" onClick={() => setOpen(true)} className="keke-btn-primary px-3 py-2 rounded-lg text-sm">Add agent</button>
       </div>
       {tab === 'active' && (
-        <p className="text-sm text-gray-500">Registered is not the same as performing. Sort is active drivers first.</p>
+        <p className="text-sm text-gray-500">Invites are people who used the agent&apos;s code in the app. Drivers are those who completed driver registration. Sort is active drivers first.</p>
       )}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
         <C.DataTable
@@ -151,6 +152,13 @@ function AgentsPage({ onNavigate, showToast }) {
 function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [targetForm, setTargetForm] = useState({
+    cycleName: 'Recruitment cycle',
+    targetCount: '20',
+    deadline: '',
+    bountyRate: '',
+  });
+  const [savingTarget, setSavingTarget] = useState(false);
 
   const load = () => {
     if (!id) return;
@@ -169,10 +177,31 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
     else { showToast('Updated'); load(); }
   };
 
+  const createTarget = async (e) => {
+    e.preventDefault();
+    if (!targetForm.targetCount || !targetForm.deadline) {
+      showToast('Target count and deadline are required', 'error');
+      return;
+    }
+    setSavingTarget(true);
+    const res = await Api.post('/api/admin/agents/' + id + '/targets', {
+      cycleName: targetForm.cycleName.trim() || 'Recruitment cycle',
+      targetCount: Number(targetForm.targetCount),
+      deadline: targetForm.deadline,
+      bountyRate: targetForm.bountyRate !== '' ? Number(targetForm.bountyRate) : undefined,
+    });
+    setSavingTarget(false);
+    if (res.error) { showToast(res.error, 'error'); return; }
+    showToast('Target set');
+    setTargetForm({ cycleName: 'Recruitment cycle', targetCount: '20', deadline: '', bountyRate: '' });
+    load();
+  };
+
   if (loading) return <p className="text-gray-500">Loading…</p>;
   if (!data?.agent) return <p className="text-gray-500">Agent not found</p>;
   const a = data.agent;
   const s = a.stats || {};
+  const cycle = data.cycle;
 
   return (
     <div className="space-y-4">
@@ -199,14 +228,59 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
           )}
         </div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[['Registered', s.registered], ['Verified', s.verified], ['Active', s.active], ['Verify rate', pct(a.verification_rate)]].map(([label, value]) => (
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {[['Invites', s.invited], ['Drivers', s.registered], ['Verified', s.verified], ['Active', s.active], ['Verify rate', pct(a.verification_rate)]].map(([label, value]) => (
           <div key={label} className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
             <p className="text-xs text-gray-500">{label}</p>
             <p className="text-xl font-semibold">{value ?? 0}</p>
           </div>
         ))}
       </div>
+      {cycle ? (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <p className="text-xs text-gray-500">{cycle.cycleName || 'Recruitment cycle'}</p>
+          <p className="text-lg font-semibold mt-1">Target {cycle.targetCount} drivers</p>
+          <p className="mt-2 text-sm text-gray-600">Deadline {cycle.deadline ? new Date(cycle.deadline).toLocaleDateString() : '—'}</p>
+          <p className="text-sm text-gray-600 mt-1">Verified {s.verified ?? 0} / {cycle.targetCount}</p>
+        </div>
+      ) : (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-3">
+          <p className="text-sm font-medium">No active target</p>
+          <form onSubmit={createTarget} className="space-y-2">
+            <input
+              value={targetForm.cycleName}
+              onChange={(e) => setTargetForm({ ...targetForm, cycleName: e.target.value })}
+              placeholder="Cycle name"
+              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                value={targetForm.targetCount}
+                onChange={(e) => setTargetForm({ ...targetForm, targetCount: e.target.value })}
+                placeholder="Target count"
+                inputMode="numeric"
+                className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600"
+              />
+              <input
+                type="date"
+                value={targetForm.deadline}
+                onChange={(e) => setTargetForm({ ...targetForm, deadline: e.target.value })}
+                className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600"
+              />
+            </div>
+            <input
+              value={targetForm.bountyRate}
+              onChange={(e) => setTargetForm({ ...targetForm, bountyRate: e.target.value })}
+              placeholder="Bounty ₦ per active driver (optional)"
+              inputMode="numeric"
+              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600"
+            />
+            <button type="submit" disabled={savingTarget} className="keke-btn-primary px-3 py-2 rounded-lg text-sm">
+              {savingTarget ? 'Saving…' : 'Set target'}
+            </button>
+          </form>
+        </div>
+      )}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
         <C.DataTable
           columns={[
@@ -220,6 +294,18 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
           keyField="driver_id"
           onRowClick={(row) => onNavigate && onNavigate('driver-detail', row.driver_id)}
           emptyMessage="No drivers tagged to this agent"
+        />
+      </div>
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <C.DataTable
+          columns={[
+            { key: 'name', label: 'App invite', render: (v) => v || '—' },
+            { key: 'phone', label: 'Phone / email', render: (v, row) => v || row.email || '—' },
+            { key: 'is_driver', label: 'Driver?', render: (v) => (v ? 'Yes' : 'Passenger') },
+          ]}
+          rows={data.invites || []}
+          keyField="user_id"
+          emptyMessage="Nobody has used this agent's invite code yet"
         />
       </div>
     </div>
