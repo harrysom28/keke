@@ -174,6 +174,51 @@ export const requireAdmin = (req, res, next) => {
   next();
 };
 
+const ADMIN_PANEL_ROLES = ['admin', 'agents_manager'];
+
+/**
+ * Any admin-panel login (full admin or agents_manager).
+ */
+export const requireAdminAccess = (req, res, next) => {
+  if (!req.user) {
+    throw new AuthenticationError('Please authenticate first');
+  }
+
+  if (!ADMIN_PANEL_ROLES.includes(req.user.role)) {
+    throw new AuthorizationError('Admin access required');
+  }
+
+  next();
+};
+
+const OBJECT_ID = '[a-fA-F0-9]{24}';
+const AGENTS_MANAGER_ALLOWLIST = [
+  { method: 'GET', re: /^\/me\/?$/ },
+  { method: 'POST', re: /^\/logout\/?$/ },
+  { method: 'GET', re: /^\/agents\/?$/ },
+  { method: 'GET', re: new RegExp(`^/agents/${OBJECT_ID}/?$`) },
+  { method: 'GET', re: new RegExp(`^/agents/${OBJECT_ID}/drivers/?$`) },
+  { method: 'PATCH', re: new RegExp(`^/agents/${OBJECT_ID}/?$`) },
+];
+
+/**
+ * agents_manager may only hit the Agents allowlist. Full admin is unchanged.
+ */
+export const restrictAgentsManager = (req, res, next) => {
+  if (!req.user || req.user.role !== 'agents_manager') {
+    return next();
+  }
+
+  const allowed = AGENTS_MANAGER_ALLOWLIST.some(
+    (rule) => rule.method === req.method && rule.re.test(req.path || '')
+  );
+  if (!allowed) {
+    throw new AuthorizationError('You do not have permission to perform this action');
+  }
+
+  next();
+};
+
 /**
  * Check if user owns resource or is admin
  */

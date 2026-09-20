@@ -3,8 +3,7 @@ import * as adminController from '../controllers/adminController.js';
 import * as adminAgentController from '../controllers/adminAgentController.js';
 import * as notificationController from '../controllers/notificationController.js';
 import * as payoutController from '../controllers/payoutController.js';
-import { protect } from '../middleware/auth.js';
-import { requireAdmin } from '../middleware/auth.js';
+import { protect, requireAdminAccess, restrictAgentsManager } from '../middleware/auth.js';
 import { validationRules, validate } from '../middleware/validation.js';
 import { limiters } from '../middleware/rateLimiter.js';
 
@@ -13,9 +12,11 @@ const router = express.Router();
 // Admin authentication routes (public, rate-limited)
 router.post('/login', limiters.adminLoginLimiter, validationRules.adminLogin, validate, adminController.adminLogin);
 
-// All admin routes require authentication and admin role
+// All admin routes require an admin-panel login. agents_manager is then
+// limited to the Agents allowlist; full admin is unchanged.
 router.use(protect);
-router.use(requireAdmin);
+router.use(requireAdminAccess);
+router.use(restrictAgentsManager);
 
 // Admin profile
 router.post('/logout', adminController.adminLogout);

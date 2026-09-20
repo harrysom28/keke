@@ -182,7 +182,9 @@ export const updateAdminAgent = asyncHandler(async (req, res) => {
   if (name !== undefined) agent.name = name;
   if (zone !== undefined) agent.zone = zone;
   if (park !== undefined) agent.park = park;
-  if (bountyRate !== undefined) agent.bountyRate = Number(bountyRate) || 0;
+  if (bountyRate !== undefined && req.user.role === 'admin') {
+    agent.bountyRate = Number(bountyRate) || 0;
+  }
   if (notes !== undefined) agent.notes = notes;
   if (status && ['pending', 'active', 'inactive', 'flagged'].includes(status)) {
     if (status === 'active' && agent.status === 'pending') {

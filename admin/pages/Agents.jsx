@@ -1,5 +1,6 @@
 const { useState, useEffect } = React;
 const Api = window.AdminApi;
+const Auth = window.AdminAuth;
 const C = window.AdminComponents;
 
 function pct(n) {
@@ -7,6 +8,7 @@ function pct(n) {
 }
 
 function AgentsPage({ onNavigate, showToast }) {
+  const canCreateAgents = Auth.getRole() !== 'agents_manager';
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('active');
@@ -113,7 +115,9 @@ function AgentsPage({ onNavigate, showToast }) {
             </button>
           ))}
         </div>
-        <button type="button" onClick={() => setOpen(true)} className="keke-btn-primary px-3 py-2 rounded-lg text-sm">Add agent</button>
+        {canCreateAgents && (
+          <button type="button" onClick={() => setOpen(true)} className="keke-btn-primary px-3 py-2 rounded-lg text-sm">Add agent</button>
+        )}
       </div>
       {tab === 'active' && (
         <p className="text-sm text-gray-500">Invites are people who used the agent&apos;s code in the app. Drivers are those who completed driver registration. Sort is active drivers first.</p>
@@ -128,6 +132,7 @@ function AgentsPage({ onNavigate, showToast }) {
           emptyMessage={tab === 'pending' ? 'No pending applications' : 'No agents yet'}
         />
       </div>
+      {canCreateAgents && (
       <C.Modal open={open} onClose={() => setOpen(false)} title="Add agent">
         <form onSubmit={create} className="space-y-3">
           <p className="text-sm text-gray-500">Use the email or phone of their existing Keke account. They sign in on the agent console with that same identifier.</p>
@@ -145,11 +150,13 @@ function AgentsPage({ onNavigate, showToast }) {
           <button type="submit" className="keke-btn-primary px-3 py-2 rounded-lg text-sm">Create</button>
         </form>
       </C.Modal>
+      )}
     </div>
   );
 }
 
 function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
+  const canSetTarget = Auth.getRole() !== 'agents_manager';
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [targetForm, setTargetForm] = useState({
@@ -243,7 +250,7 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
           <p className="mt-2 text-sm text-gray-600">Deadline {cycle.deadline ? new Date(cycle.deadline).toLocaleDateString() : '—'}</p>
           <p className="text-sm text-gray-600 mt-1">Verified {s.verified ?? 0} / {cycle.targetCount}</p>
         </div>
-      ) : (
+      ) : canSetTarget ? (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-3">
           <p className="text-sm font-medium">No active target</p>
           <form onSubmit={createTarget} className="space-y-2">
@@ -280,7 +287,7 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
             </button>
           </form>
         </div>
-      )}
+      ) : null}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
         <C.DataTable
           columns={[
@@ -292,7 +299,7 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
           ]}
           rows={data.drivers || []}
           keyField="driver_id"
-          onRowClick={(row) => onNavigate && onNavigate('driver-detail', row.driver_id)}
+          onRowClick={canSetTarget ? (row) => onNavigate && onNavigate('driver-detail', row.driver_id) : undefined}
           emptyMessage="No drivers tagged to this agent"
         />
       </div>

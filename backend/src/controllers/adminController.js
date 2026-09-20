@@ -105,7 +105,10 @@ export const adminLogin = asyncHandler(async (req, res) => {
   }
 
   // Find admin user
-  const admin = await User.findOne({ email: email.toLowerCase(), role: 'admin' }).select('+password');
+  const admin = await User.findOne({
+    email: email.toLowerCase(),
+    role: { $in: ['admin', 'agents_manager'] },
+  }).select('+password');
   logger.info(`Admin found: ${!!admin}`);
   if (!admin) {
     throw new AuthenticationError('Invalid credentials');
@@ -168,7 +171,7 @@ export const adminLogout = asyncHandler(async (req, res) => {
  */
 export const getAdminProfile = asyncHandler(async (req, res) => {
   const admin = await User.findById(req.user._id);
-  if (!admin || admin.role !== 'admin') {
+  if (!admin || !['admin', 'agents_manager'].includes(admin.role)) {
     throw new NotFoundError('Admin');
   }
 

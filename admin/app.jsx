@@ -116,7 +116,8 @@ function LoginPage({ onLogin }) {
 
 function App() {
   const [authenticated, setAuthenticated] = useState(false);
-  const [page, setPage] = useState('dashboard');
+  const isAgentsManager = () => Auth.getRole() === 'agents_manager';
+  const [page, setPage] = useState(() => (Auth.getRole() === 'agents_manager' ? 'agents' : 'dashboard'));
   const [detailId, setDetailId] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -143,6 +144,11 @@ function App() {
   }, []);
 
   const onNavigate = useCallback((p, id) => {
+    if (Auth.getRole() === 'agents_manager' && p !== 'agents' && p !== 'agent-detail') {
+      setPage('agents');
+      setDetailId(null);
+      return;
+    }
     setPage(p);
     setDetailId(id ?? null);
   }, []);
@@ -166,6 +172,7 @@ function App() {
     { id: 'notifications', label: 'Notifications', icon: '🔔' },
     { id: 'audit', label: 'Audit logs', icon: '📋' },
   ];
+  const visibleNav = isAgentsManager() ? nav.filter((item) => item.id === 'agents') : nav;
 
   const pageTitles = {
     dashboard: 'Dashboard',
@@ -184,17 +191,38 @@ function App() {
   };
   const pageTitle = pageTitles[page] || 'Dashboard';
 
+  useEffect(() => {
+    if (!authenticated) return;
+    if (Auth.getRole() === 'agents_manager' && page !== 'agents' && page !== 'agent-detail') {
+      setPage('agents');
+      setDetailId(null);
+    }
+  }, [authenticated, page]);
+
   const handleDashboardExport = useCallback(() => {
     if (dashboardExportRef.current) dashboardExportRef.current();
   }, []);
 
   if (!authenticated) {
-    return <LoginPage onLogin={() => setAuthenticated(true)} />;
+    return (
+      <LoginPage
+        onLogin={() => {
+          setAuthenticated(true);
+          if (Auth.getRole() === 'agents_manager') {
+            setPage('agents');
+            setDetailId(null);
+          }
+        }}
+      />
+    );
   }
 
   const Pages = window.AdminPages || {};
+  const agentsOnly = Auth.getRole() === 'agents_manager';
   let Content = null;
-  if (page === 'dashboard') Content = Pages.Dashboard;
+  if (agentsOnly && page !== 'agents' && page !== 'agent-detail') {
+    Content = Pages.Agents;
+  } else if (page === 'dashboard') Content = Pages.Dashboard;
   else if (page === 'users') Content = Pages.Users;
   else if (page === 'user-detail') Content = Pages.UserDetail;
   else if (page === 'drivers') Content = Pages.Drivers;
@@ -242,7 +270,7 @@ function App() {
           </button>
         </div>
         <nav className="flex-1 p-2 space-y-1 overflow-auto">
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <button
               key={item.id}
               type="button"

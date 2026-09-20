@@ -21,7 +21,7 @@ if (!uri) {
 await mongoose.connect(uri);
 
 const result = await mongoose.connection.db.collection('users').updateMany(
-  { role: { $nin: ['passenger', 'driver', 'admin'] } },
+  { role: { $nin: ['passenger', 'driver', 'admin', 'agents_manager'] } },
   { $set: { role: 'passenger' } }
 );
 
