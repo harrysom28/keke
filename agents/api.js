@@ -47,20 +47,42 @@
   }
 
   async function request(path, opts, retried) {
+    opts = opts || {};
     var url = path.startsWith('http') ? path : getBaseUrl() + (path.startsWith('/') ? '' : '/') + path;
     var token = Auth ? Auth.getToken() : localStorage.getItem('agentToken');
-    var headers = Object.assign({ Accept: 'application/json' }, (opts && opts.headers) || {});
-    if (!(opts && opts.body instanceof FormData) && !headers['Content-Type']) {
+    var headers = Object.assign({ Accept: 'application/json' }, opts.headers || {});
+    var isForm = opts.body instanceof FormData;
+    if (!isForm && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
     }
     if (token) headers.Authorization = 'Bearer ' + token;
 
+    var timeout = opts.timeout != null ? opts.timeout : (isForm ? 180000 : 75000);
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, timeout);
+
+    var fetchOpts = {
+      method: opts.method || 'GET',
+      headers: headers,
+      signal: controller.signal,
+    };
+    if (opts.body != null) fetchOpts.body = opts.body;
+
     var res;
     try {
-      res = await fetch(url, Object.assign({}, opts, { headers }));
+      res = await fetch(url, fetchOpts);
     } catch (err) {
+      clearTimeout(timer);
+      if (err && err.name === 'AbortError') {
+        return {
+          error: 'Request timed out after ' + Math.round(timeout / 1000) + 's. Try again.',
+          status: 0,
+          data: null,
+        };
+      }
       return { error: stringError(err.message || 'Network error'), status: 0, data: null };
     }
+    clearTimeout(timer);
 
     var data = null;
     var contentType = res.headers.get('content-type') || '';

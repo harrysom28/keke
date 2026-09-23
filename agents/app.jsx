@@ -368,14 +368,89 @@ function Overview({ go }) {
 }
 
 function fileField(form, name) {
-  return form[name] && form[name][0] ? form[name][0] : null;
+  const input = form.elements && form.elements[name] ? form.elements[name] : form[name];
+  if (!input) return null;
+  if (input.files && input.files[0]) return input.files[0];
+  return null;
+}
+
+function compressImageFile(file) {
+  return new Promise((resolve) => {
+    if (!file || !(file instanceof Blob) || (file.type && !file.type.startsWith('image/'))) {
+      resolve(file);
+      return;
+    }
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const max = 1280;
+      let width = img.naturalWidth || img.width;
+      let height = img.naturalHeight || img.height;
+      if (width > max || height > max) {
+        if (width >= height) {
+          height = Math.round(height * (max / width));
+          width = max;
+        } else {
+          width = Math.round(width * (max / height));
+          height = max;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        URL.revokeObjectURL(url);
+        resolve(file);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => {
+        URL.revokeObjectURL(url);
+        if (!blob) {
+          resolve(file);
+          return;
+        }
+        const base = String(file.name || 'photo').replace(/\.[^.]+$/, '');
+        resolve(new File([blob], `${base}.jpg`, { type: 'image/jpeg' }));
+      }, 'image/jpeg', 0.7);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(file);
+    };
+    img.src = url;
+  });
+}
+
+async function enqueueRegistration(fd) {
+  if (!window.AgentOfflineQueue) throw new Error('Offline queue unavailable');
+  await window.AgentOfflineQueue.enqueueFromFormData(fd);
+}
+
+function PhotoFileInput({ name, label, capture, preparing }) {
+  return (
+    <label className="block text-sm text-gray-600">{label}
+      <input
+        name={name}
+        type="file"
+        accept="image/*"
+        capture={capture}
+        required
+        className="mt-1 block w-full text-sm"
+      />
+      {preparing ? <span className="block text-xs text-gray-500 mt-1">Preparing photo…</span> : null}
+    </label>
+  );
 }
 
 function Register({ onDone }) {
   const [types, setTypes] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
+  const [retryFd, setRetryFd] = useState(null);
 
   useEffect(() => {
     Api.get('/api/vehicle/types').then((res) => {
@@ -384,11 +459,71 @@ function Register({ onDone }) {
     });
   }, []);
 
+  const sendRegistration = async (fd) => {
+    setSaving(true);
+    setError('');
+    setOk('');
+    let res;
+    try {
+      res = await Api.post('/api/agents/drivers', fd);
+    } catch (err) {
+      res = { error: err.message || 'Network error', status: 0 };
+    }
+    if (!res.error) {
+      setSaving(false);
+      setRetryFd(null);
+      setOk(res.data?.message || 'Driver registered');
+      return { ok: true };
+    }
+    if (res.status === 0) {
+      try {
+        await enqueueRegistration(fd);
+        setSaving(false);
+        setRetryFd(null);
+        setOk('Saved on this phone. It will upload when you are back online.');
+        return { queued: true };
+      } catch (_) {
+        setSaving(false);
+        setRetryFd(fd);
+        setError(res.error || 'Could not send. Stay on this page and tap Retry.');
+        return { failed: true };
+      }
+    }
+    setSaving(false);
+    setError(res.error);
+    return { failed: true };
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     setError('');
     setOk('');
     const form = e.target;
+    const selfie = fileField(form, 'selfie');
+    const licenseImage = fileField(form, 'license_image');
+    const idImage = fileField(form, 'id_image');
+    const vehicleImage = fileField(form, 'vehicle_image');
+    const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
+    if (photoError) {
+      setError(photoError);
+      return;
+    }
+    setPreparing(true);
+    let cSelfie;
+    let cLicense;
+    let cId;
+    let cVehicle;
+    try {
+      [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
+        compressImageFile(selfie),
+        compressImageFile(licenseImage),
+        compressImageFile(idImage),
+        compressImageFile(vehicleImage),
+      ]);
+    } finally {
+      setPreparing(false);
+    }
+
     const fd = new FormData();
     fd.append('name', form.name.value.trim());
     fd.append('phone', form.phone.value.trim());
@@ -399,41 +534,16 @@ function Register({ onDone }) {
     fd.append('plateNumber', form.plateNumber.value.trim());
     fd.append('vehicleType', form.vehicleType.value);
     fd.append('color', form.color.value.trim());
-    const selfie = fileField(form, 'selfie');
-    const licenseImage = fileField(form, 'license_image');
-    const idImage = fileField(form, 'id_image');
-    const vehicleImage = fileField(form, 'vehicle_image');
-    const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
-    if (photoError) {
-      setError(photoError);
-      return;
-    }
-    fd.append('selfie', selfie);
-    fd.append('license_image', licenseImage);
-    fd.append('id_image', idImage);
-    fd.append('vehicle_image', vehicleImage);
+    fd.append('selfie', cSelfie);
+    fd.append('license_image', cLicense);
+    fd.append('id_image', cId);
+    fd.append('vehicle_image', cVehicle);
 
-    setSaving(true);
-    const send = () => Api.post('/api/agents/drivers', fd);
-    let res;
-    try {
-      res = await send();
-    } catch (err) {
-      queueOffline(fd);
-      setSaving(false);
-      setOk('Saved on this phone. It will upload when you are back online.');
-      return;
+    const result = await sendRegistration(fd);
+    if (result.ok || result.queued) {
+      form.reset();
+      if (result.ok && onDone) setTimeout(onDone, 800);
     }
-    setSaving(false);
-    if (res.status === 0) {
-      queueOffline(fd);
-      setOk('Saved on this phone. It will upload when you are back online.');
-      return;
-    }
-    if (res.error) { setError(res.error); return; }
-    setOk(res.data?.message || 'Driver registered');
-    form.reset();
-    if (onDone) setTimeout(onDone, 800);
   };
 
   return (
@@ -464,38 +574,32 @@ function Register({ onDone }) {
         ))}
       </select>
       <input name="color" required placeholder="Colour" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
-      <label className="block text-sm text-gray-600">Driver photo
-        <input name="selfie" type="file" accept="image/*" capture="user" required className="mt-1 block w-full text-sm" />
-      </label>
-      <label className="block text-sm text-gray-600">Licence photo
-        <input name="license_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
-      </label>
-      <label className="block text-sm text-gray-600">ID card photo
-        <input name="id_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
-      </label>
-      <label className="block text-sm text-gray-600">Keke / bike photo
-        <input name="vehicle_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
-      </label>
+      <PhotoFileInput name="selfie" label="Driver photo" capture="user" preparing={preparing} />
+      <PhotoFileInput name="license_image" label="Licence photo" preparing={preparing} />
+      <PhotoFileInput name="id_image" label="ID card photo" preparing={preparing} />
+      <PhotoFileInput name="vehicle_image" label="Keke / bike photo" preparing={preparing} />
       {error && <p className="text-sm text-red-600">{error}</p>}
       {ok && <p className="text-sm text-emerald-700">{ok}</p>}
-      <button type="submit" disabled={saving} className="keke-btn w-full py-3 rounded-xl font-medium">
-        {saving ? 'Saving…' : 'Register driver'}
+      {retryFd && (
+        <button
+          type="button"
+          disabled={saving || preparing}
+          onClick={() => sendRegistration(retryFd)}
+          className="w-full py-3 rounded-xl border border-gray-200 font-medium"
+        >
+          Retry
+        </button>
+      )}
+      <button type="submit" disabled={saving || preparing} className="keke-btn w-full py-3 rounded-xl font-medium">
+        {preparing ? 'Preparing photos…' : saving ? 'Saving…' : 'Register driver'}
       </button>
     </form>
   );
 }
 
-const QUEUE_KEY = 'agentOfflineQueue';
-function queueOffline() {
-  try {
-    const q = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
-    q.push({ at: Date.now() });
-    localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
-  } catch (_) { /* ignore quota */ }
-}
-
 function AddDocumentsForm({ driverId, onDone }) {
   const [saving, setSaving] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
 
@@ -514,11 +618,26 @@ function AddDocumentsForm({ driverId, onDone }) {
       setError(photoError);
       return;
     }
+    setPreparing(true);
+    let cSelfie;
+    let cLicense;
+    let cId;
+    let cVehicle;
+    try {
+      [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
+        compressImageFile(selfie),
+        compressImageFile(licenseImage),
+        compressImageFile(idImage),
+        compressImageFile(vehicleImage),
+      ]);
+    } finally {
+      setPreparing(false);
+    }
     const fd = new FormData();
-    fd.append('selfie', selfie);
-    fd.append('license_image', licenseImage);
-    fd.append('id_image', idImage);
-    fd.append('vehicle_image', vehicleImage);
+    fd.append('selfie', cSelfie);
+    fd.append('license_image', cLicense);
+    fd.append('id_image', cId);
+    fd.append('vehicle_image', cVehicle);
     setSaving(true);
     const res = await Api.patch('/api/agents/drivers/' + driverId + '/documents', fd);
     setSaving(false);
@@ -530,22 +649,14 @@ function AddDocumentsForm({ driverId, onDone }) {
 
   return (
     <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="mt-3 space-y-2">
-      <label className="block text-sm text-gray-600">Driver photo
-        <input name="selfie" type="file" accept="image/*" capture="user" required className="mt-1 block w-full text-sm" />
-      </label>
-      <label className="block text-sm text-gray-600">Licence photo
-        <input name="license_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
-      </label>
-      <label className="block text-sm text-gray-600">ID card photo
-        <input name="id_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
-      </label>
-      <label className="block text-sm text-gray-600">Keke / bike photo
-        <input name="vehicle_image" type="file" accept="image/*" required className="mt-1 block w-full text-sm" />
-      </label>
+      <PhotoFileInput name="selfie" label="Driver photo" capture="user" preparing={preparing} />
+      <PhotoFileInput name="license_image" label="Licence photo" preparing={preparing} />
+      <PhotoFileInput name="id_image" label="ID card photo" preparing={preparing} />
+      <PhotoFileInput name="vehicle_image" label="Keke / bike photo" preparing={preparing} />
       {error && <p className="text-sm text-red-600">{error}</p>}
       {ok && <p className="text-sm text-emerald-700">{ok}</p>}
-      <button type="submit" disabled={saving} className="keke-btn w-full py-2.5 rounded-xl font-medium">
-        {saving ? 'Saving…' : 'Save documents'}
+      <button type="submit" disabled={saving || preparing} className="keke-btn w-full py-2.5 rounded-xl font-medium">
+        {preparing ? 'Preparing photos…' : saving ? 'Saving…' : 'Save documents'}
       </button>
     </form>
   );
@@ -763,6 +874,74 @@ function Profile({ onLogout }) {
   );
 }
 
+function PendingUploads() {
+  const [items, setItems] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+
+  const refresh = useCallback(() => {
+    if (!window.AgentOfflineQueue) return;
+    window.AgentOfflineQueue.list().then(setItems).catch(() => setItems([]));
+  }, []);
+
+  const flush = useCallback(async (manual) => {
+    if (!window.AgentOfflineQueue) return;
+    setBusy(true);
+    if (manual) setNote('');
+    try {
+      const result = await window.AgentOfflineQueue.flush(function (path, fd) {
+        return Api.post(path, fd);
+      });
+      if (result.sent) {
+        setNote('Uploaded ' + result.sent + ' pending driver' + (result.sent === 1 ? '' : 's') + '.');
+      } else if (manual && result.remaining) {
+        setNote('Still waiting for a connection.');
+      }
+    } catch (_) {
+      if (manual) setNote('Could not upload pending drivers yet.');
+    }
+    setBusy(false);
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    refresh();
+    const onChange = () => refresh();
+    const onOnline = () => { flush(); };
+    window.addEventListener('agent-offline-queue-changed', onChange);
+    window.addEventListener('online', onOnline);
+    flush();
+    return () => {
+      window.removeEventListener('agent-offline-queue-changed', onChange);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [refresh, flush]);
+
+  if (!items.length && !note) return null;
+  return (
+    <div className="agent-card mt-3 p-3 space-y-1">
+      {items.length > 0 && (
+        <>
+          <p className="text-sm font-medium">Pending uploads ({items.length})</p>
+          {items.map((item) => (
+            <p key={item.id} className="text-xs text-gray-500">
+              {item.name}{item.phone ? ' · ' + item.phone : ''} · saved {fmtDate(item.at)}
+            </p>
+          ))}
+          <button type="button" disabled={busy} onClick={() => flush(true)} className="keke-btn w-full py-2 rounded-xl text-sm font-medium mt-1">
+            {busy ? 'Uploading…' : 'Upload now'}
+          </button>
+        </>
+      )}
+      {note && (
+        <p className={`text-xs ${String(note).startsWith('Uploaded') ? 'text-emerald-700' : 'text-gray-600'}`}>
+          {note}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Shell({ onLogout }) {
   const [page, setPage] = useState('home');
   const [driverId, setDriverId] = useState(null);
@@ -783,6 +962,7 @@ function Shell({ onLogout }) {
       <header className="px-5 pt-6 pb-3">
         <p className="text-xs text-gray-500">{agent.name || 'Agent'}</p>
         <h1 className="text-xl font-semibold">{titles[page]}</h1>
+        <PendingUploads />
       </header>
       <main className="flex-1 px-5 nav-safe">
         {page === 'home' && <Overview go={go} />}

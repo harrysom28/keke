@@ -105,23 +105,30 @@ async function persistAgentUpload(file) {
 }
 
 async function collectAgentUploads(files) {
+  const uploadResults = await Promise.all(
+    (files || []).map(async (file) => {
+      try {
+        const url = await persistAgentUpload(file);
+        return { file, url, ok: true };
+      } catch (err) {
+        logger.warn(`Agent driver upload failed (${file.fieldname}): ${err.message}`);
+        return { file, url: null, ok: false };
+      }
+    })
+  );
+
   let selfieUrl = null;
   let idImageUrl = null;
   let licenseImageUrl = null;
   const vehicleImages = [];
 
-  for (const file of files || []) {
-    try {
-      const url = await persistAgentUpload(file);
-      if (!url) continue;
-      const field = String(file.fieldname || '').toLowerCase();
-      if (field.includes('selfie')) selfieUrl = url;
-      else if (field.includes('vehicle')) vehicleImages.push({ type: 'front', url, createdAt: new Date() });
-      else if (field.includes('licence') || field.includes('license')) licenseImageUrl = url;
-      else idImageUrl = url;
-    } catch (err) {
-      logger.warn(`Agent driver upload failed (${file.fieldname}): ${err.message}`);
-    }
+  for (const result of uploadResults) {
+    if (!result.ok || !result.url) continue;
+    const field = String(result.file.fieldname || '').toLowerCase();
+    if (field.includes('selfie')) selfieUrl = result.url;
+    else if (field.includes('vehicle')) vehicleImages.push({ type: 'front', url: result.url, createdAt: new Date() });
+    else if (field.includes('licence') || field.includes('license')) licenseImageUrl = result.url;
+    else idImageUrl = result.url;
   }
 
   return { selfieUrl, idImageUrl, licenseImageUrl, vehicleImages };
