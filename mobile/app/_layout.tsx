@@ -57,6 +57,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { AuthState } from "@/store/AuthSlice";
 import { bootstrapI18n } from "@/lib/i18n";
 import { isRunningInExpoGo } from "expo";
+import * as Updates from "expo-updates";
 import * as Sentry from '@sentry/react-native';
 
 // Tracks navigation transactions for performance monitoring in Expo Router.
@@ -73,10 +74,40 @@ if (sentryDsn) {
     integrations: [navigationIntegration],
     enableNativeFramesTracking: !isRunningInExpoGo(),
   });
+  Sentry.setTag("expoUpdateId", Updates.updateId ?? "embedded");
+  Sentry.setContext("expo-updates", { updateId: Updates.updateId });
 }
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
+
+// Apply a downloaded OTA update only while this cold launch is still behind splash.
+// Once the real UI is up (mid-ride, etc.) we leave the new bundle for the next launch.
+const allowColdLaunchReload = { current: true };
+
+function disableColdLaunchReload() {
+  allowColdLaunchReload.current = false;
+}
+
+// TODO: anything touching payments, pricing, or ride-matching should ship with
+// `eas update --rollout-percentage` staged rather than at 100%
+// (`npm run update:production` / `update:preview` / `update:development`).
+// That's a Harrison/Samuel release-discipline decision, not hardcoded here.
+async function applyAvailableUpdateOnColdLaunch() {
+  if (__DEV__) return;
+  try {
+    if (!Updates.isEnabled) return;
+    const result = await Updates.checkForUpdateAsync();
+    if (!result.isAvailable) return;
+    await Updates.fetchUpdateAsync();
+    if (!allowColdLaunchReload.current) return;
+    await Updates.reloadAsync();
+  } catch {
+    // Stay on the cached/embedded bundle.
+  }
+}
+
+void applyAvailableUpdateOnColdLaunch();
 
 // Suppress non-critical font loading errors from @expo/vector-icons in development
 if (__DEV__) {
@@ -98,6 +129,7 @@ if (__DEV__) {
 /** Hide native splash only after persisted state is ready (avoids a blank white screen that looks "stuck"). */
 function HideSplashWhenAppMounts() {
   useEffect(() => {
+    disableColdLaunchReload();
     SplashScreen.hideAsync().catch(() => {});
   }, []);
   return null;

@@ -8,7 +8,10 @@
     "admin": "serve admin -l 3000",
     "agents": "serve agents -l 3001",
     "eas:android": "cd mobile && eas build --platform android --profile preview",
-    "eas:android:production": "cd mobile && eas build --platform android --profile production"
+    "eas:android:production": "cd mobile && eas build --platform android --profile production",
+    "update:development": "cd mobile && eas update --channel development --message",
+    "update:preview": "cd mobile && eas update --channel preview --message",
+    "update:production": "cd mobile && eas update --channel production --message"
   },
   "dependencies": {
     "expo": "^55.0.8",
