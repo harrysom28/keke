@@ -332,15 +332,14 @@ export const sendEmail = async (to, subject, html, text = null) => {
 
     const from = process.env.EMAIL_FROM || process.env.MAIL_FROM_ADDRESS || 'noreply@ride-hailing.com';
 
-    // Verify connection before sending
+    // Some SMTP hosts (Office 365, SES, certain Gmail relays) fail verify()
+    // even when sendMail works. Do not skip the actual send on a verify error.
     const { host, port, user } = getMailConfig();
     try {
       await transporter.verify();
       logger.info(`SMTP connection verified for ${host}:${port}`);
     } catch (verifyError) {
-      logger.error(`SMTP connection verification failed: ${verifyError.message}`);
-      logger.error(`SMTP Config - Host: ${host}, Port: ${port}, User: ${user ? 'Set' : 'Not Set'}`);
-      return false;
+      logger.warn(`SMTP verify failed (${verifyError.message}); sending anyway. Host: ${host}:${port}, User: ${user ? 'Set' : 'Not Set'}`);
     }
 
     const mailOptions = {

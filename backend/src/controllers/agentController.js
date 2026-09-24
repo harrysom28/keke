@@ -39,6 +39,20 @@ const { sendEmail, sendSMS } = notificationService;
 const termiiOtpSmsBody = (otp) =>
   `Your Keke App Verification code is: ${otp}. Valid for 10 minutes.`;
 
+function agentOtpEmailHtml(otp) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #3C8F7C;">Keke agent login code</h2>
+      <p>Your login code is:</p>
+      <div style="background-color: #f5f5f5; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; border-radius: 5px;">
+        ${otp}
+      </div>
+      <p>This code is valid for 10 minutes.</p>
+      <p style="color: #666; font-size: 12px;">If you didn't request this code, you can ignore this email.</p>
+    </div>
+  `;
+}
+
 function logOtpToTerminal(otp, target) {
   if (process.env.NODE_ENV === 'production') return;
   const line = '════════════════════════════════════════';
@@ -261,29 +275,36 @@ export const requestAgentOtp = asyncHandler(async (req, res) => {
   if (user.phone && identifier !== user.phone) await storeOTP(user.phone, otp, 'verification');
   if (user.email && identifier !== user.email) await storeOTP(String(user.email).toLowerCase(), otp, 'verification');
 
+  const emailTo = String(parsed.email || user.email || '').trim().toLowerCase();
+  const phoneTo = user.phone || parsed.phone || null;
+
   res.json({
     status: 'success',
-    message: 'Login code sent',
+    message: emailTo ? 'Login code sent to your email' : 'Login code sent',
     data: {
       otp_queued: true,
-      masked: user.phone || user.email,
+      masked: emailTo || user.phone || user.email,
+      via_email: Boolean(emailTo),
+      via_sms: Boolean(phoneTo),
     },
   });
 
   setImmediate(() => {
-    if (user.phone) {
-      sendSMS(user.phone, termiiOtpSmsBody(otp)).catch((err) => {
+    if (phoneTo) {
+      sendSMS(phoneTo, termiiOtpSmsBody(otp)).catch((err) => {
         logger.error(`Agent login OTP SMS failed: ${err.message}`);
       });
     }
-    if (user.email) {
-      sendEmail(
-        user.email,
-        'Your Keke agent login code',
-        `<p>Your login code is: <strong>${otp}</strong>. Valid for 10 minutes.</p>`
-      ).catch((err) => {
-        logger.error(`Agent login OTP email failed: ${err.message}`);
-      });
+    if (emailTo) {
+      logger.info(`📧 Attempting to send agent login OTP email to: ${emailTo}`);
+      sendEmail(emailTo, 'Your Keke agent login code', agentOtpEmailHtml(otp))
+        .then((sent) => {
+          if (sent) logger.info(`✅ Agent login OTP email sent to ${emailTo}`);
+          else logger.warn(`⚠️ Agent login OTP email did not send to ${emailTo} — check SMTP_USER/SMTP_PASS`);
+        })
+        .catch((err) => {
+          logger.error(`Agent login OTP email failed: ${err.message}`);
+        });
     }
   });
 });

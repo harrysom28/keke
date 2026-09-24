@@ -231,7 +231,11 @@ function LoginPage({ onLogin }) {
           </div>
         ) : (
           <form onSubmit={verify} className="space-y-4">
-            <p className="text-sm text-gray-600">We sent a login code to <span className="font-medium text-gray-900">{identifier}</span>.</p>
+            <p className="text-sm text-gray-600">
+              {identifier.includes('@')
+                ? <>We sent a login code to <span className="font-medium text-gray-900">{identifier}</span>. Check your inbox and spam folder.</>
+                : <>We sent a login code to <span className="font-medium text-gray-900">{identifier}</span>.</>}
+            </p>
             <input
               type="text"
               inputMode="numeric"
