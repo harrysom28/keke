@@ -292,34 +292,50 @@ export const requestAgentOtp = asyncHandler(async (req, res) => {
     await storeOTP(user.phone, otp, 'verification');
   }
 
+  if (usedEmail) {
+    logger.info(`📧 Sending agent login OTP email to: ${emailTo}`);
+    let sent = false;
+    try {
+      sent = await sendEmail(emailTo, 'Your Keke agent login code', agentOtpEmailHtml(otp));
+    } catch (err) {
+      logger.error(`Agent login OTP email failed: ${err.message}`);
+      sent = false;
+    }
+    if (!sent) {
+      await deleteOTP(identifier, 'verification');
+      if (user.email) await deleteOTP(String(user.email).toLowerCase(), 'verification');
+      throw new ValidationError(
+        'Could not send a login code to that email. Try again in a moment, or sign in with your phone number.'
+      );
+    }
+    logger.info(`✅ Agent login OTP email sent to ${emailTo}`);
+    return res.json({
+      status: 'success',
+      message: 'Login code sent to your email',
+      data: {
+        otp_queued: true,
+        masked: emailTo,
+        via_email: true,
+        via_sms: false,
+      },
+    });
+  }
+
   res.json({
     status: 'success',
-    message: usedEmail ? 'Login code sent to your email' : 'Login code sent',
+    message: 'Login code sent',
     data: {
       otp_queued: true,
-      masked: usedEmail ? emailTo : (user.phone || phoneTo),
-      via_email: usedEmail,
-      via_sms: !usedEmail,
+      masked: user.phone || phoneTo,
+      via_email: false,
+      via_sms: true,
     },
   });
 
   setImmediate(() => {
-    if (phoneTo) {
-      sendSMS(phoneTo, termiiOtpSmsBody(otp)).catch((err) => {
-        logger.error(`Agent login OTP SMS failed: ${err.message}`);
-      });
-    }
-    if (emailTo) {
-      logger.info(`📧 Attempting to send agent login OTP email to: ${emailTo}`);
-      sendEmail(emailTo, 'Your Keke agent login code', agentOtpEmailHtml(otp))
-        .then((sent) => {
-          if (sent) logger.info(`✅ Agent login OTP email sent to ${emailTo}`);
-          else logger.warn(`⚠️ Agent login OTP email did not send to ${emailTo} — check SMTP_USER/SMTP_PASS`);
-        })
-        .catch((err) => {
-          logger.error(`Agent login OTP email failed: ${err.message}`);
-        });
-    }
+    sendSMS(phoneTo, termiiOtpSmsBody(otp)).catch((err) => {
+      logger.error(`Agent login OTP SMS failed: ${err.message}`);
+    });
   });
 });
 

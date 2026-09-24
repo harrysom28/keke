@@ -1,4 +1,4 @@
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useRef } = React;
 const Auth = window.AgentAuth;
 const Api = window.AgentApi;
 
@@ -90,37 +90,70 @@ function LoginPage({ onLogin }) {
   const [step, setStep] = useState('id');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [otpInfo, setOtpInfo] = useState('');
+  const [resendIn, setResendIn] = useState(0);
+  const [sendingOtp, setSendingOtp] = useState(false);
   const [pendingMessage, setPendingMessage] = useState('');
   const [apply, setApply] = useState({ name: '', zone: '', reason: '' });
+
+  useEffect(() => {
+    if (step !== 'otp' || resendIn <= 0) return;
+    const timer = setTimeout(() => setResendIn((n) => n - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [step, resendIn]);
 
   const resetToId = () => {
     setStep('id');
     setOtp('');
     setError('');
+    setOtpInfo('');
+    setResendIn(0);
     setPendingMessage('');
     setApply({ name: '', zone: '', reason: '' });
   };
 
-  const requestCode = async (e) => {
-    e.preventDefault();
-    setError('');
+  const requestOtp = async () => {
     const value = identifier.trim();
-    if (!value) { setError('Enter the email or phone on your Keke account'); return; }
+    if (!value) {
+      setError('Enter the email or phone on your Keke account');
+      return false;
+    }
     setLoading(true);
+    setSendingOtp(true);
+    setError('');
     const res = await Api.post('/api/agents/auth/request-otp', { email_phone_number: value });
     setLoading(false);
-    if (res.error) { setError(res.error); return; }
+    setSendingOtp(false);
+    if (res.error) {
+      setError(res.error);
+      return false;
+    }
     const applicationStatus = res.data?.data?.application_status;
     if (applicationStatus === 'pending') {
       setPendingMessage('Your application is still pending review.');
       setStep('pending');
-      return;
+      return false;
     }
     if (applicationStatus === 'none') {
       setStep('apply');
-      return;
+      return false;
     }
     setStep('otp');
+    setResendIn(75);
+    return true;
+  };
+
+  const requestCode = async (e) => {
+    e.preventDefault();
+    setOtpInfo('');
+    await requestOtp();
+  };
+
+  const resendCode = async () => {
+    if (loading || resendIn > 0) return;
+    setOtpInfo('');
+    const ok = await requestOtp();
+    if (ok) setOtpInfo('A new code was sent.');
   };
 
   const submitApply = async (e) => {
@@ -247,8 +280,17 @@ function LoginPage({ onLogin }) {
               maxLength={6}
             />
             {error && <p className="text-sm text-red-600">{error}</p>}
+            {otpInfo && <p className="text-sm text-emerald-700">{otpInfo}</p>}
             <button type="submit" disabled={loading} className="keke-btn w-full py-3 rounded-xl font-medium">
-              {loading ? 'Signing in…' : 'Let me in'}
+              {loading && !sendingOtp ? 'Signing in…' : 'Let me in'}
+            </button>
+            <button
+              type="button"
+              disabled={loading || resendIn > 0}
+              onClick={resendCode}
+              className="w-full text-sm text-[#3C8F7C] disabled:text-gray-400"
+            >
+              {sendingOtp ? 'Sending…' : resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}
             </button>
             <button type="button" className="w-full text-sm text-[#3C8F7C]" onClick={resetToId}>
               Use a different email or phone
@@ -375,6 +417,12 @@ function fileField(form, name) {
   const input = form.elements && form.elements[name] ? form.elements[name] : null;
   if (!input) return null;
   if (input.files && input.files[0]) return input.files[0];
+  if (typeof input.length === 'number') {
+    for (let i = 0; i < input.length; i += 1) {
+      const el = input[i];
+      if (el && el.files && el.files[0]) return el.files[0];
+    }
+  }
   return null;
 }
 
@@ -453,18 +501,61 @@ async function enqueueRegistration(fd) {
 }
 
 function PhotoFileInput({ name, label, capture, preparing }) {
+  const [fileName, setFileName] = useState('');
+  const cameraCapture = capture || 'environment';
+  const cameraRef = useRef(null);
+
+  useEffect(() => {
+    const form = cameraRef.current && cameraRef.current.form;
+    if (!form) return undefined;
+    const onReset = () => setFileName('');
+    form.addEventListener('reset', onReset);
+    return () => form.removeEventListener('reset', onReset);
+  }, []);
+
+  const onPick = (e) => {
+    const file = e.target.files && e.target.files[0];
+    const group = e.target.form && e.target.form.elements[name];
+    if (group && typeof group.length === 'number' && !group.files) {
+      for (let i = 0; i < group.length; i += 1) {
+        if (group[i] !== e.target) group[i].value = '';
+      }
+    }
+    setFileName(file ? (file.name || 'Photo selected') : '');
+  };
+
   return (
-    <label className="block text-sm text-gray-600">{label}
-      <input
-        name={name}
-        type="file"
-        accept="image/*"
-        capture={capture}
-        required
-        className="mt-1 block w-full text-sm"
-      />
+    <div className="block text-sm text-gray-600">
+      <p>{label}</p>
+      <div className="mt-1 grid grid-cols-2 gap-2">
+        <label className="relative flex items-center justify-center py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-800">
+          Take picture
+          <input
+            ref={cameraRef}
+            name={name}
+            type="file"
+            accept="image/*"
+            capture={cameraCapture}
+            onChange={onPick}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+        </label>
+        <label className="relative flex items-center justify-center py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-800">
+          Choose file
+          <input
+            name={name}
+            type="file"
+            accept="image/*"
+            onChange={onPick}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+        </label>
+      </div>
+      {fileName
+        ? <p className="mt-1 text-xs text-emerald-700">{fileName}</p>
+        : <p className="mt-1 text-xs text-gray-400">Take a picture or choose from this phone</p>}
       {preparing ? <span className="block text-xs text-gray-500 mt-1">Preparing photo…</span> : null}
-    </label>
+    </div>
   );
 }
 

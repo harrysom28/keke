@@ -284,7 +284,11 @@ const createEmailTransport = () => {
     host,
     port,
     secure: port === 465,
+    requireTLS: port === 587,
     auth: { user, pass },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
   });
 };
 
@@ -330,27 +334,23 @@ export const sendEmail = async (to, subject, html, text = null) => {
       return false;
     }
 
-    const from = process.env.EMAIL_FROM || process.env.MAIL_FROM_ADDRESS || 'noreply@ride-hailing.com';
-
-    // Some SMTP hosts (Office 365, SES, certain Gmail relays) fail verify()
-    // even when sendMail works. Do not skip the actual send on a verify error.
-    const { host, port, user } = getMailConfig();
-    try {
-      await transporter.verify();
-      logger.info(`SMTP connection verified for ${host}:${port}`);
-    } catch (verifyError) {
-      logger.warn(`SMTP verify failed (${verifyError.message}); sending anyway. Host: ${host}:${port}, User: ${user ? 'Set' : 'Not Set'}`);
-    }
+    const { user, host, port } = getMailConfig();
+    const fromAddress =
+      process.env.EMAIL_FROM ||
+      process.env.MAIL_FROM_ADDRESS ||
+      user;
+    const fromName = process.env.EMAIL_FROM_NAME || process.env.MAIL_FROM_NAME || 'Keke Ride';
+    const from = `"${fromName}" <${fromAddress}>`;
 
     const mailOptions = {
       from,
       to,
       subject,
       html,
-      text: text || html.replace(/<[^>]*>/g, ''), // Strip HTML if no text provided
+      text: text || html.replace(/<[^>]*>/g, ''),
     };
 
-    logger.info(`Attempting to send email to ${to} from ${from} with subject: ${subject}`);
+    logger.info(`Attempting to send email to ${to} from ${from} via ${host}:${port}`);
 
     const info = await transporter.sendMail(mailOptions);
 
