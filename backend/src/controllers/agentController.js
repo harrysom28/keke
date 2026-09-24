@@ -266,26 +266,40 @@ export const requestAgentOtp = asyncHandler(async (req, res) => {
     throw new ValidationError('A login code was just sent. Please wait about a minute before requesting another.');
   }
 
+  const usedEmail = Boolean(parsed.isEmail);
+  const emailTo = usedEmail
+    ? String(parsed.email || user.email || '').trim().toLowerCase()
+    : '';
+  const phoneTo = usedEmail ? null : (parsed.phone || user.phone || null);
+
+  if (usedEmail && !emailTo) {
+    throw new ValidationError('This account has no email on file. Sign in with your phone number.');
+  }
+  if (!usedEmail && !phoneTo) {
+    throw new ValidationError('This account has no phone number on file. Sign in with your email.');
+  }
+
   const otp = generateOTP();
   if (process.env.NODE_ENV !== 'production') {
     logger.info(`🔐 [DEV] Agent login OTP for ${identifier}: ${otp}`);
     logOtpToTerminal(otp, identifier);
   }
   await storeOTP(identifier, otp, 'verification');
-  if (user.phone && identifier !== user.phone) await storeOTP(user.phone, otp, 'verification');
-  if (user.email && identifier !== user.email) await storeOTP(String(user.email).toLowerCase(), otp, 'verification');
-
-  const emailTo = String(parsed.email || user.email || '').trim().toLowerCase();
-  const phoneTo = user.phone || parsed.phone || null;
+  if (usedEmail && user.email && identifier !== String(user.email).toLowerCase()) {
+    await storeOTP(String(user.email).toLowerCase(), otp, 'verification');
+  }
+  if (!usedEmail && user.phone && identifier !== user.phone) {
+    await storeOTP(user.phone, otp, 'verification');
+  }
 
   res.json({
     status: 'success',
-    message: emailTo ? 'Login code sent to your email' : 'Login code sent',
+    message: usedEmail ? 'Login code sent to your email' : 'Login code sent',
     data: {
       otp_queued: true,
-      masked: emailTo || user.phone || user.email,
-      via_email: Boolean(emailTo),
-      via_sms: Boolean(phoneTo),
+      masked: usedEmail ? emailTo : (user.phone || phoneTo),
+      via_email: usedEmail,
+      via_sms: !usedEmail,
     },
   });
 
