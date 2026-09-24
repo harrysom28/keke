@@ -559,11 +559,21 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
   if (!rawPhone) throw new ValidationError('Driver phone is required');
   if (!licenseNumber) throw new ValidationError('Union / licence number is required');
   if (!plateNumber) throw new ValidationError('Plate number is required');
-  if (!vehicleTypeId) throw new ValidationError('Vehicle type is required');
+  if (!vehicleTypeId || !/^[a-fA-F0-9]{24}$/.test(String(vehicleTypeId))) {
+    throw new ValidationError('Vehicle type is required');
+  }
   if (!color) throw new ValidationError('Vehicle colour is required');
   if (!['male', 'female', 'other'].includes(gender)) throw new ValidationError('Gender is required');
   if (!state) throw new ValidationError('State is required');
   if (!city) throw new ValidationError('Town or city is required');
+  if (
+    !hasUpload(files, 'selfie')
+    || !hasUpload(files, 'vehicle')
+    || !(hasUpload(files, 'license') || hasUpload(files, 'licence'))
+    || !hasUpload(files, 'id_image')
+  ) {
+    throw new ValidationError('Driver photo, licence photo, ID photo, and vehicle photo are required');
+  }
 
   const parsed = parseLoginIdentifier(rawPhone);
   if (parsed.isEmail || !parsed.phone) {
@@ -598,6 +608,9 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
     applyAgentAttribution(user, req, body);
     await user.save();
   } else {
+    if (['admin', 'agents_manager'].includes(user.role)) {
+      throw new ConflictError('This phone number belongs to a staff account.');
+    }
     if (!user.name) user.name = name;
     user.role = 'driver';
     user.isRegCompleted = true;
@@ -623,15 +636,6 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
       message: 'Driver already exists — tagged to you',
       data: { driver: formatReferredDriver(driver, false), existing: true },
     });
-  }
-
-  if (
-    !hasUpload(files, 'selfie')
-    || !hasUpload(files, 'vehicle')
-    || !(hasUpload(files, 'license') || hasUpload(files, 'licence'))
-    || !hasUpload(files, 'id_image')
-  ) {
-    throw new ValidationError('Driver photo, licence photo, ID photo, and vehicle photo are required');
   }
 
   try {

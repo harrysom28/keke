@@ -368,10 +368,25 @@ function Overview({ go }) {
 }
 
 function fileField(form, name) {
-  const input = form.elements && form.elements[name] ? form.elements[name] : form[name];
+  const input = form.elements && form.elements[name] ? form.elements[name] : null;
   if (!input) return null;
   if (input.files && input.files[0]) return input.files[0];
   return null;
+}
+
+function fieldValue(form, name) {
+  const el = form.elements && form.elements[name] ? form.elements[name] : null;
+  if (!el || el.value == null) return '';
+  return String(el.value).trim();
+}
+
+function blobAsImageFile(blob, file) {
+  const base = String((file && file.name) || 'photo').replace(/\.[^.]+$/, '');
+  try {
+    return new File([blob], `${base}.jpg`, { type: 'image/jpeg' });
+  } catch (_) {
+    return blob;
+  }
 }
 
 function compressImageFile(file) {
@@ -380,6 +395,13 @@ function compressImageFile(file) {
       resolve(file);
       return;
     }
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(file), 12000);
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
@@ -401,23 +423,21 @@ function compressImageFile(file) {
       const ctx = canvas.getContext('2d');
       if (!ctx) {
         URL.revokeObjectURL(url);
-        resolve(file);
+        clearTimeout(timer);
+        finish(file);
         return;
       }
       ctx.drawImage(img, 0, 0, width, height);
       canvas.toBlob((blob) => {
         URL.revokeObjectURL(url);
-        if (!blob) {
-          resolve(file);
-          return;
-        }
-        const base = String(file.name || 'photo').replace(/\.[^.]+$/, '');
-        resolve(new File([blob], `${base}.jpg`, { type: 'image/jpeg' }));
+        clearTimeout(timer);
+        finish(blob ? blobAsImageFile(blob, file) : file);
       }, 'image/jpeg', 0.7);
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      resolve(file);
+      clearTimeout(timer);
+      finish(file);
     };
     img.src = url;
   });
@@ -454,6 +474,10 @@ function Register({ onDone }) {
 
   useEffect(() => {
     Api.get('/api/vehicle/types').then((res) => {
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
       const list = res.data?.data || [];
       setTypes(Array.isArray(list) ? list : []);
     });
@@ -499,50 +523,60 @@ function Register({ onDone }) {
     setError('');
     setOk('');
     const form = e.target;
-    const selfie = fileField(form, 'selfie');
-    const licenseImage = fileField(form, 'license_image');
-    const idImage = fileField(form, 'id_image');
-    const vehicleImage = fileField(form, 'vehicle_image');
-    const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
-    if (photoError) {
-      setError(photoError);
-      return;
-    }
-    setPreparing(true);
-    let cSelfie;
-    let cLicense;
-    let cId;
-    let cVehicle;
     try {
-      [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
-        compressImageFile(selfie),
-        compressImageFile(licenseImage),
-        compressImageFile(idImage),
-        compressImageFile(vehicleImage),
-      ]);
-    } finally {
+      const selfie = fileField(form, 'selfie');
+      const licenseImage = fileField(form, 'license_image');
+      const idImage = fileField(form, 'id_image');
+      const vehicleImage = fileField(form, 'vehicle_image');
+      const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
+      if (photoError) {
+        setError(photoError);
+        return;
+      }
+      if (!fieldValue(form, 'vehicleType')) {
+        setError('Please choose a vehicle type.');
+        return;
+      }
+      setPreparing(true);
+      let cSelfie;
+      let cLicense;
+      let cId;
+      let cVehicle;
+      try {
+        [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
+          compressImageFile(selfie),
+          compressImageFile(licenseImage),
+          compressImageFile(idImage),
+          compressImageFile(vehicleImage),
+        ]);
+      } finally {
+        setPreparing(false);
+      }
+
+      const fd = new FormData();
+      fd.append('name', fieldValue(form, 'name'));
+      fd.append('phone', fieldValue(form, 'phone'));
+      fd.append('gender', fieldValue(form, 'gender'));
+      fd.append('state', fieldValue(form, 'state'));
+      fd.append('city', fieldValue(form, 'city'));
+      fd.append('union_number', fieldValue(form, 'union_number'));
+      fd.append('plateNumber', fieldValue(form, 'plateNumber'));
+      fd.append('vehicleType', fieldValue(form, 'vehicleType'));
+      fd.append('color', fieldValue(form, 'color'));
+      fd.append('selfie', cSelfie, cSelfie.name || 'selfie.jpg');
+      fd.append('license_image', cLicense, cLicense.name || 'license.jpg');
+      fd.append('id_image', cId, cId.name || 'id.jpg');
+      fd.append('vehicle_image', cVehicle, cVehicle.name || 'vehicle.jpg');
+
+      const result = await sendRegistration(fd);
+      if (result.ok || result.queued) {
+        form.reset();
+        if (result.ok && onDone) setTimeout(onDone, 800);
+      }
+    } catch (err) {
       setPreparing(false);
-    }
-
-    const fd = new FormData();
-    fd.append('name', form.name.value.trim());
-    fd.append('phone', form.phone.value.trim());
-    fd.append('gender', form.gender.value);
-    fd.append('state', form.state.value);
-    fd.append('city', form.city.value.trim());
-    fd.append('union_number', form.union_number.value.trim());
-    fd.append('plateNumber', form.plateNumber.value.trim());
-    fd.append('vehicleType', form.vehicleType.value);
-    fd.append('color', form.color.value.trim());
-    fd.append('selfie', cSelfie);
-    fd.append('license_image', cLicense);
-    fd.append('id_image', cId);
-    fd.append('vehicle_image', cVehicle);
-
-    const result = await sendRegistration(fd);
-    if (result.ok || result.queued) {
-      form.reset();
-      if (result.ok && onDone) setTimeout(onDone, 800);
+      setSaving(false);
+      setError((err && err.message) || 'Could not register this driver. Try again.');
     }
   };
 
@@ -609,42 +643,48 @@ function AddDocumentsForm({ driverId, onDone }) {
     setError('');
     setOk('');
     const form = e.target;
-    const selfie = fileField(form, 'selfie');
-    const licenseImage = fileField(form, 'license_image');
-    const idImage = fileField(form, 'id_image');
-    const vehicleImage = fileField(form, 'vehicle_image');
-    const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
-    if (photoError) {
-      setError(photoError);
-      return;
-    }
-    setPreparing(true);
-    let cSelfie;
-    let cLicense;
-    let cId;
-    let cVehicle;
     try {
-      [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
-        compressImageFile(selfie),
-        compressImageFile(licenseImage),
-        compressImageFile(idImage),
-        compressImageFile(vehicleImage),
-      ]);
-    } finally {
+      const selfie = fileField(form, 'selfie');
+      const licenseImage = fileField(form, 'license_image');
+      const idImage = fileField(form, 'id_image');
+      const vehicleImage = fileField(form, 'vehicle_image');
+      const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
+      if (photoError) {
+        setError(photoError);
+        return;
+      }
+      setPreparing(true);
+      let cSelfie;
+      let cLicense;
+      let cId;
+      let cVehicle;
+      try {
+        [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
+          compressImageFile(selfie),
+          compressImageFile(licenseImage),
+          compressImageFile(idImage),
+          compressImageFile(vehicleImage),
+        ]);
+      } finally {
+        setPreparing(false);
+      }
+      const fd = new FormData();
+      fd.append('selfie', cSelfie, cSelfie.name || 'selfie.jpg');
+      fd.append('license_image', cLicense, cLicense.name || 'license.jpg');
+      fd.append('id_image', cId, cId.name || 'id.jpg');
+      fd.append('vehicle_image', cVehicle, cVehicle.name || 'vehicle.jpg');
+      setSaving(true);
+      const res = await Api.patch('/api/agents/drivers/' + driverId + '/documents', fd);
+      setSaving(false);
+      if (res.error) { setError(res.error); return; }
+      setOk(res.data?.message || 'Documents saved');
+      form.reset();
+      if (onDone) onDone(res.data?.data?.driver);
+    } catch (err) {
       setPreparing(false);
+      setSaving(false);
+      setError((err && err.message) || 'Could not save documents. Try again.');
     }
-    const fd = new FormData();
-    fd.append('selfie', cSelfie);
-    fd.append('license_image', cLicense);
-    fd.append('id_image', cId);
-    fd.append('vehicle_image', cVehicle);
-    setSaving(true);
-    const res = await Api.patch('/api/agents/drivers/' + driverId + '/documents', fd);
-    setSaving(false);
-    if (res.error) { setError(res.error); return; }
-    setOk(res.data?.message || 'Documents saved');
-    form.reset();
-    if (onDone) onDone(res.data?.data?.driver);
   };
 
   return (
