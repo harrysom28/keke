@@ -60,6 +60,10 @@ function isDocumentsPending(nextStep) {
   return text.includes('document') || text.includes('photo');
 }
 
+function isVehicleDetailsPending(nextStep) {
+  return String(nextStep || '').toLowerCase().includes('vehicle details missing');
+}
+
 function missingDocumentError(selfie, licenseImage, idImage, vehicleImage) {
   if (!selfie) return 'Please upload a photo of yourself.';
   if (!licenseImage) return 'Please upload an image of your driver license.';
@@ -307,7 +311,8 @@ function Overview({ go }) {
   const [data, setData] = useState(null);
   const [overview, setOverview] = useState(null);
   const [error, setError] = useState('');
-  useEffect(() => {
+  const [completeFor, setCompleteFor] = useState(null);
+  const load = useCallback(() => {
     Promise.all([
       Api.get('/api/agents/me/drivers'),
       Api.get('/api/agents/overview'),
@@ -317,6 +322,7 @@ function Overview({ go }) {
       if (!overviewRes.error) setOverview(overviewRes.data?.data || overviewRes.data);
     });
   }, []);
+  useEffect(() => { load(); }, [load]);
   if (error) return <p className="text-red-600 text-sm">{error}</p>;
   if (!data) return <p className="text-gray-500 text-sm">Loading…</p>;
   const s = data.stats || {};
@@ -372,14 +378,33 @@ function Overview({ go }) {
         <div className="space-y-2">
           <p className="text-sm font-medium text-gray-700">People who used your code</p>
           {(data.invites || []).map((invite) => (
-            <div key={invite.user_id} className="agent-card p-3 flex items-start justify-between gap-3">
-              <div>
-                <p className="font-medium">{invite.name || '—'}</p>
-                <p className="text-sm text-gray-500">{invite.phone || invite.email || '—'}</p>
+            <div key={invite.user_id} className="agent-card p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-medium">{invite.name || '—'}</p>
+                  <p className="text-sm text-gray-500">{invite.phone || invite.email || '—'}</p>
+                </div>
+                <span className={`status-pill ${invite.is_driver ? 'bg-sky-100 text-sky-800' : 'bg-gray-100 text-gray-700'}`}>
+                  {invite.is_driver ? 'Driver' : 'Passenger'}
+                </span>
               </div>
-              <span className={`status-pill ${invite.is_driver ? 'bg-sky-100 text-sky-800' : 'bg-gray-100 text-gray-700'}`}>
-                {invite.is_driver ? 'Driver' : 'Passenger'}
-              </span>
+              {!invite.is_driver && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-[#3C8F7C]"
+                    onClick={() => setCompleteFor(completeFor === invite.user_id ? null : invite.user_id)}
+                  >
+                    {completeFor === invite.user_id ? 'Close' : 'Complete driver profile'}
+                  </button>
+                  {completeFor === invite.user_id && (
+                    <CompleteInviteForm
+                      invite={invite}
+                      onDone={() => { setCompleteFor(null); load(); }}
+                    />
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -559,6 +584,98 @@ function PhotoFileInput({ name, label, capture, preparing }) {
   );
 }
 
+function vehicleTypeValue(t) {
+  return t.vehicle_id || t._id || t.id;
+}
+
+function vehicleTypeLabel(t) {
+  return t.display_name || t.displayName || t.name;
+}
+
+function DriverSetupFields({ types, preparing, identity }) {
+  return (
+    <>
+      {identity ? (
+        <>
+          <div>
+            <p className="text-xs text-gray-500">Name</p>
+            <p className="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-gray-800">{identity.name || '—'}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500">Phone</p>
+            <p className="mt-1 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-gray-800">{identity.phone || identity.email || '—'}</p>
+          </div>
+        </>
+      ) : (
+        <>
+          <input name="name" required placeholder="Full name" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+          <input name="phone" required placeholder="Phone number" inputMode="tel" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+        </>
+      )}
+      <select name="gender" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
+        <option value="">Gender</option>
+        <option value="male">Male</option>
+        <option value="female">Female</option>
+      </select>
+      <select name="state" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
+        <option value="">State</option>
+        {NG_STATES.map((state) => (
+          <option key={state} value={state}>{state}</option>
+        ))}
+      </select>
+      <input name="city" required placeholder="Town / city" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+      <input name="union_number" required placeholder="Union / licence number" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+      <input name="plateNumber" required placeholder="Plate number" className="w-full rounded-xl border border-gray-200 px-4 py-3 uppercase" />
+      <select name="vehicleType" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
+        <option value="">Vehicle type</option>
+        {types.map((t) => (
+          <option key={vehicleTypeValue(t)} value={vehicleTypeValue(t)}>
+            {vehicleTypeLabel(t)}
+          </option>
+        ))}
+      </select>
+      <input name="color" required placeholder="Colour" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+      <PhotoFileInput name="selfie" label="Driver photo" capture="user" preparing={preparing} />
+      <PhotoFileInput name="license_image" label="Licence photo" preparing={preparing} />
+      <PhotoFileInput name="id_image" label="ID card photo" preparing={preparing} />
+      <PhotoFileInput name="vehicle_image" label="Keke / bike photo" preparing={preparing} />
+    </>
+  );
+}
+
+async function collectCompressedPhotos(form) {
+  const selfie = fileField(form, 'selfie');
+  const licenseImage = fileField(form, 'license_image');
+  const idImage = fileField(form, 'id_image');
+  const vehicleImage = fileField(form, 'vehicle_image');
+  const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
+  if (photoError) return { error: photoError };
+  const [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
+    compressImageFile(selfie),
+    compressImageFile(licenseImage),
+    compressImageFile(idImage),
+    compressImageFile(vehicleImage),
+  ]);
+  return { cSelfie, cLicense, cId, cVehicle };
+}
+
+function appendDriverDetails(fd, form) {
+  fd.append('gender', fieldValue(form, 'gender'));
+  fd.append('state', fieldValue(form, 'state'));
+  fd.append('city', fieldValue(form, 'city'));
+  fd.append('union_number', fieldValue(form, 'union_number'));
+  fd.append('plateNumber', fieldValue(form, 'plateNumber'));
+  fd.append('vehicleType', fieldValue(form, 'vehicleType'));
+  fd.append('color', fieldValue(form, 'color'));
+}
+
+function appendDriverPhotos(fd, photos) {
+  fd.append('selfie', photos.cSelfie, photos.cSelfie.name || 'selfie.jpg');
+  fd.append('license_image', photos.cLicense, photos.cLicense.name || 'license.jpg');
+  fd.append('id_image', photos.cId, photos.cId.name || 'id.jpg');
+  fd.append('vehicle_image', photos.cVehicle, photos.cVehicle.name || 'vehicle.jpg');
+}
+
 function Register({ onDone }) {
   const [types, setTypes] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -619,49 +736,27 @@ function Register({ onDone }) {
     setOk('');
     const form = e.target;
     try {
-      const selfie = fileField(form, 'selfie');
-      const licenseImage = fileField(form, 'license_image');
-      const idImage = fileField(form, 'id_image');
-      const vehicleImage = fileField(form, 'vehicle_image');
-      const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
-      if (photoError) {
-        setError(photoError);
-        return;
-      }
       if (!fieldValue(form, 'vehicleType')) {
         setError('Please choose a vehicle type.');
         return;
       }
       setPreparing(true);
-      let cSelfie;
-      let cLicense;
-      let cId;
-      let cVehicle;
+      let photos;
       try {
-        [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
-          compressImageFile(selfie),
-          compressImageFile(licenseImage),
-          compressImageFile(idImage),
-          compressImageFile(vehicleImage),
-        ]);
+        photos = await collectCompressedPhotos(form);
       } finally {
         setPreparing(false);
+      }
+      if (photos.error) {
+        setError(photos.error);
+        return;
       }
 
       const fd = new FormData();
       fd.append('name', fieldValue(form, 'name'));
       fd.append('phone', fieldValue(form, 'phone'));
-      fd.append('gender', fieldValue(form, 'gender'));
-      fd.append('state', fieldValue(form, 'state'));
-      fd.append('city', fieldValue(form, 'city'));
-      fd.append('union_number', fieldValue(form, 'union_number'));
-      fd.append('plateNumber', fieldValue(form, 'plateNumber'));
-      fd.append('vehicleType', fieldValue(form, 'vehicleType'));
-      fd.append('color', fieldValue(form, 'color'));
-      fd.append('selfie', cSelfie, cSelfie.name || 'selfie.jpg');
-      fd.append('license_image', cLicense, cLicense.name || 'license.jpg');
-      fd.append('id_image', cId, cId.name || 'id.jpg');
-      fd.append('vehicle_image', cVehicle, cVehicle.name || 'vehicle.jpg');
+      appendDriverDetails(fd, form);
+      appendDriverPhotos(fd, photos);
 
       const result = await sendRegistration(fd);
       if (result.ok || result.queued) {
@@ -678,35 +773,7 @@ function Register({ onDone }) {
   return (
     <form onSubmit={submit} className="space-y-3">
       <p className="text-sm text-gray-500">Same details the driver app already collects. This driver is tagged to you automatically. They finish bank details in the Keke app, then admin verifies.</p>
-      <input name="name" required placeholder="Full name" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
-      <input name="phone" required placeholder="Phone number" inputMode="tel" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
-      <select name="gender" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
-        <option value="">Gender</option>
-        <option value="male">Male</option>
-        <option value="female">Female</option>
-      </select>
-      <select name="state" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
-        <option value="">State</option>
-        {NG_STATES.map((state) => (
-          <option key={state} value={state}>{state}</option>
-        ))}
-      </select>
-      <input name="city" required placeholder="Town / city" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
-      <input name="union_number" required placeholder="Union / licence number" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
-      <input name="plateNumber" required placeholder="Plate number" className="w-full rounded-xl border border-gray-200 px-4 py-3 uppercase" />
-      <select name="vehicleType" required className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white">
-        <option value="">Vehicle type</option>
-        {types.map((t) => (
-          <option key={t.vehicle_id || t._id || t.id} value={t.vehicle_id || t._id || t.id}>
-            {t.display_name || t.displayName || t.name}
-          </option>
-        ))}
-      </select>
-      <input name="color" required placeholder="Colour" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
-      <PhotoFileInput name="selfie" label="Driver photo" capture="user" preparing={preparing} />
-      <PhotoFileInput name="license_image" label="Licence photo" preparing={preparing} />
-      <PhotoFileInput name="id_image" label="ID card photo" preparing={preparing} />
-      <PhotoFileInput name="vehicle_image" label="Keke / bike photo" preparing={preparing} />
+      <DriverSetupFields types={types} preparing={preparing} />
       {error && <p className="text-sm text-red-600">{error}</p>}
       {ok && <p className="text-sm text-emerald-700">{ok}</p>}
       {retryFd && (
@@ -726,6 +793,80 @@ function Register({ onDone }) {
   );
 }
 
+function CompleteInviteForm({ invite, onDone }) {
+  const [types, setTypes] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [error, setError] = useState('');
+  const [ok, setOk] = useState('');
+
+  useEffect(() => {
+    Api.get('/api/vehicle/types').then((res) => {
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      const list = res.data?.data || [];
+      setTypes(Array.isArray(list) ? list : []);
+    });
+  }, []);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setError('');
+    setOk('');
+    const form = e.target;
+    try {
+      if (!fieldValue(form, 'vehicleType')) {
+        setError('Please choose a vehicle type.');
+        return;
+      }
+      setPreparing(true);
+      let photos;
+      try {
+        photos = await collectCompressedPhotos(form);
+      } finally {
+        setPreparing(false);
+      }
+      if (photos.error) {
+        setError(photos.error);
+        return;
+      }
+      const fd = new FormData();
+      appendDriverDetails(fd, form);
+      appendDriverPhotos(fd, photos);
+      setSaving(true);
+      const res = await Api.post('/api/agents/invites/' + invite.user_id + '/complete-driver', fd);
+      setSaving(false);
+      if (res.error) { setError(res.error); return; }
+      setOk(res.data?.message || 'Driver registered');
+      form.reset();
+      if (onDone) setTimeout(onDone, 600);
+    } catch (err) {
+      setPreparing(false);
+      setSaving(false);
+      setError((err && err.message) || 'Could not complete this driver profile. Try again.');
+    }
+  };
+
+  return (
+    <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="mt-3 space-y-3">
+      <p className="text-sm text-gray-500">This person already has a Keke account. Fill in the driver details only.</p>
+      <DriverSetupFields
+        types={types}
+        preparing={preparing}
+        identity={{ name: invite.name, phone: invite.phone, email: invite.email }}
+      />
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {ok && <p className="text-sm text-emerald-700">{ok}</p>}
+      <button type="submit" disabled={saving || preparing} className="keke-btn w-full py-2.5 rounded-xl font-medium">
+        {preparing ? 'Preparing photos…' : saving ? 'Saving…' : 'Save as driver'}
+      </button>
+    </form>
+  );
+}
+
 function AddDocumentsForm({ driverId, onDone }) {
   const [saving, setSaving] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -739,35 +880,19 @@ function AddDocumentsForm({ driverId, onDone }) {
     setOk('');
     const form = e.target;
     try {
-      const selfie = fileField(form, 'selfie');
-      const licenseImage = fileField(form, 'license_image');
-      const idImage = fileField(form, 'id_image');
-      const vehicleImage = fileField(form, 'vehicle_image');
-      const photoError = missingDocumentError(selfie, licenseImage, idImage, vehicleImage);
-      if (photoError) {
-        setError(photoError);
-        return;
-      }
       setPreparing(true);
-      let cSelfie;
-      let cLicense;
-      let cId;
-      let cVehicle;
+      let photos;
       try {
-        [cSelfie, cLicense, cId, cVehicle] = await Promise.all([
-          compressImageFile(selfie),
-          compressImageFile(licenseImage),
-          compressImageFile(idImage),
-          compressImageFile(vehicleImage),
-        ]);
+        photos = await collectCompressedPhotos(form);
       } finally {
         setPreparing(false);
       }
+      if (photos.error) {
+        setError(photos.error);
+        return;
+      }
       const fd = new FormData();
-      fd.append('selfie', cSelfie, cSelfie.name || 'selfie.jpg');
-      fd.append('license_image', cLicense, cLicense.name || 'license.jpg');
-      fd.append('id_image', cId, cId.name || 'id.jpg');
-      fd.append('vehicle_image', cVehicle, cVehicle.name || 'vehicle.jpg');
+      appendDriverPhotos(fd, photos);
       setSaving(true);
       const res = await Api.patch('/api/agents/drivers/' + driverId + '/documents', fd);
       setSaving(false);
@@ -792,6 +917,108 @@ function AddDocumentsForm({ driverId, onDone }) {
       {ok && <p className="text-sm text-emerald-700">{ok}</p>}
       <button type="submit" disabled={saving || preparing} className="keke-btn w-full py-2.5 rounded-xl font-medium">
         {preparing ? 'Preparing photos…' : saving ? 'Saving…' : 'Save documents'}
+      </button>
+    </form>
+  );
+}
+
+function EditVehicleDetailsForm({ driverId, driver, onDone }) {
+  const vehicle = driver?.vehicle_details || {};
+  const initialType = String(vehicle.vehicleType?._id || vehicle.vehicleType || '');
+  const [types, setTypes] = useState([]);
+  const [vehicleType, setVehicleType] = useState(initialType);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [ok, setOk] = useState('');
+
+  useEffect(() => {
+    Api.get('/api/vehicle/types').then((res) => {
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      const list = res.data?.data || [];
+      setTypes(Array.isArray(list) ? list : []);
+    });
+  }, []);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setError('');
+    setOk('');
+    const form = e.target;
+    const plateNumber = fieldValue(form, 'plateNumber');
+    const color = fieldValue(form, 'color');
+    const make = fieldValue(form, 'make');
+    const model = fieldValue(form, 'model');
+    if (!plateNumber) { setError('Plate number is required'); return; }
+    if (!vehicleType) { setError('Please choose a vehicle type.'); return; }
+    if (!color) { setError('Vehicle colour is required'); return; }
+    if (!make) { setError('Vehicle make is required'); return; }
+    if (!model) { setError('Vehicle model is required'); return; }
+    setSaving(true);
+    const res = await Api.patch('/api/agents/drivers/' + driverId + '/vehicle', {
+      plateNumber,
+      vehicleType,
+      color,
+      make,
+      model,
+    });
+    setSaving(false);
+    if (res.error) { setError(res.error); return; }
+    setOk(res.data?.message || 'Vehicle details saved');
+    if (onDone) onDone(res.data?.data?.driver);
+  };
+
+  return (
+    <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="mt-3 space-y-2">
+      <input
+        name="plateNumber"
+        required
+        defaultValue={driver?.plate_number || vehicle.plateNumber || ''}
+        placeholder="Plate number"
+        className="w-full rounded-xl border border-gray-200 px-4 py-3 uppercase"
+      />
+      <select
+        name="vehicleType"
+        required
+        value={vehicleType}
+        onChange={(e) => setVehicleType(e.target.value)}
+        className="w-full rounded-xl border border-gray-200 px-4 py-3 bg-white"
+      >
+        <option value="">Vehicle type</option>
+        {types.map((t) => (
+          <option key={vehicleTypeValue(t)} value={vehicleTypeValue(t)}>
+            {vehicleTypeLabel(t)}
+          </option>
+        ))}
+      </select>
+      <input
+        name="color"
+        required
+        defaultValue={vehicle.color || ''}
+        placeholder="Colour"
+        className="w-full rounded-xl border border-gray-200 px-4 py-3"
+      />
+      <input
+        name="make"
+        required
+        defaultValue={vehicle.make || ''}
+        placeholder="Make"
+        className="w-full rounded-xl border border-gray-200 px-4 py-3"
+      />
+      <input
+        name="model"
+        required
+        defaultValue={vehicle.model || ''}
+        placeholder="Model"
+        className="w-full rounded-xl border border-gray-200 px-4 py-3"
+      />
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {ok && <p className="text-sm text-emerald-700">{ok}</p>}
+      <button type="submit" disabled={saving} className="keke-btn w-full py-2.5 rounded-xl font-medium">
+        {saving ? 'Saving…' : 'Save vehicle details'}
       </button>
     </form>
   );
@@ -848,6 +1075,16 @@ function DriverDetail({ id, onBack }) {
           {driver.rejection_reason && <p className="text-sm text-red-600">Rejected: {driver.rejection_reason}</p>}
         </div>
       )}
+      {isVehicleDetailsPending(driver.next_step) && (
+        <div className="agent-card p-4">
+          <p className="text-sm font-medium">Add vehicle details</p>
+          <EditVehicleDetailsForm
+            driverId={driver.driver_id}
+            driver={driver}
+            onDone={(next) => { if (next) setDriver(next); else load(); }}
+          />
+        </div>
+      )}
       {isDocumentsPending(driver.next_step) && (
         <div className="agent-card p-4">
           <p className="text-sm font-medium">Add documents</p>
@@ -864,6 +1101,7 @@ function Drivers({ go }) {
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [docsFor, setDocsFor] = useState(null);
+  const [vehicleFor, setVehicleFor] = useState(null);
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (filter) params.set('status', filter);
@@ -913,6 +1151,27 @@ function Drivers({ go }) {
           <p className="mt-1 text-xs text-gray-400">{d.total_rides || 0} rides completed</p>
           {d.status === 'rejected' && d.rejection_reason && (
             <p className="mt-2 text-sm text-red-600">Rejected: {d.rejection_reason}</p>
+          )}
+          {isVehicleDetailsPending(d.next_step) && (
+            <div className="mt-3">
+              <button
+                type="button"
+                className="text-sm font-medium text-[#3C8F7C]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setVehicleFor(vehicleFor === d.driver_id ? null : d.driver_id);
+                }}
+              >
+                {vehicleFor === d.driver_id ? 'Close' : 'Add vehicle details'}
+              </button>
+              {vehicleFor === d.driver_id && (
+                <EditVehicleDetailsForm
+                  driverId={d.driver_id}
+                  driver={d}
+                  onDone={() => { setVehicleFor(null); load(); }}
+                />
+              )}
+            </div>
           )}
           {isDocumentsPending(d.next_step) && (
             <div className="mt-3">

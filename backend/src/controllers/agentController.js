@@ -24,6 +24,7 @@ import {
   syncReferredDriversForAgents,
   mergeInviteStats,
   loadInvitedUsersForAgent,
+  invitedQueryForAgent,
 } from '../services/agentReferralService.js';
 import {
   statsForAgent,
@@ -225,6 +226,136 @@ function applyAgentAttribution(user, req, body) {
   const state = String(body.state || '').trim();
   if (city) user.city = city;
   if (state) user.state = state;
+}
+
+function collectAgentDriverFields(body, files, { requireIdentity = true } = {}) {
+  const name = String(body.name || '').trim();
+  const rawPhone = String(body.phone || body.email_phone_number || '').trim();
+  const licenseNumber = String(body.licenseNumber || body.union_number || body.license_number || '').trim();
+  const plateNumber = String(body.plateNumber || body.plate_number || '').trim().toUpperCase();
+  const vehicleTypeId = body.vehicleType || body.vehicle_type;
+  const color = String(body.color || '').trim();
+  const year = parseInt(String(body.year || ''), 10) || new Date().getFullYear();
+  const gender = String(body.gender || '').trim().toLowerCase();
+  const city = String(body.city || '').trim();
+  const state = String(body.state || '').trim();
+  const list = Array.isArray(files) ? files : [];
+
+  if (requireIdentity) {
+    if (!name) throw new ValidationError('Driver name is required');
+    if (!rawPhone) throw new ValidationError('Driver phone is required');
+  }
+  if (!licenseNumber) throw new ValidationError('Union / licence number is required');
+  if (!plateNumber) throw new ValidationError('Plate number is required');
+  if (!vehicleTypeId || !/^[a-fA-F0-9]{24}$/.test(String(vehicleTypeId))) {
+    throw new ValidationError('Vehicle type is required');
+  }
+  if (!color) throw new ValidationError('Vehicle colour is required');
+  if (!['male', 'female', 'other'].includes(gender)) throw new ValidationError('Gender is required');
+  if (!state) throw new ValidationError('State is required');
+  if (!city) throw new ValidationError('Town or city is required');
+  if (
+    !hasUpload(list, 'selfie')
+    || !hasUpload(list, 'vehicle')
+    || !(hasUpload(list, 'license') || hasUpload(list, 'licence'))
+    || !hasUpload(list, 'id_image')
+  ) {
+    throw new ValidationError('Driver photo, licence photo, ID photo, and vehicle photo are required');
+  }
+
+  return {
+    name,
+    rawPhone,
+    licenseNumber,
+    plateNumber,
+    vehicleTypeId,
+    color,
+    year,
+    gender,
+    city,
+    state,
+    files: list,
+  };
+}
+
+async function resolveAgentDriverVehicle(body, fields) {
+  const vehicleType = await VehicleType.findById(fields.vehicleTypeId);
+  if (!vehicleType || !vehicleType.isActive) {
+    throw new NotFoundError('Vehicle type');
+  }
+  const defaults = vehicleDefaults(vehicleType);
+  const make = String(body.make || defaults.make).trim();
+  const model = String(body.model || defaults.model).trim();
+  const licenseExpiry = body.licenseExpiry
+    ? new Date(body.licenseExpiry)
+    : new Date(Date.now() + 2 * 365 * 24 * 60 * 60 * 1000);
+  return { vehicleType, make, model, licenseExpiry };
+}
+
+function duplicateDriverFieldError(err) {
+  if (err?.code !== 11000) return null;
+  const field = err.message?.includes('licenseNumber')
+    ? 'Union / licence number'
+    : err.message?.includes('plateNumber')
+      ? 'Plate number'
+      : 'Driver';
+  return new ConflictError(`${field} is already registered.`);
+}
+
+async function createReferredDriverForUser({ req, user, fields, vehicle }) {
+  if (['admin', 'agents_manager'].includes(user.role)) {
+    throw new ConflictError('This phone number belongs to a staff account.');
+  }
+  if (fields.name && !user.name) user.name = fields.name;
+  user.role = 'driver';
+  user.isRegCompleted = true;
+  if (!user.onboardingStage) user.onboardingStage = 'driver_stage3';
+  if (!user.kycStatus) user.kycStatus = 'pending';
+  applyAgentAttribution(user, req, fields);
+  await user.save();
+
+  let driver;
+  try {
+    driver = await Driver.create({
+      user: user._id,
+      referredByAgentId: req.agent._id,
+      licenseNumber: fields.licenseNumber,
+      licenseExpiry: vehicle.licenseExpiry,
+      vehicleDetails: {
+        make: vehicle.make,
+        model: vehicle.model,
+        year: fields.year,
+        plateNumber: fields.plateNumber,
+        color: fields.color,
+        vehicleType: vehicle.vehicleType._id,
+      },
+      documentsVerified: false,
+      verificationStatus: 'pending',
+      isOnline: false,
+      isAvailable: false,
+    });
+  } catch (err) {
+    const conflict = duplicateDriverFieldError(err);
+    if (conflict) throw conflict;
+    throw err;
+  }
+
+  try {
+    await getOrCreateWallet(driver._id, 'NGN');
+  } catch (err) {
+    logger.warn(`Wallet create failed for agent-registered driver ${driver._id}: ${err.message}`);
+  }
+
+  await applyAgentDriverUploads({
+    driver,
+    user,
+    files: fields.files,
+    licenseNumber: fields.licenseNumber,
+  });
+
+  await driver.populate('user', 'name phone email');
+  await driver.populate('vehicleDetails.vehicleType', 'name displayName');
+  return driver;
 }
 
 /**
@@ -589,65 +720,85 @@ export const updateAgentDriverDocuments = asyncHandler(async (req, res) => {
 });
 
 /**
- * POST /api/agents/drivers
- * Field agent registers a driver against the existing Driver + User models.
+ * PATCH /api/agents/drivers/:id/vehicle
+ * Fill missing vehicle details for a driver already tagged to this agent.
  */
-export const registerAgentDriver = asyncHandler(async (req, res) => {
+export const updateAgentDriverVehicle = asyncHandler(async (req, res) => {
+  const driver = await Driver.findOne({ _id: req.params.id, referredByAgentId: req.agent._id })
+    .populate('user')
+    .populate('vehicleDetails.vehicleType', 'name displayName');
+  if (!driver) throw new NotFoundError('Driver');
+
   const body = req.body || {};
-  const name = String(body.name || '').trim();
-  const rawPhone = String(body.phone || body.email_phone_number || '').trim();
-  const licenseNumber = String(body.licenseNumber || body.union_number || body.license_number || '').trim();
   const plateNumber = String(body.plateNumber || body.plate_number || '').trim().toUpperCase();
   const vehicleTypeId = body.vehicleType || body.vehicle_type;
   const color = String(body.color || '').trim();
-  const year = parseInt(String(body.year || ''), 10) || new Date().getFullYear();
-  const gender = String(body.gender || '').trim().toLowerCase();
-  const city = String(body.city || '').trim();
-  const state = String(body.state || '').trim();
-  const files = Array.isArray(req.files) ? req.files : [];
+  const make = String(body.make || '').trim();
+  const model = String(body.model || '').trim();
+  const year = parseInt(String(body.year || driver.vehicleDetails?.year || ''), 10)
+    || new Date().getFullYear();
 
-  if (!name) throw new ValidationError('Driver name is required');
-  if (!rawPhone) throw new ValidationError('Driver phone is required');
-  if (!licenseNumber) throw new ValidationError('Union / licence number is required');
   if (!plateNumber) throw new ValidationError('Plate number is required');
   if (!vehicleTypeId || !/^[a-fA-F0-9]{24}$/.test(String(vehicleTypeId))) {
     throw new ValidationError('Vehicle type is required');
   }
   if (!color) throw new ValidationError('Vehicle colour is required');
-  if (!['male', 'female', 'other'].includes(gender)) throw new ValidationError('Gender is required');
-  if (!state) throw new ValidationError('State is required');
-  if (!city) throw new ValidationError('Town or city is required');
-  if (
-    !hasUpload(files, 'selfie')
-    || !hasUpload(files, 'vehicle')
-    || !(hasUpload(files, 'license') || hasUpload(files, 'licence'))
-    || !hasUpload(files, 'id_image')
-  ) {
-    throw new ValidationError('Driver photo, licence photo, ID photo, and vehicle photo are required');
-  }
-
-  const parsed = parseLoginIdentifier(rawPhone);
-  if (parsed.isEmail || !parsed.phone) {
-    throw new ValidationError('A valid Nigerian phone number is required');
-  }
+  if (!make) throw new ValidationError('Vehicle make is required');
+  if (!model) throw new ValidationError('Vehicle model is required');
 
   const vehicleType = await VehicleType.findById(vehicleTypeId);
   if (!vehicleType || !vehicleType.isActive) {
     throw new NotFoundError('Vehicle type');
   }
 
-  const defaults = vehicleDefaults(vehicleType);
-  const make = String(body.make || defaults.make).trim();
-  const model = String(body.model || defaults.model).trim();
-  const licenseExpiry = body.licenseExpiry
-    ? new Date(body.licenseExpiry)
-    : new Date(Date.now() + 2 * 365 * 24 * 60 * 60 * 1000);
+  driver.vehicleDetails = {
+    ...(driver.vehicleDetails?.toObject ? driver.vehicleDetails.toObject() : driver.vehicleDetails || {}),
+    make,
+    model,
+    year,
+    plateNumber,
+    color,
+    vehicleType: vehicleType._id,
+  };
 
-  const { user: existingUser } = await findUserByIdentifier(User, rawPhone);
+  try {
+    await driver.save();
+  } catch (err) {
+    const conflict = duplicateDriverFieldError(err);
+    if (conflict) throw conflict;
+    throw err;
+  }
+
+  await driver.populate('vehicleDetails.vehicleType', 'name displayName');
+
+  res.json({
+    status: 'success',
+    message: 'Vehicle details saved',
+    data: { driver: await serializeAgentDriver(driver) },
+  });
+});
+
+/**
+ * POST /api/agents/drivers
+ * Field agent registers a driver against the existing Driver + User models.
+ */
+export const registerAgentDriver = asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const files = Array.isArray(req.files) ? req.files : [];
+  const fields = collectAgentDriverFields(body, files, { requireIdentity: true });
+
+  const parsed = parseLoginIdentifier(fields.rawPhone);
+  if (parsed.isEmail || !parsed.phone) {
+    throw new ValidationError('A valid Nigerian phone number is required');
+  }
+
+  const vehicle = await resolveAgentDriverVehicle(body, fields);
+
+  const { user: existingUser } = await findUserByIdentifier(User, fields.rawPhone);
   let user = existingUser;
   if (!user) {
     user = new User({
-      name,
+      name: fields.name,
       phone: parsed.phone,
       role: 'driver',
       isActive: true,
@@ -656,18 +807,18 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
       onboardingStage: 'driver_stage3',
       kycStatus: 'pending',
     });
-    applyAgentAttribution(user, req, body);
+    applyAgentAttribution(user, req, fields);
     await user.save();
   } else {
     if (['admin', 'agents_manager'].includes(user.role)) {
       throw new ConflictError('This phone number belongs to a staff account.');
     }
-    if (!user.name) user.name = name;
+    if (!user.name) user.name = fields.name;
     user.role = 'driver';
     user.isRegCompleted = true;
     if (!user.onboardingStage) user.onboardingStage = 'driver_stage3';
     if (!user.kycStatus) user.kycStatus = 'pending';
-    applyAgentAttribution(user, req, body);
+    applyAgentAttribution(user, req, fields);
     await user.save();
   }
 
@@ -689,49 +840,43 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
     });
   }
 
-  try {
-    driver = await Driver.create({
-      user: user._id,
-      referredByAgentId: req.agent._id,
-      licenseNumber,
-      licenseExpiry,
-      vehicleDetails: {
-        make,
-        model,
-        year,
-        plateNumber,
-        color,
-        vehicleType: vehicleType._id,
-      },
-      documentsVerified: false,
-      verificationStatus: 'pending',
-      isOnline: false,
-      isAvailable: false,
-    });
-  } catch (err) {
-    if (err.code === 11000) {
-      const field = err.message?.includes('licenseNumber')
-        ? 'Union / licence number'
-        : err.message?.includes('plateNumber')
-          ? 'Plate number'
-          : 'Driver';
-      throw new ConflictError(`${field} is already registered.`);
-    }
-    throw err;
-  }
-
-  try {
-    await getOrCreateWallet(driver._id, 'NGN');
-  } catch (err) {
-    logger.warn(`Wallet create failed for agent-registered driver ${driver._id}: ${err.message}`);
-  }
-
-  await applyAgentDriverUploads({ driver, user, files, licenseNumber });
-
-  await driver.populate('user', 'name phone email');
-  await driver.populate('vehicleDetails.vehicleType', 'name displayName');
+  driver = await createReferredDriverForUser({ req, user, fields, vehicle });
 
   logger.info(`Agent ${req.agent._id} registered driver ${driver._id} for user ${user._id}`);
+
+  res.status(201).json({
+    status: 'success',
+    message: 'Driver registered',
+    data: { driver: formatReferredDriver(driver, false), existing: false },
+  });
+});
+
+/**
+ * POST /api/agents/invites/:userId/complete-driver
+ * Turn an existing invite (already a Keke user) into a Driver without creating a second account.
+ */
+export const completeAgentInviteDriver = asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const files = Array.isArray(req.files) ? req.files : [];
+  const fields = collectAgentDriverFields(body, files, { requireIdentity: false });
+  const vehicle = await resolveAgentDriverVehicle(body, fields);
+
+  const user = await User.findById(req.params.userId);
+  if (!user) throw new NotFoundError('User');
+
+  const inviteMatch = invitedQueryForAgent(req.agent);
+  if (!inviteMatch.length) throw new NotFoundError('Invite');
+  const invited = await User.exists({ _id: user._id, $or: inviteMatch });
+  if (!invited) throw new NotFoundError('Invite');
+
+  const existing = await Driver.findOne({ user: user._id });
+  if (existing) {
+    throw new ConflictError('This person is already registered as a driver.');
+  }
+
+  const driver = await createReferredDriverForUser({ req, user, fields, vehicle });
+
+  logger.info(`Agent ${req.agent._id} completed invite ${user._id} as driver ${driver._id}`);
 
   res.status(201).json({
     status: 'success',

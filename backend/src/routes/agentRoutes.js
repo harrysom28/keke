@@ -56,6 +56,19 @@ router.patch(
   validate,
   agentController.updateAgentDriverDocuments
 );
+router.patch(
+  '/drivers/:id/vehicle',
+  validationRules.mongoId,
+  validate,
+  agentController.updateAgentDriverVehicle
+);
 router.post('/drivers', upload, agentController.registerAgentDriver);
+router.post(
+  '/invites/:userId/complete-driver',
+  upload,
+  validationRules.mongoUserId,
+  validate,
+  agentController.completeAgentInviteDriver
+);
 
 export default router;

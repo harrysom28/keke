@@ -153,7 +153,7 @@ export async function syncReferredDriversForAgents(agents) {
   if (ops.length) await Driver.bulkWrite(ops, { ordered: false });
 }
 
-function invitedQueryForAgent(agent) {
+export function invitedQueryForAgent(agent) {
   const or = [];
   const userId = agent?.user?._id || agent?.user;
   if (userId) or.push({ referredBy: userId });
