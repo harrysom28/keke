@@ -420,6 +420,14 @@ export const validationRules = {
       .isMongoId()
       .withMessage('Invalid user ID format'),
   ],
+  mongoIdAndTargetId: [
+    param('id')
+      .isMongoId()
+      .withMessage('Invalid ID format'),
+    param('targetId')
+      .isMongoId()
+      .withMessage('Invalid target ID format'),
+  ],
 
   // Ride ID parameter validation (for routes using :rideId)
   rideIdParam: [
@@ -1303,11 +1311,12 @@ export const validationRules = {
         'payout_approve', 'payout_reject',
         'vehicle_type_delete', 'settings_update',
         'promocode_create', 'promocode_update',
+        'agent_create', 'agent_update', 'agent_target_paid',
       ])
       .withMessage('Invalid action filter'),
     query('resourceType')
       .optional()
-      .isIn(['user', 'driver', 'payment', 'ride', 'withdrawal', 'payout_request', 'driver_kyc', 'driver_vehicle', 'vehicle_type', 'promocode', 'settings'])
+      .isIn(['user', 'driver', 'payment', 'ride', 'withdrawal', 'payout_request', 'driver_kyc', 'driver_vehicle', 'vehicle_type', 'promocode', 'settings', 'agent'])
       .withMessage('Invalid resource type filter'),
     query('adminId')
       .optional()

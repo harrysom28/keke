@@ -350,6 +350,18 @@ function Overview({ go }) {
           {cycle.pace_needed != null && (
             <p className="text-sm text-gray-600">{cycle.pace_needed} verified / day to hit target</p>
           )}
+          {cycle.payout_status === 'paid' && cycle.target_reached && (
+            <p className="text-sm text-green-700 mt-2">Target reached. This cycle has been paid.</p>
+          )}
+          {cycle.payout_status === 'paid' && !cycle.target_reached && (
+            <p className="text-sm text-gray-600 mt-2">
+              This cycle was paid even though the target was not fully reached.
+              {cycle.paid_reason ? ` ${cycle.paid_reason}` : ''}
+            </p>
+          )}
+          {cycle.payout_status === 'reached' && (
+            <p className="text-sm text-green-700 mt-2">Target reached. Payout is pending admin confirmation.</p>
+          )}
         </div>
       )}
       {earnings && (
@@ -357,6 +369,7 @@ function Overview({ go }) {
           <p className="text-xs text-gray-500">Bounty</p>
           <p className="text-lg font-semibold mt-1">{naira(earnings.bounty_rate)} per active driver</p>
           <p className="mt-1 text-sm text-gray-600">Projected {naira(earnings.projected_owed)}</p>
+          <p className="mt-1 text-sm text-gray-600">Paid {naira(earnings.paid)}</p>
         </div>
       )}
       <div className="grid grid-cols-3 gap-3">

@@ -1,11 +1,18 @@
 import User from '../models/User.js';
 import Agent from '../models/Agent.js';
 import AgentTarget from '../models/AgentTarget.js';
+import AgentPayout from '../models/AgentPayout.js';
 import { ValidationError, ConflictError, NotFoundError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import { logAdminAction } from '../services/auditLogService.js';
 import { findUserByIdentifier } from '../utils/loginIdentifier.js';
-import { statsForAgentIds, ratesFromStats, loadReferredDrivers } from '../services/agentStatsService.js';
+import {
+  statsForAgentIds,
+  ratesFromStats,
+  loadReferredDrivers,
+  loadCurrentAgentTarget,
+  decorateAgentCycle,
+} from '../services/agentStatsService.js';
 import {
   ensureAgentReferralCode,
   syncReferredDriversForAgents,
@@ -61,17 +68,18 @@ export const getAdminAgent = asyncHandler(async (req, res) => {
   await syncReferredDriversForAgents([agent]);
   const [rawStats, target, drivers, invites] = await Promise.all([
     statsForAgentIds([agent._id]),
-    AgentTarget.findOne({ agent: agent._id, status: 'active' }).sort({ deadline: 1 }),
+    loadCurrentAgentTarget(agent._id),
     loadReferredDrivers(agent._id),
     loadInvitedUsersForAgent(agent),
   ]);
   const statsMap = await mergeInviteStats([agent], rawStats);
+  const stats = statsMap.get(String(agent._id));
 
   res.json({
     status: 'success',
     data: {
-      agent: formatAdminAgent(agent, statsMap.get(String(agent._id)), agent.user),
-      cycle: target,
+      agent: formatAdminAgent(agent, stats, agent.user),
+      cycle: await decorateAgentCycle(target, stats?.verified),
       drivers,
       invites,
     },
@@ -229,4 +237,84 @@ export const createAdminAgentTarget = asyncHandler(async (req, res) => {
   });
 
   res.status(201).json({ status: 'success', data: { target } });
+});
+
+export const markAgentTargetPaid = asyncHandler(async (req, res) => {
+  const agent = await Agent.findById(req.params.id);
+  if (!agent) throw new NotFoundError('Agent');
+
+  const target = await AgentTarget.findOne({ _id: req.params.targetId, agent: agent._id });
+  if (!target) throw new NotFoundError('Agent target');
+  if (target.status === 'cancelled') {
+    throw new ValidationError('This cycle was cancelled and cannot be paid out.');
+  }
+
+  const alreadyPaid = await AgentPayout.exists({ target: target._id, status: 'paid' });
+  if (alreadyPaid) {
+    throw new ValidationError('This cycle was already paid out.');
+  }
+
+  const drivers = await loadReferredDrivers(agent._id);
+  const eligible = drivers.filter((d) => d.stage === 'verified' || d.stage === 'active');
+  const verifiedCount = eligible.length;
+  const targetReached = verifiedCount >= Number(target.targetCount || 0);
+
+  const reasonRaw = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (!targetReached && !reasonRaw) {
+    throw new ValidationError('A reason is required when marking a cycle paid before the target is reached.');
+  }
+  const reason = reasonRaw || 'Target reached';
+  const amount = Number(target.bountyRate != null ? target.bountyRate : agent.bountyRate) || 0;
+  const paidAt = new Date();
+
+  await Promise.all(
+    eligible.map((row) =>
+      AgentPayout.findOneAndUpdate(
+        { agent: agent._id, driver: row.driver_id, target: target._id },
+        {
+          $set: {
+            agent: agent._id,
+            driver: row.driver_id,
+            target: target._id,
+            amount,
+            status: 'paid',
+            reason,
+            paidAt,
+          },
+        },
+        { upsert: true, new: true }
+      )
+    )
+  );
+
+  target.status = 'completed';
+  await target.save();
+
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'agent_target_paid',
+    resourceType: 'agent',
+    resourceId: agent._id,
+    details: {
+      targetId: target._id,
+      cycleName: target.cycleName,
+      verifiedCount,
+      targetCount: target.targetCount,
+      driverCount: eligible.length,
+      bountyRate: amount,
+      total: amount * eligible.length,
+      reason,
+      target_reached: targetReached,
+    },
+    req,
+  });
+
+  res.json({
+    status: 'success',
+    data: {
+      cycle: await decorateAgentCycle(target, verifiedCount),
+      payouts_created: eligible.length,
+    },
+  });
 });

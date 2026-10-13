@@ -166,6 +166,9 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
     bountyRate: '',
   });
   const [savingTarget, setSavingTarget] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const [payReasonOpen, setPayReasonOpen] = useState(false);
+  const [payReason, setPayReason] = useState('');
 
   const load = () => {
     if (!id) return;
@@ -201,6 +204,23 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
     if (res.error) { showToast(res.error, 'error'); return; }
     showToast('Target set');
     setTargetForm({ cycleName: 'Recruitment cycle', targetCount: '20', deadline: '', bountyRate: '' });
+    load();
+  };
+
+  const markPaid = async (reason) => {
+    const current = data?.cycle;
+    const agent = data?.agent;
+    const targetId = current?.target_id || current?._id;
+    if (!targetId) return;
+    const rate = Number(current.bountyRate != null ? current.bountyRate : agent?.bounty_rate) || 0;
+    if (rate === 0) showToast('Bounty rate is ₦0 — this will record a zero payout');
+    setPaying(true);
+    const res = await Api.post('/api/admin/agents/' + id + '/targets/' + targetId + '/mark-paid', reason ? { reason } : {});
+    setPaying(false);
+    if (res.error) { showToast(res.error, 'error'); return; }
+    showToast('Marked as paid');
+    setPayReasonOpen(false);
+    setPayReason('');
     load();
   };
 
@@ -244,13 +264,77 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
         ))}
       </div>
       {cycle ? (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-          <p className="text-xs text-gray-500">{cycle.cycleName || 'Recruitment cycle'}</p>
-          <p className="text-lg font-semibold mt-1">Target {cycle.targetCount} drivers</p>
-          <p className="mt-2 text-sm text-gray-600">Deadline {cycle.deadline ? new Date(cycle.deadline).toLocaleDateString() : '—'}</p>
-          <p className="text-sm text-gray-600 mt-1">Verified {s.verified ?? 0} / {cycle.targetCount}</p>
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs text-gray-500">{cycle.cycleName || 'Recruitment cycle'}</p>
+              <p className="text-lg font-semibold mt-1">Target {cycle.targetCount} drivers</p>
+            </div>
+            {cycle.payout_status === 'paid' && (
+              <span className="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200">Paid</span>
+            )}
+          </div>
+          <p className="text-sm text-gray-600">Deadline {cycle.deadline ? new Date(cycle.deadline).toLocaleDateString() : '—'}</p>
+          <p className="text-sm text-gray-600">Verified {s.verified ?? 0} / {cycle.targetCount}</p>
+          {cycle.target_reached && cycle.payout_status !== 'paid' && (
+            <p className="text-sm text-green-700">Target reached. Payout pending.</p>
+          )}
+          {cycle.payout_status === 'paid' && (
+            <p className="text-sm text-gray-600">
+              Paid {cycle.paid_at ? new Date(cycle.paid_at).toLocaleDateString() : ''}
+              {cycle.paid_reason ? ` · ${cycle.paid_reason}` : ''}
+            </p>
+          )}
+          {canSetTarget && cycle.payout_status !== 'paid' && !payReasonOpen && (
+            <button
+              type="button"
+              disabled={paying}
+              className="keke-btn-primary px-3 py-1.5 rounded-lg text-sm"
+              onClick={() => {
+                if (cycle.target_reached) {
+                  if (window.confirm('Mark this cycle as paid? This records the bounty ledger; it does not send a bank transfer.')) {
+                    markPaid();
+                  }
+                } else {
+                  setPayReasonOpen(true);
+                }
+              }}
+            >
+              {paying ? 'Saving…' : 'Mark as paid'}
+            </button>
+          )}
+          {payReasonOpen && (
+            <div className="space-y-2 pt-1">
+              <p className="text-sm text-gray-600">Target is not reached. Enter a reason to pay anyway.</p>
+              <textarea
+                value={payReason}
+                onChange={(e) => setPayReason(e.target.value)}
+                placeholder="e.g. Deadline passed, paying verified drivers only"
+                rows={2}
+                className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600 text-sm"
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={paying || !payReason.trim()}
+                  className="keke-btn-primary px-3 py-1.5 rounded-lg text-sm"
+                  onClick={() => markPaid(payReason.trim())}
+                >
+                  {paying ? 'Saving…' : 'Confirm payout'}
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-lg border text-sm"
+                  onClick={() => { setPayReasonOpen(false); setPayReason(''); }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      ) : canSetTarget ? (
+      ) : null}
+      {canSetTarget && (!cycle || cycle.status !== 'active') ? (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 space-y-3">
           <p className="text-sm font-medium">No active target</p>
           <form onSubmit={createTarget} className="space-y-2">

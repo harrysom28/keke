@@ -8,7 +8,6 @@ import Driver from '../models/Driver.js';
 import DriverKyc from '../models/DriverKyc.js';
 import VehicleType from '../models/VehicleType.js';
 import Agent from '../models/Agent.js';
-import AgentTarget from '../models/AgentTarget.js';
 import { generateTokenPair } from '../utils/jwt.js';
 import { createSession } from '../services/sessionService.js';
 import { generateOTP, storeOTP, verifyOTP, deleteOTP, wasOtpIssuedRecently } from '../utils/otp.js';
@@ -33,6 +32,9 @@ import {
   formatReferredDriver,
   loadReferredDrivers,
   ratesFromStats,
+  loadCurrentAgentTarget,
+  decorateAgentCycle,
+  sumPaidAgentBounty,
 } from '../services/agentStatsService.js';
 
 const { sendEmail, sendSMS } = notificationService;
@@ -602,30 +604,40 @@ export const getAgentOverview = asyncHandler(async (req, res) => {
   await syncReferredDriversForAgents([req.agent]);
   const statsMap = await mergeInviteStats([req.agent], await statsForAgentIds([req.agent._id]));
   const stats = statsMap.get(String(req.agent._id)) || await statsForAgent(req.agent._id);
-  const target = await AgentTarget.findOne({ agent: req.agent._id, status: 'active' }).sort({ deadline: 1 });
+  const [target, paid] = await Promise.all([
+    loadCurrentAgentTarget(req.agent._id),
+    sumPaidAgentBounty(req.agent._id),
+  ]);
+  const decorated = await decorateAgentCycle(target, stats.verified);
   const days = daysRemaining(target?.deadline);
+  const cycleOpen = target?.status === 'active' && decorated?.payout_status !== 'paid';
   const paceNeeded =
-    target && days > 0 ? Math.max(0, Math.ceil((target.targetCount - stats.verified) / days)) : null;
+    cycleOpen && days > 0 ? Math.max(0, Math.ceil((target.targetCount - stats.verified) / days)) : null;
 
   res.json({
     status: 'success',
     data: {
       stats,
-      cycle: target
+      cycle: decorated
         ? {
-            cycle_name: target.cycleName,
-            target_count: target.targetCount,
-            deadline: target.deadline,
-            days_remaining: days,
+            cycle_name: decorated.cycleName,
+            target_count: decorated.targetCount,
+            deadline: decorated.deadline,
+            days_remaining: cycleOpen ? days : null,
             pace_needed: paceNeeded,
-            bounty_rate: target.bountyRate || req.agent.bountyRate || 0,
+            bounty_rate: decorated.bountyRate || req.agent.bountyRate || 0,
+            status: decorated.status,
+            target_reached: decorated.target_reached,
+            payout_status: decorated.payout_status,
+            paid_at: decorated.paid_at,
+            paid_reason: decorated.paid_reason,
           }
         : null,
       earnings: {
         bounty_rate: req.agent.bountyRate || 0,
         projected_owed: (req.agent.bountyRate || 0) * stats.active,
-        paid: 0,
-        note: 'Payouts are tracked in the next phase. Overview shows projected bounty for currently active drivers.',
+        paid,
+        note: 'Projected bounty is for currently active drivers. Paid is the sum of bounties marked paid by admin.',
       },
     },
   });

@@ -35,13 +35,16 @@ const auditLogSchema = new mongoose.Schema(
         'settings_update',
         'promocode_create',
         'promocode_update',
+        'agent_create',
+        'agent_update',
+        'agent_target_paid',
       ],
       index: true,
     },
     resourceType: {
       type: String,
       required: true,
-      enum: ['user', 'driver', 'payment', 'ride', 'withdrawal', 'payout_request', 'driver_kyc', 'driver_vehicle', 'vehicle_type', 'promocode', 'settings'],
+      enum: ['user', 'driver', 'payment', 'ride', 'withdrawal', 'payout_request', 'driver_kyc', 'driver_vehicle', 'vehicle_type', 'promocode', 'settings', 'agent'],
     },
     resourceId: {
       type: String,

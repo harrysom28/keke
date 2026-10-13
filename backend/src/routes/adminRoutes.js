@@ -56,6 +56,12 @@ router.get('/agents/:id', validationRules.mongoId, validate, adminAgentControlle
 router.get('/agents/:id/drivers', validationRules.mongoId, validate, adminAgentController.listAdminAgentDrivers);
 router.patch('/agents/:id', validationRules.mongoId, validate, adminAgentController.updateAdminAgent);
 router.post('/agents/:id/targets', validationRules.mongoId, validate, adminAgentController.createAdminAgentTarget);
+router.post(
+  '/agents/:id/targets/:targetId/mark-paid',
+  validationRules.mongoIdAndTargetId,
+  validate,
+  adminAgentController.markAgentTargetPaid
+);
 
 // Driver management (specific routes before :id)
 router.get('/drivers', adminController.listDrivers);

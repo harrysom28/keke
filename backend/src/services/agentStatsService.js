@@ -1,6 +1,8 @@
 import Driver from '../models/Driver.js';
 import DriverKyc from '../models/DriverKyc.js';
 import Ride from '../models/Ride.js';
+import AgentTarget from '../models/AgentTarget.js';
+import AgentPayout from '../models/AgentPayout.js';
 import mongoose from 'mongoose';
 
 const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -195,5 +197,43 @@ export async function statsForAgent(agentId) {
     rejected: 0,
     pending: 0,
   };
+}
+
+export function cyclePayoutState(target, verifiedCount, paid) {
+  if (!target) return null;
+  const targetReached = Number(verifiedCount || 0) >= Number(target.targetCount || 0);
+  let payoutStatus = 'not_reached';
+  if (paid) payoutStatus = 'paid';
+  else if (targetReached) payoutStatus = 'reached';
+  return { target_reached: targetReached, payout_status: payoutStatus };
+}
+
+/** Active cycle if one exists; otherwise the most recently updated cycle (so a paid cycle still shows). */
+export async function loadCurrentAgentTarget(agentId) {
+  const active = await AgentTarget.findOne({ agent: agentId, status: 'active' }).sort({ deadline: 1 });
+  if (active) return active;
+  return AgentTarget.findOne({ agent: agentId }).sort({ updatedAt: -1, createdAt: -1 });
+}
+
+export async function decorateAgentCycle(target, verifiedCount) {
+  if (!target) return null;
+  const paidRow = await AgentPayout.findOne({ target: target._id, status: 'paid' }).sort({ paidAt: -1 }).lean();
+  const flags = cyclePayoutState(target, verifiedCount, Boolean(paidRow));
+  const doc = typeof target.toObject === 'function' ? target.toObject() : { ...target };
+  return {
+    ...doc,
+    target_id: String(target._id),
+    ...flags,
+    paid_at: paidRow?.paidAt || null,
+    paid_reason: paidRow?.reason || null,
+  };
+}
+
+export async function sumPaidAgentBounty(agentId) {
+  const rows = await AgentPayout.aggregate([
+    { $match: { agent: new mongoose.Types.ObjectId(String(agentId)), status: 'paid' } },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  return rows[0]?.total || 0;
 }
 

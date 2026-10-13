@@ -23,6 +23,9 @@ const ACTION_LABELS = {
   settings_update: 'Settings updated',
   promocode_create: 'Promocode created',
   promocode_update: 'Promocode updated',
+  agent_create: 'Agent created',
+  agent_update: 'Agent updated',
+  agent_target_paid: 'Agent cycle marked paid',
 };
 
 const RESOURCE_LABELS = {
@@ -37,6 +40,7 @@ const RESOURCE_LABELS = {
   vehicle_type: 'Vehicle type',
   promocode: 'Promocode',
   settings: 'Settings',
+  agent: 'Agent',
 };
 
 function formatResource(log) {
