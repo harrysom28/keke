@@ -3,7 +3,7 @@ import React, { useCallback, useContext, useEffect, useMemo, useState } from "re
 
 import { AppContext } from "@/app/context";
 import { FareBreakdownModal } from "./fareBreakdown";
-import { AppDetailsState, setRideData, setRideUtils } from "@/store/AppSlice";
+import { AppDetailsState, setRideData } from "@/store/AppSlice";
 import { TVehicle } from "@/types";
 import { VEHICLE_TYPES, APPLY_CODE } from "@/constants";
 import axios from "axios";
@@ -85,6 +85,33 @@ const DEFAULT_VEHICLES: TVehicle[] = [
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+type PromoQuote = {
+  discount_type?: string;
+  discount_value?: number;
+  discount_amount?: number;
+  max_discount?: number | null;
+  final_amount?: number;
+  ride_amount?: number;
+};
+
+function priceAfterPromo(original: number, quote: PromoQuote | null) {
+  const amount = Number(original) || 0;
+  if (!quote) return amount;
+  if (quote.discount_type === "percentage") {
+    let off = (amount * Number(quote.discount_value || 0)) / 100;
+    const cap = Number(quote.max_discount);
+    if (Number.isFinite(cap) && cap > 0) off = Math.min(off, cap);
+    return Math.max(0, Math.round(amount - Math.min(off, amount)));
+  }
+  if (quote.discount_type === "fixed") {
+    return Math.max(0, Math.round(amount - Number(quote.discount_value || 0)));
+  }
+  if (quote.final_amount != null && Number(quote.ride_amount) === amount) {
+    return Math.max(0, Math.round(Number(quote.final_amount)));
+  }
+  return Math.max(0, Math.round(amount - Number(quote.discount_amount || 0)));
+}
+
 const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) => {
   const insets = useCombinedSafeInsets();
   const { apiConfig } = useContext(AppContext);
@@ -93,6 +120,7 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
   const [vehicles, setVehicles] = useState<VehicleWithPricing[]>([]);
   const [loading, setLoading] = useState(false);
   const [promoApplied, setPromoApplied] = useState(false);
+  const [promoQuote, setPromoQuote] = useState<PromoQuote | null>(null);
   // Default to Wallet, cash is optional/nullable unless enabled by admin
   const [selectedPayment, setSelectedPayment] = useState<string>("Wallet");
   const [promoCode, setPromoCode] = useState<string>("");
@@ -114,10 +142,11 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
     const cost = selectedVehicle.cost;
     return typeof cost === "number" ? cost : Number(cost || 0);
   }, [selectedVehicle]);
+  const payableSelectedFare = promoQuote ? priceAfterPromo(selectedFareTotal, promoQuote) : selectedFareTotal;
   const walletInsufficientForSelectedFare =
     walletAvailableBalance != null &&
-    selectedFareTotal > 0 &&
-    walletAvailableBalance < selectedFareTotal;
+    payableSelectedFare > 0 &&
+    walletAvailableBalance < payableSelectedFare;
   const selectedIsWallet = isWalletPaymentMethod(mapUiPaymentToApi(selectedPayment));
 
   useEffect(() => {
@@ -126,10 +155,10 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
         publicConfig.paymentMethods,
         prev,
         walletAvailableBalance,
-        selectedFareTotal
+        payableSelectedFare
       )
     );
-  }, [publicConfig.paymentMethods, walletAvailableBalance, selectedFareTotal]);
+  }, [publicConfig.paymentMethods, walletAvailableBalance, payableSelectedFare]);
 
   const isFocused = useIsFocused();
 
@@ -139,11 +168,6 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
     return `₦${Math.round(cost).toLocaleString()}`;
   }, []);
 
-  const calculateDiscountedPrice = useCallback((original: number) => {
-    if (!promoApplied) return original;
-    return Math.round(original * 0.9);
-  }, [promoApplied]);
-
   const handlePromoCode = async () => {
     if (!promoCode.trim()) {
       showMessage({ type: "danger", message: "Please enter a promo code" });
@@ -152,28 +176,55 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
 
     setPromoLoading(true);
     try {
-      // Use request manager to deduplicate promo code validation
-      const cacheKey = `promo-${promoCode.trim()}`;
-      
+      const vehicleTypeRaw = selectedVehicle?.vehicle_id != null ? String(selectedVehicle.vehicle_id) : "";
+      const vehicleTypeId = /^[a-fA-F0-9]{24}$/.test(vehicleTypeRaw) ? vehicleTypeRaw : undefined;
+      const cacheKey = `promo-${promoCode.trim()}-${selectedFareTotal}-${vehicleTypeId || ""}`;
+
       const response = await requestManager.execute(
         cacheKey,
-        () => axios.post(APPLY_CODE, { code: promoCode }, apiConfig),
-        30000 // Cache for 30 seconds
+        () => axios.post(
+          APPLY_CODE,
+          {
+            code: promoCode.trim(),
+            rideAmount: selectedFareTotal,
+            ...(vehicleTypeId ? { vehicleTypeId } : {}),
+          },
+          apiConfig
+        ),
+        30000
       );
-      
+
       const data = response.data?.data;
-      dispatch(setRideData({ promo_code: promoCode }));
-      dispatch(setRideUtils({ promo_code: data?.discount }));
+      if (!data?.valid) {
+        dispatch(setRideData({ promo_code: "" }));
+        setPromoApplied(false);
+        setPromoQuote(null);
+        showMessage({
+          type: "danger",
+          message: String(data?.message || "Invalid promo code"),
+        });
+        return;
+      }
+
+      dispatch(setRideData({ promo_code: promoCode.trim() }));
+      setPromoQuote({
+        discount_type: data.discount_type,
+        discount_value: data.discount_value,
+        discount_amount: data.discount_amount,
+        max_discount: data.max_discount,
+        final_amount: data.final_amount,
+        ride_amount: selectedFareTotal,
+      });
       setPromoApplied(true);
-      
+
       showMessage({
         type: "success",
-        message: String(response.data?.message || "Promo code applied successfully"),
+        message: String(data?.message || response.data?.message || "Promo code applied successfully"),
       });
     } catch (err: any) {
       dispatch(setRideData({ promo_code: "" }));
-      dispatch(setRideUtils({ promo_code: "" }));
       setPromoApplied(false);
+      setPromoQuote(null);
       
       const errorMessage = err?.response?.data?.message ||
                           err?.response?.data?.error?.message ||
@@ -479,7 +530,7 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
 
   const renderVehicleItem = useCallback(({ item: vehicle }: { item: VehicleWithPricing }) => {
     const originalPrice = vehicle.cost ?? 0;
-    const finalPrice = calculateDiscountedPrice(originalPrice);
+    const finalPrice = promoQuote ? priceAfterPromo(originalPrice, promoQuote) : originalPrice;
     const hasDiscount = promoApplied && originalPrice !== finalPrice;
     const isSelected = selectedVehicle?.vehicle_id === vehicle.vehicle_id;
 
@@ -547,7 +598,7 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
         </Pressable>
       </View>
     );
-  }, [calculateDiscountedPrice, formatPrice, promoApplied, selectedVehicle]);
+  }, [formatPrice, promoApplied, promoQuote, selectedVehicle]);
 
   const vehicleKeyExtractor = useCallback(
     (item: VehicleWithPricing, index: number) => item.vehicle_id?.toString() || String(index),
@@ -666,7 +717,9 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
       {selectedVehicle && selectedVehicle.cost !== null && selectedVehicle.cost > 0 && (() => {
         const fd = selectedVehicle.fareDetail;
         const rideFare = fd?.totalFare ?? selectedVehicle.cost ?? 0;
-        const promoDiscount = promoApplied ? Math.round(rideFare * 0.1) : 0;
+        const promoDiscount = promoQuote
+          ? Math.max(0, Math.round(rideFare - priceAfterPromo(rideFare, promoQuote)))
+          : 0;
         const rideAfterPromo = Math.max(0, rideFare - promoDiscount);
         const svc = fd?.riderServiceCharge ?? 0;
         const riderTotalShown =

@@ -33,6 +33,7 @@ import {
   EscrowWalletError,
 } from '../services/escrowWalletService.js';
 import { assertPaymentMethodEnabled } from '../services/paymentMethodsService.js';
+import { resolvePromoCodeForRide, riderFareAfterDiscount } from '../services/promoCodeService.js';
 import SupportTicket from '../models/SupportTicket.js';
 import { logRideAudit } from '../services/rideAuditLogService.js';
 import {
@@ -49,7 +50,7 @@ const normalizeRideCurrency = (currency) => {
 /**
  * Request ride - matches mobile app endpoint /api/booking/request-ride
  */
-export const requestRide = asyncHandler(async (req, res) => {
+export async function createRequestedRide(req, res) {
   const {
     pickupLocation,
     dropoffLocation,
@@ -181,20 +182,28 @@ export const requestRide = asyncHandler(async (req, res) => {
 
   const totalFare = fareWithSurge.finalFare;
 
+  const { promocode, discountAmount } = await resolvePromoCodeForRide({
+    code: promoCode,
+    user: req.user,
+    rideAmount: totalFare,
+    vehicleTypeId,
+  });
+  const riderChargeTotal = riderFareAfterDiscount(totalFare, discountAmount);
+
   const normalizedPaymentMethod = await assertPaymentMethodEnabled(paymentMethod || 'cash');
   const isWalletPayment = normalizedPaymentMethod === 'wallet';
   const isCardPayment = normalizedPaymentMethod === 'card';
   let escrowBreakdown = null;
   if (isWalletPayment) {
     try {
-      const validated = await validateRiderBalance(riderId, totalFare);
+      const validated = await validateRiderBalance(riderId, totalFare, riderChargeTotal);
       escrowBreakdown = validated.breakdown;
     } catch (err) {
       if (err.name === 'EscrowWalletError') throw err;
       throw new ValidationError(err.message || 'Wallet validation failed');
     }
   } else if (isCardPayment) {
-    // Same rider-facing total as wallet (fare + service charge) for Paystack amount.
+    // Driver/platform split stays on the full fare. Paystack charges riderChargeTotal + service charge later.
     escrowBreakdown = await calculateFareBreakdownFromSettings(totalFare);
   }
 
@@ -223,6 +232,7 @@ export const requestRide = asyncHandler(async (req, res) => {
       timeFare: fareBreakdown.timeFare,
       surgeMultiplier: fareWithSurge.surgeMultiplier,
       totalFare,
+      riderChargeTotal,
       ...(escrowBreakdown && {
         riderServiceCharge: escrowBreakdown.riderServiceCharge,
         platformRevenue: escrowBreakdown.platformFee,
@@ -241,7 +251,8 @@ export const requestRide = asyncHandler(async (req, res) => {
       unit: 'minutes',
     },
     paymentMethod: normalizedPaymentMethod,
-    promoCode: promoCode || null,
+    promoCode: promocode?._id || null,
+    discountAmount,
     ...(preferredDriverId && { preferredDriver: preferredDriverId }),
     statusHistory: [{
       status: scheduledAt ? 'scheduled' : 'searching',
@@ -269,11 +280,27 @@ export const requestRide = asyncHandler(async (req, res) => {
   logRideLifecycle(logger, ride, { event: 'ride_created' });
   if (isWalletPayment) {
     try {
-      await holdRideFunds(riderId, ride._id, totalFare);
+      await holdRideFunds(riderId, ride._id, riderChargeTotal);
     } catch (err) {
       await Ride.deleteOne({ _id: ride._id });
       if (err.name === 'EscrowWalletError') throw err;
       throw new ValidationError(err.message || 'Failed to hold fare');
+    }
+  }
+  if (promocode) {
+    const applied = await promocode.applyCode(req.user, ride, discountAmount);
+    if (!applied) {
+      if (isWalletPayment) {
+        try {
+          await processCancellation(ride._id, riderId, null, riderChargeTotal, 'beforeAccept');
+        } catch (cancelErr) {
+          logger.error(
+            `requestRide: escrow release failed after promo apply miss for ride ${ride._id}: ${cancelErr.message}`
+          );
+        }
+      }
+      await Ride.deleteOne({ _id: ride._id });
+      throw new ValidationError('Could not apply this promo code');
     }
   }
   await ride.populate('rider', 'name phone profileImage rating');
@@ -287,7 +314,7 @@ export const requestRide = asyncHandler(async (req, res) => {
   const abortRideAfterHold = async (message, statusCode = 400) => {
     try {
       if (isWalletPayment) {
-        await processCancellation(ride._id, riderId, null, totalFare, 'beforeAccept');
+        await processCancellation(ride._id, riderId, null, riderChargeTotal, 'beforeAccept');
       }
     } catch (cancelErr) {
       logger.error(
@@ -404,7 +431,9 @@ export const requestRide = asyncHandler(async (req, res) => {
       drivers_notified: matchedDrivers.length,
     },
   });
-});
+}
+
+export const requestRide = asyncHandler(createRequestedRide);
 
 /**
  * Get fare estimate - matches mobile app endpoint /api/booking/destination-details

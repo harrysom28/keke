@@ -8,6 +8,8 @@ import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.j
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { normalizePhone, phonesMatch } from '../utils/phone.js';
+import { resolvePromoCodeForRide } from '../services/promoCodeService.js';
+import { createRequestedRide } from './rideController.js';
 
 /**
  * Create emergency contact - POST /api/emergency/contact/create
@@ -528,47 +530,40 @@ export const validatePromocode = asyncHandler(async (req, res) => {
     throw new NotFoundError('User');
   }
 
-  const promocode = await Promocode.findOne({ code: code.toUpperCase() });
-  if (!promocode) {
-    return res.json({
+  try {
+    const { promocode, discountAmount } = await resolvePromoCodeForRide({
+      code,
+      user,
+      rideAmount: rideAmount || 0,
+      vehicleTypeId,
+    });
+
+    res.json({
       status: 'success',
       data: {
-        valid: false,
-        message: 'Invalid promo code',
+        valid: true,
+        message: 'Promo code is valid',
+        promo_id: promocode._id.toString(),
+        code: promocode.code,
+        discount_type: promocode.discountType,
+        discount_value: promocode.discountValue,
+        discount_amount: discountAmount,
+        max_discount: promocode.maxDiscount,
+        final_amount: (rideAmount || 0) - discountAmount,
       },
     });
+  } catch (err) {
+    if (err?.name === 'ValidationError') {
+      return res.json({
+        status: 'success',
+        data: {
+          valid: false,
+          message: err.message,
+        },
+      });
+    }
+    throw err;
   }
-
-  // Validate promocode
-  const validation = promocode.isValid(user, rideAmount || 0, vehicleTypeId);
-
-  if (!validation.valid) {
-    return res.json({
-      status: 'success',
-      data: {
-        valid: false,
-        message: validation.message,
-      },
-    });
-  }
-
-  // Calculate discount
-  const discountAmount = promocode.calculateDiscount(rideAmount || 0);
-
-  res.json({
-    status: 'success',
-    data: {
-      valid: true,
-      message: validation.message,
-      promo_id: promocode._id.toString(),
-      code: promocode.code,
-      discount_type: promocode.discountType,
-      discount_value: promocode.discountValue,
-      discount_amount: discountAmount,
-      max_discount: promocode.maxDiscount,
-      final_amount: (rideAmount || 0) - discountAmount,
-    },
-  });
 });
 
 // Milestone: 10 rides → ₦1000 free ride (wallet credit)
@@ -911,20 +906,16 @@ export const rebookRide = asyncHandler(async (req, res) => {
   const finalVehicleTypeId = vehicleTypeId || previousRide.vehicleType.toString();
   const finalPaymentMethod = paymentMethod || previousRide.paymentMethod;
 
-  // Create new ride request (reuse logic from rideController)
-  // This will call the existing requestRide logic
-  // For now, return success with instructions to use request-ride endpoint
-  res.json({
-    status: 'success',
-    message: 'Use /api/booking/request-ride with previous ride details to rebook',
-    data: {
-      previous_ride_id: previousRideId,
-      suggested_pickup: finalPickupLocation,
-      suggested_dropoff: finalDropoffLocation,
-      suggested_vehicle_type: finalVehicleTypeId,
-      suggested_payment_method: finalPaymentMethod,
-    },
-  });
+  req.body = {
+    ...req.body,
+    pickupLocation: finalPickupLocation,
+    dropoffLocation: finalDropoffLocation,
+    vehicleTypeId: finalVehicleTypeId,
+    paymentMethod: finalPaymentMethod,
+    promoCode: promoCode || null,
+  };
+
+  return createRequestedRide(req, res);
 });
 
 /**

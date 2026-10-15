@@ -155,6 +155,7 @@ function App() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [adminProfile, setAdminProfile] = useState(null);
   const [headerRange, setHeaderRange] = useState('30d');
   const dashboardExportRef = React.useRef(null);
 
@@ -199,6 +200,17 @@ function App() {
     }
   }, [authenticated, page]);
 
+  useEffect(() => {
+    if (!authenticated) {
+      setAdminProfile(null);
+      return;
+    }
+    Api.get('/api/admin/me').then((res) => {
+      const admin = res.data?.data?.admin;
+      if (admin) setAdminProfile(admin);
+    });
+  }, [authenticated]);
+
   const handleDashboardExport = useCallback(() => {
     if (dashboardExportRef.current) dashboardExportRef.current();
   }, []);
@@ -242,6 +254,9 @@ function App() {
   else Content = Pages.Dashboard;
 
   const currentId = detailId;
+  const adminName = adminProfile?.name || 'Admin';
+  const adminEmail = adminProfile?.email || '';
+  const adminInitial = (adminName.trim().charAt(0) || 'A').toUpperCase();
 
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900 flex">
@@ -324,8 +339,8 @@ function App() {
             </button>
             <div className="relative">
               <button type="button" onClick={() => setProfileOpen((o) => !o)} className="admin-profile-btn flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-full border dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" aria-expanded={profileOpen} aria-haspopup="true">
-                <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium text-white shrink-0" style={{ backgroundColor: 'var(--keke-primary-hex)' }}>A</span>
-                <span className="text-sm font-medium hidden sm:inline">Admin</span>
+                <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium text-white shrink-0" style={{ backgroundColor: 'var(--keke-primary-hex)' }}>{adminInitial}</span>
+                <span className="text-sm font-medium hidden sm:inline max-w-[10rem] truncate">{adminName}</span>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: profileOpen ? 'rotate(180deg)' : 'none' }}><polyline points="6 9 12 15 18 9" /></svg>
               </button>
               {profileOpen && (
@@ -333,8 +348,8 @@ function App() {
                   <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setProfileOpen(false)} />
                   <div className="admin-profile-dropdown absolute right-0 top-full mt-1 py-1 w-48 rounded-xl shadow-lg border dark:border-gray-600 bg-white dark:bg-gray-800 z-50">
                     <div className="px-4 py-2 border-b dark:border-gray-700">
-                      <p className="text-sm font-medium text-gray-900 dark:text-white">Admin</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Dashboard</p>
+                      <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{adminName}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{adminEmail || 'Signed in'}</p>
                     </div>
                     <button type="button" onClick={() => { setDark(!dark); setProfileOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Theme</button>
                     <button type="button" onClick={() => { Auth.logout().finally(() => { setAuthenticated(false); setProfileOpen(false); }); }} className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100 dark:hover:bg-gray-700">Logout</button>

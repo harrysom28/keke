@@ -78,6 +78,9 @@ function AnalyticsPage({ showToast }) {
           {revenue?.total_revenue != null && (
             <p className="mt-4 pt-4 border-t dark:border-gray-700 font-bold text-gray-900 dark:text-white">Total: {Utils.formatCurrency(revenue.total_revenue)}</p>
           )}
+          {revenue?.promo_spend != null && (
+            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">Promo spend: {Utils.formatCurrency(revenue.promo_spend)}</p>
+          )}
         </div>
       </div>
 

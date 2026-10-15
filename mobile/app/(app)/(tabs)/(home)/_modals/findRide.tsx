@@ -23,7 +23,6 @@ import { ConfirmPaymentView } from "@/components/find-ride/confirmPayment";
 import { DriverInfoView } from "@/components/find-ride/driverInfo";
 import { DriverView } from "@/components/find-ride/driver";
 import { LocationView } from "@/components/find-ride/location";
-import { PromoCodeView } from "@/components/find-ride/promoCode";
 import { SearchView } from "@/components/find-ride/search";
 import { SelectVehicleView } from "@/components/find-ride/selectVehicle";
 import { SelectedView } from "@/components/find-ride/selected";

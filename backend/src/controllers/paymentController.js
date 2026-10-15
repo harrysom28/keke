@@ -194,7 +194,9 @@ export const payForRideWithWallet = asyncHandler(async (req, res) => {
     throw new ConflictError('Ride has already been paid');
   }
 
-  const amount = ride.fare.totalFare;
+  const amount = Number(
+    ride.fare?.riderChargeTotal != null ? ride.fare.riderChargeTotal : ride.fare?.totalFare || 0
+  );
   const user = await User.findById(userId);
 
   if (user.balance < amount) {
@@ -467,15 +469,15 @@ export const initializeRideCardPayment = asyncHandler(async (req, res) => {
     });
   }
 
-  const fareAmount = Math.round(Number(ride.fare?.totalFare || 0));
-  if (fareAmount < 1) {
+  const fullFare = Math.round(Number(ride.fare?.totalFare || 0));
+  const riderFare = Math.round(Number(
+    ride.fare?.riderChargeTotal != null ? ride.fare.riderChargeTotal : ride.fare?.totalFare || 0
+  ));
+  const breakdown = await calculateFareBreakdownFromSettings(fullFare);
+  const chargeAmount = Math.max(0, riderFare + Math.round(Number(breakdown?.riderServiceCharge || 0)));
+  if (chargeAmount < 1) {
     throw new ValidationError('Invalid ride fare');
   }
-  const breakdown = await calculateFareBreakdownFromSettings(fareAmount);
-  const chargeAmount = Math.max(
-    fareAmount,
-    Math.round(Number(breakdown?.riderTotal || fareAmount))
-  );
 
   const user = await User.findById(userId).select('email name');
   if (!user) {

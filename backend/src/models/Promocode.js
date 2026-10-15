@@ -146,7 +146,7 @@ promocodeSchema.methods.isValid = function (user, rideAmount = 0, vehicleType = 
   if (
     this.applicableVehicleTypes.length > 0 &&
     vehicleType &&
-    !this.applicableVehicleTypes.includes(vehicleType.toString())
+    !this.applicableVehicleTypes.some((vt) => vt.toString() === vehicleType.toString())
   ) {
     return { valid: false, message: 'Promo code is not applicable to this vehicle type' };
   }
@@ -181,16 +181,29 @@ promocodeSchema.methods.calculateDiscount = function (rideAmount) {
   return Math.round(discount * 100) / 100; // Round to 2 decimal places
 };
 
-// Method to apply code
+// Atomic apply. Returns null when maxUses was exhausted between validate and this write.
 promocodeSchema.methods.applyCode = async function (user, ride, discountAmount) {
-  this.usedCount += 1;
-  this.usedBy.push({
-    user: user._id,
-    ride: ride._id,
-    usedAt: new Date(),
-    discountAmount,
-  });
-  await this.save();
+  return this.constructor.findOneAndUpdate(
+    {
+      _id: this._id,
+      $or: [
+        { maxUses: null },
+        { $expr: { $lt: ['$usedCount', '$maxUses'] } },
+      ],
+    },
+    {
+      $inc: { usedCount: 1 },
+      $push: {
+        usedBy: {
+          user: user._id,
+          ride: ride._id,
+          usedAt: new Date(),
+          discountAmount,
+        },
+      },
+    },
+    { new: true }
+  );
 };
 
 const Promocode = mongoose.model('Promocode', promocodeSchema);

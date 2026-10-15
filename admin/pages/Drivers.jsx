@@ -77,9 +77,135 @@ function DriversPage({ onNavigate, showToast }) {
   );
 }
 
+function DriverFinancials({ driverId, showToast }) {
+  const [wallet, setWallet] = useState(null);
+  const [earnings, setEarnings] = useState(null);
+  const [transactions, setTransactions] = useState([]);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!driverId) return;
+    setLoading(true);
+    Promise.all([
+      Api.get('/api/admin/driver/' + driverId + '/wallet'),
+      Api.get('/api/admin/drivers/' + driverId + '/earnings'),
+      Api.get('/api/admin/transactions?driverId=' + driverId + '&page=' + page + '&limit=20'),
+    ]).then(([walletRes, earningsRes, txRes]) => {
+      if (walletRes.error) showToast(walletRes.error, 'error');
+      else setWallet(walletRes.data?.data || walletRes.data);
+      if (earningsRes.error) showToast(earningsRes.error, 'error');
+      else setEarnings(earningsRes.data?.data || earningsRes.data);
+      if (txRes.error) {
+        showToast(txRes.error, 'error');
+        setTransactions([]);
+      } else {
+        const d = txRes.data?.data || txRes.data || {};
+        setTransactions(d.transactions || []);
+        setPages(d.pagination?.pages || 1);
+      }
+    }).finally(() => setLoading(false));
+  }, [driverId, page]);
+
+  if (!driverId) {
+    return <p className="text-sm text-gray-500">This account has no driver profile yet, so there is no wallet or earnings ledger.</p>;
+  }
+  if (loading && !wallet && !earnings) {
+    return <div className="flex justify-center p-12"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" /></div>;
+  }
+
+  const recorded = earnings?.driver_earnings || {};
+  const paid = earnings?.earnings || {};
+  const txColumns = [
+    { key: 'created_at', label: 'When', render: (v) => Utils.formatDate(v) },
+    { key: 'type', label: 'Type', render: (v) => (v || '').replace(/_/g, ' ') },
+    { key: 'amount', label: 'Amount', render: (v) => Utils.formatCurrency(v) },
+    { key: 'balance_after', label: 'Balance after', render: (v) => v == null ? '—' : Utils.formatCurrency(v) },
+    { key: 'ride_id', label: 'Ride', render: (v) => v ? String(v).slice(-8) : '—' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="rounded-lg border dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+          <p className="text-xs uppercase tracking-wide text-gray-500">Available</p>
+          <p className="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{Utils.formatCurrency(wallet?.available_balance || 0)}</p>
+        </div>
+        <div className="rounded-lg border dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+          <p className="text-xs uppercase tracking-wide text-gray-500">Pending</p>
+          <p className="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{Utils.formatCurrency(wallet?.pending_balance || 0)}</p>
+        </div>
+        <div className="rounded-lg border dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+          <p className="text-xs uppercase tracking-wide text-gray-500">Total earned</p>
+          <p className="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{Utils.formatCurrency(wallet?.total_earned || 0)}</p>
+        </div>
+        <div className="rounded-lg border dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+          <p className="text-xs uppercase tracking-wide text-gray-500">Withdrawn</p>
+          <p className="mt-1 text-lg font-semibold text-gray-900 dark:text-white">{Utils.formatCurrency(wallet?.total_withdrawn || 0)}</p>
+        </div>
+      </div>
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 text-sm text-gray-700 dark:text-gray-300 space-y-1">
+        <p><strong>Recorded earnings:</strong> {Utils.formatCurrency(recorded.total || 0)} total · {Utils.formatCurrency(recorded.today || 0)} today · {Utils.formatCurrency(recorded.thisWeek || 0)} this week · {Utils.formatCurrency(recorded.thisMonth || 0)} this month</p>
+        <p><strong>Completed payments in period:</strong> {Utils.formatCurrency(paid.total || 0)} across {paid.transactions || 0} payments</p>
+      </div>
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <C.DataTable columns={txColumns} rows={transactions} keyField="transaction_id" loading={loading} emptyMessage="No ledger transactions" />
+        <div className="px-4 py-2 border-t dark:border-gray-700">
+          <C.Pagination page={page} totalPages={pages} onPageChange={setPage} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DriverRideHistory({ driverId, showToast, onNavigate }) {
+  const [rides, setRides] = useState([]);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!driverId) return;
+    setLoading(true);
+    Api.get('/api/admin/drivers/' + driverId + '/rides?page=' + page + '&limit=20').then((res) => {
+      if (res.error) {
+        showToast(res.error, 'error');
+        setRides([]);
+        return;
+      }
+      const d = res.data?.data || res.data || {};
+      setRides(d.rides || []);
+      setPages(d.pagination?.pages || 1);
+    }).finally(() => setLoading(false));
+  }, [driverId, page]);
+
+  if (!driverId) {
+    return <p className="text-sm text-gray-500">This account has no driver profile yet, so there is no ride history.</p>;
+  }
+
+  const columns = [
+    { key: 'ride_id', label: 'Ride', render: (v) => (v || '').slice(-8) },
+    { key: 'rider', label: 'Rider', render: (v) => v?.name ?? '—' },
+    { key: 'status', label: 'Status' },
+    { key: 'fare', label: 'Fare', render: (v) => Utils.formatCurrency(v) },
+    { key: 'created_at', label: 'Created', render: (v) => Utils.formatDate(v) },
+  ];
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+      <C.DataTable columns={columns} rows={rides} keyField="ride_id" loading={loading} onRowClick={(row) => onNavigate && onNavigate('ride-detail', row.ride_id)} emptyMessage="No rides" />
+      <div className="px-4 py-2 border-t dark:border-gray-700">
+        <C.Pagination page={page} totalPages={pages} onPageChange={setPage} />
+      </div>
+    </div>
+  );
+}
+
 function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
   const [driver, setDriver] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [detailTab, setDetailTab] = useState('review');
   const [modal, setModal] = useState({ open: false, type: '', reason: '' });
 
   const loadDriver = () => {
@@ -198,6 +324,29 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
     <div className="space-y-4">
       <C.Breadcrumb items={[{ label: 'Drivers', href: '#' }, { label: u.name || id }]} />
       <button type="button" onClick={onBack} className="text-blue-600 hover:underline">← Back</button>
+      <div className="flex gap-2">
+        {[
+          { id: 'review', label: 'Review' },
+          { id: 'financials', label: 'Financials' },
+          { id: 'rides', label: 'Ride history' },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setDetailTab(tab.id)}
+            className={`px-3 py-1.5 rounded-lg text-sm ${detailTab === tab.id ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {detailTab === 'financials' && (
+        <DriverFinancials driverId={d.has_driver_profile === false ? null : d.driver_id} showToast={showToast} />
+      )}
+      {detailTab === 'rides' && (
+        <DriverRideHistory driverId={d.has_driver_profile === false ? null : d.driver_id} showToast={showToast} onNavigate={onNavigate} />
+      )}
+      {detailTab === 'review' && (
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 space-y-6">
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div>
@@ -472,6 +621,7 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
           {review.overall_rejection_reason && <p><strong>Overall rejection reason:</strong> {review.overall_rejection_reason}</p>}
         </div>
       </div>
+      )}
       {modal.open && modal.type === 'verify' && (
         <C.ConfirmDialog open onClose={() => setModal({ open: false })} onConfirm={doVerify} title="Approve driver" message="Approve this driver?" confirmLabel="Approve" />
       )}

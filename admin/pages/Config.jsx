@@ -3,6 +3,13 @@ const Api = window.AdminApi;
 const Utils = window.AdminUtils;
 const C = window.AdminComponents;
 
+function toDatetimeLocalValue(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
 function ConfigPage({ showToast, defaultTab }) {
   const [tab, setTab] = useState(defaultTab || 'vehicle-types');
   const [vehicleTypes, setVehicleTypes] = useState([]);
@@ -33,15 +40,27 @@ function ConfigPage({ showToast, defaultTab }) {
   const [paymentMethodsSaving, setPaymentMethodsSaving] = useState(false);
   const [paymentMethodSaveWarnings, setPaymentMethodSaveWarnings] = useState([]);
   const [vtModal, setVtModal] = useState({ open: false, editing: null, name: '', display_name: '', description: '', base_fare: '', per_km_rate: '', per_minute_rate: '', minimum_fare: '', multiplier: '1', capacity: '4', order: '0', is_active: true });
-  const [promoModal, setPromoModal] = useState({ open: false, editing: null, code: '', description: '', discount_type: 'percentage', discount_value: '', max_discount: '', min_amount: '0', max_uses: '', max_uses_per_user: '1', valid_from: '', valid_to: '', is_active: true });
+  const [promoModal, setPromoModal] = useState({ open: false, editing: null, code: '', description: '', discount_type: 'percentage', discount_value: '', max_discount: '', min_amount: '0', max_uses: '', max_uses_per_user: '1', valid_from: '', valid_to: '', is_active: true, applicable_user_types: ['all'], applicable_vehicle_types: [] });
 
   const loadVehicleTypes = () => Api.get('/api/admin/vehicle-types').then((res) => {
     if (res.error) showToast(res.error, 'error');
     else setVehicleTypes(res.data?.data?.vehicle_types || res.data?.vehicleTypes || []);
   });
-  const loadPromocodes = () => Api.get('/api/admin/promocodes').then((res) => {
-    if (res.error) showToast(res.error, 'error');
-    else setPromocodes(res.data?.data?.promocodes || res.data?.promocodes || []);
+  const loadPromocodes = () => Api.get('/api/admin/promocodes?page=1&limit=100').then(async (res) => {
+    if (res.error) { showToast(res.error, 'error'); setPromocodes([]); return; }
+    const d = res.data?.data || res.data || {};
+    let rows = d.promocodes || [];
+    const pages = d.pagination?.pages || 1;
+    if (pages > 1) {
+      const rest = await Promise.all(
+        Array.from({ length: pages - 1 }, (_, i) => Api.get('/api/admin/promocodes?limit=100&page=' + (i + 2)))
+      );
+      rest.forEach((pageRes) => {
+        const extra = pageRes.data?.data?.promocodes || pageRes.data?.promocodes || [];
+        rows = rows.concat(extra);
+      });
+    }
+    setPromocodes(rows);
   });
   const loadPaymentMethods = () => Api.get('/api/admin/settings/payment-methods').then((res) => {
     if (res.error) showToast(res.error, 'error');
@@ -284,9 +303,11 @@ function ConfigPage({ showToast, defaultTab }) {
       min_amount: '0',
       max_uses: '',
       max_uses_per_user: '1',
-      valid_from: from.toISOString().slice(0, 16),
-      valid_to: to.toISOString().slice(0, 16),
+      valid_from: toDatetimeLocalValue(from),
+      valid_to: toDatetimeLocalValue(to),
       is_active: true,
+      applicable_user_types: ['all'],
+      applicable_vehicle_types: [],
     });
   };
   const openEditPromo = (row) => setPromoModal({
@@ -300,25 +321,62 @@ function ConfigPage({ showToast, defaultTab }) {
     min_amount: row.min_amount != null ? String(row.min_amount) : '0',
     max_uses: row.max_uses != null ? String(row.max_uses) : '',
     max_uses_per_user: row.max_uses_per_user != null ? String(row.max_uses_per_user) : '1',
-    valid_from: row.valid_from ? new Date(row.valid_from).toISOString().slice(0, 16) : '',
-    valid_to: row.valid_to ? new Date(row.valid_to).toISOString().slice(0, 16) : '',
+    valid_from: row.valid_from ? toDatetimeLocalValue(row.valid_from) : '',
+    valid_to: row.valid_to ? toDatetimeLocalValue(row.valid_to) : '',
     is_active: row.is_active !== false,
+    applicable_user_types: Array.isArray(row.applicable_user_types) && row.applicable_user_types.length ? row.applicable_user_types : ['all'],
+    applicable_vehicle_types: (row.applicable_vehicle_types || []).map((vt) => vt.vehicle_id || vt).filter(Boolean),
   });
 
+  const togglePromoUserType = (value) => {
+    setPromoModal((m) => {
+      const current = Array.isArray(m.applicable_user_types) ? m.applicable_user_types : [];
+      if (value === 'all') {
+        return { ...m, applicable_user_types: current.includes('all') ? [] : ['all'] };
+      }
+      const withoutAll = current.filter((type) => type !== 'all');
+      const next = withoutAll.includes(value)
+        ? withoutAll.filter((type) => type !== value)
+        : withoutAll.concat(value);
+      return { ...m, applicable_user_types: next };
+    });
+  };
+
+  const togglePromoVehicleType = (vehicleId) => {
+    setPromoModal((m) => {
+      const current = m.applicable_vehicle_types || [];
+      const next = current.includes(vehicleId)
+        ? current.filter((id) => id !== vehicleId)
+        : current.concat(vehicleId);
+      return { ...m, applicable_vehicle_types: next };
+    });
+  };
+
   const savePromo = () => {
+    const editing = !!promoModal.editing;
+    const userTypes = promoModal.applicable_user_types || [];
+    if (!userTypes.length) {
+      showToast('Select at least one user type', 'warning');
+      return;
+    }
+    const blankOr = (raw, parse) => {
+      if (raw === '' || raw == null) return editing ? null : undefined;
+      return parse(raw);
+    };
     const payload = {
       code: promoModal.code.trim().toUpperCase(),
       description: promoModal.description || undefined,
       discountType: promoModal.discount_type,
       discountValue: parseFloat(promoModal.discount_value),
-      maxDiscount: promoModal.max_discount ? parseFloat(promoModal.max_discount) : undefined,
+      maxDiscount: blankOr(promoModal.max_discount, parseFloat),
       minAmount: parseFloat(promoModal.min_amount) || 0,
-      maxUses: promoModal.max_uses ? parseInt(promoModal.max_uses, 10) : undefined,
+      maxUses: blankOr(promoModal.max_uses, (v) => parseInt(v, 10)),
       maxUsesPerUser: parseInt(promoModal.max_uses_per_user, 10) || 1,
       validFrom: new Date(promoModal.valid_from).toISOString(),
       validTo: new Date(promoModal.valid_to).toISOString(),
       isActive: promoModal.is_active,
-      applicableUserTypes: ['all'],
+      applicableUserTypes: userTypes,
+      applicableVehicleTypes: promoModal.applicable_vehicle_types || [],
     };
     if (promoModal.editing) {
       Api.patch('/api/admin/promocodes/' + promoModal.editing, payload).then((r) => {
@@ -885,6 +943,42 @@ function ConfigPage({ showToast, defaultTab }) {
           <input type="datetime-local" value={promoModal.valid_from} onChange={(e) => setPromoModal((m) => ({ ...m, valid_from: e.target.value }))} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600" />
           <input type="datetime-local" value={promoModal.valid_to} onChange={(e) => setPromoModal((m) => ({ ...m, valid_to: e.target.value }))} className="w-full px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600" />
           <label className="flex items-center gap-2"><input type="checkbox" checked={promoModal.is_active} onChange={(e) => setPromoModal((m) => ({ ...m, is_active: e.target.checked }))} /> Active</label>
+          <div className="pt-2">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Who can use this code</p>
+            <div className="mt-1 flex flex-wrap gap-3">
+              {[
+                { id: 'all', label: 'Everyone' },
+                { id: 'passenger', label: 'Passengers' },
+                { id: 'driver', label: 'Drivers' },
+              ].map((option) => (
+                <label key={option.id} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={(promoModal.applicable_user_types || []).includes(option.id)}
+                    onChange={() => togglePromoUserType(option.id)}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Vehicle types</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Leave all unchecked to allow every vehicle.</p>
+            <div className="mt-1 space-y-1 max-h-32 overflow-auto">
+              {vehicleTypes.length === 0 && <p className="text-sm text-gray-500">No vehicle types loaded.</p>}
+              {vehicleTypes.map((vt) => (
+                <label key={vt.vehicle_id} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={(promoModal.applicable_vehicle_types || []).includes(vt.vehicle_id)}
+                    onChange={() => togglePromoVehicleType(vt.vehicle_id)}
+                  />
+                  {vt.display_name || vt.name}
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
         <button type="button" onClick={savePromo} className="mt-4 px-3 py-1.5 bg-blue-600 text-white rounded-lg">Save</button>
       </C.Modal>

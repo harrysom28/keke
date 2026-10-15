@@ -123,6 +123,11 @@ const rideSchema = new mongoose.Schema(
         type: Number,
         required: true,
       },
+      /** What the rider pays for the fare after a promo. Equals totalFare when there is no discount. */
+      riderChargeTotal: {
+        type: Number,
+        default: null,
+      },
       riderServiceCharge: { type: Number, default: null },
       currency: {
         type: String,

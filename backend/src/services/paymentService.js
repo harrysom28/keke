@@ -6,7 +6,7 @@ import Driver from '../models/Driver.js';
 import logger from '../utils/logger.js';
 import Stripe from 'stripe';
 import { computeCommission } from './commissionService.js';
-import { creditRideEarning, accrueCommissionDebt } from './walletService.js';
+import { creditRideEarning, accrueCommissionDebt, creditPromoSubsidy } from './walletService.js';
 import { settleRide as escrowSettleRide } from './escrowWalletService.js';
 
 // Initialize Stripe (if API key is provided)
@@ -52,7 +52,12 @@ export async function applyRideEarningToWallet(ride) {
 export async function accrueCashCommissionDebt(ride) {
   const driverId = ride.driver?._id || ride.driver;
   if (!driverId) return;
-  if (ride.fare?.commissionAmount != null) return;
+  const currency = (ride.fare?.currency || 'NGN').toUpperCase();
+  const promoSubsidy = Math.max(0, Number(ride.discountAmount) || 0);
+  if (ride.fare?.commissionAmount != null) {
+    if (promoSubsidy > 0) await creditPromoSubsidy(driverId, promoSubsidy, ride._id, currency);
+    return;
+  }
 
   const grossFare = Number(ride.fare?.totalFare) || 0;
   if (grossFare <= 0) return;
@@ -69,8 +74,8 @@ export async function accrueCashCommissionDebt(ride) {
   ride.fare.platformRevenue = platformRevenue;
   await ride.save();
 
-  const currency = (ride.fare.currency || 'NGN').toUpperCase();
   await accrueCommissionDebt(driverId, commissionAmount, ride._id, currency);
+  if (promoSubsidy > 0) await creditPromoSubsidy(driverId, promoSubsidy, ride._id, currency);
   logger.info(
     `Cash commission accrued as debt: driver ${driverId}, commission ${commissionAmount} (ride ${ride._id})`
   );
@@ -91,7 +96,10 @@ export const processRidePayment = async (ride) => {
     }
 
     const paymentMethod = ride.paymentMethod;
-    const amount = ride.fare.totalFare;
+    const settlementFare = Number(ride.fare?.totalFare) || 0;
+    const riderCharged = ride.fare?.riderChargeTotal != null
+      ? Number(ride.fare.riderChargeTotal)
+      : settlementFare;
     const rider = await User.findById(ride.rider);
     const driver = await Driver.findById(ride.driver);
 
@@ -108,10 +116,10 @@ export const processRidePayment = async (ride) => {
         if (isEscrow) {
           const driverDoc = await Driver.findById(ride.driver).select('user').lean();
           const driverUserId = driverDoc?.user ?? null;
-          await escrowSettleRide(ride._id, ride.rider, driverUserId, amount);
+          await escrowSettleRide(ride._id, ride.rider, driverUserId, settlementFare);
           ride.paymentStatus = 'completed';
-          const driverNetAmount = ride.fare?.driverNetAmount ?? Math.round(amount * 0.92);
-          const platformFee = ride.fare?.platformRevenue ?? amount - driverNetAmount;
+          const driverNetAmount = ride.fare?.driverNetAmount ?? Math.round(settlementFare * 0.92);
+          const platformFee = ride.fare?.platformRevenue ?? settlementFare - driverNetAmount;
           ride.fare = ride.fare || {};
           ride.fare.commissionAmount = platformFee;
           ride.fare.driverNetAmount = driverNetAmount;
@@ -126,7 +134,7 @@ export const processRidePayment = async (ride) => {
           payment = await Payment.create({
             user: ride.rider,
             ride: ride._id,
-            amount,
+            amount: riderCharged,
             currency: ride.fare.currency || 'NGN',
             method: 'wallet',
             status: 'completed',
@@ -134,7 +142,7 @@ export const processRidePayment = async (ride) => {
             paidAt: new Date(),
           });
           transactionId = payment.transactionId;
-          logger.info(`Escrow wallet payment settled for ride ${ride._id}: ${amount}`);
+          logger.info(`Escrow wallet payment settled for ride ${ride._id}: rider ${riderCharged}, settlement ${settlementFare}`);
         } else {
           // Atomic: create payment record and debit rider balance in a transaction
           const session = await mongoose.startSession().catch(() => null);
@@ -148,7 +156,7 @@ export const processRidePayment = async (ride) => {
                 {
                   user: ride.rider,
                   ride: ride._id,
-                  amount,
+                  amount: riderCharged,
                   currency: ride.fare.currency || 'NGN',
                   method: 'wallet',
                   status: 'completed',
@@ -162,15 +170,15 @@ export const processRidePayment = async (ride) => {
             transactionId = payment.transactionId;
 
             const updated = await User.findOneAndUpdate(
-              { _id: ride.rider, balance: { $gte: amount } },
-              { $inc: { balance: -amount } },
+              { _id: ride.rider, balance: { $gte: riderCharged } },
+              { $inc: { balance: -riderCharged } },
               { new: true, ...opts }
             );
             if (!updated) {
               throw new Error('Insufficient wallet balance or concurrent update');
             }
             if (useSession) await session.commitTransaction();
-            logger.info(`Wallet payment processed for ride ${ride._id}: ${amount}`);
+            logger.info(`Wallet payment processed for ride ${ride._id}: ${riderCharged}`);
           } catch (err) {
             if (useSession) await session.abortTransaction().catch(() => {});
             throw err;
@@ -218,7 +226,7 @@ export const processRidePayment = async (ride) => {
           payment = await Payment.create({
             user: ride.rider,
             ride: ride._id,
-            amount,
+            amount: riderCharged,
             currency: ride.fare.currency || 'NGN',
             method: 'card',
             status: 'completed',
@@ -250,7 +258,7 @@ export const processRidePayment = async (ride) => {
           logger.info(`Stripe payment already processed for ride ${ride._id}`);
         } else {
           const paymentIntent = await stripe.paymentIntents.create({
-            amount: Math.round(amount * 100),
+            amount: Math.round(riderCharged * 100),
             currency: (ride.fare.currency || 'ngn').toLowerCase(),
             metadata: {
               userId: ride.rider.toString(),
@@ -262,7 +270,7 @@ export const processRidePayment = async (ride) => {
           payment = await Payment.create({
             user: ride.rider,
             ride: ride._id,
-            amount,
+            amount: riderCharged,
             currency: ride.fare.currency || 'NGN',
             method: 'stripe',
             status: 'processing',
@@ -285,7 +293,7 @@ export const processRidePayment = async (ride) => {
         payment = await Payment.create({
           user: ride.rider,
           ride: ride._id,
-          amount,
+          amount: riderCharged,
           currency: ride.fare.currency || 'NGN',
           method: 'cash',
           status: 'completed',
@@ -313,7 +321,7 @@ export const processRidePayment = async (ride) => {
           driver.totalRides += 1;
           await driver.save();
         }
-        logger.info(`Cash payment recorded for ride ${ride._id}: ${amount}`);
+        logger.info(`Cash payment recorded for ride ${ride._id}: ${riderCharged}`);
         return {
           success: true,
           payment,
@@ -325,14 +333,14 @@ export const processRidePayment = async (ride) => {
         payment = await Payment.create({
           user: ride.rider,
           ride: ride._id,
-          amount,
+          amount: riderCharged,
           currency: ride.fare.currency || 'NGN',
           method: 'bank_transfer',
           status: 'pending',
           transactionId: `BANK-${Date.now()}-${ride._id}`,
         });
 
-        logger.info(`Bank transfer payment created (pending) for ride ${ride._id}: ${amount}`);
+        logger.info(`Bank transfer payment created (pending) for ride ${ride._id}: ${riderCharged}`);
         return {
           success: true,
           requiresConfirmation: true,

@@ -38,6 +38,7 @@ const auditLogSchema = new mongoose.Schema(
         'agent_create',
         'agent_update',
         'agent_target_paid',
+        'ride_status_update',
       ],
       index: true,
     },

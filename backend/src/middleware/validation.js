@@ -1108,23 +1108,30 @@ export const validationRules = {
       .withMessage('Reason must be between 10 and 500 characters'),
   ],
 
-  // Update ride (admin)
+  // Update ride status (admin). Fare is not an accepted field.
   updateRide: [
     body('status')
-      .optional()
-      .isIn(['requested', 'accepted', 'in-progress', 'completed', 'cancelled'])
+      .notEmpty()
+      .withMessage('Status is required')
+      .isIn([
+        'requested',
+        'searching',
+        'scheduled',
+        'accepted',
+        'driver_en_route',
+        'arrived',
+        'in-progress',
+        'completed',
+        'cancelled',
+        'no-driver-found',
+      ])
       .withMessage('Invalid status'),
-    body('fare')
-      .optional()
-      .isObject()
-      .withMessage('Fare must be an object'),
-    body('fare.totalFare')
-      .optional()
-      .isFloat({ min: 0 })
-      .withMessage('Total fare must be a non-negative number'),
     body('reason')
-      .optional()
-      .trim(),
+      .trim()
+      .notEmpty()
+      .withMessage('Reason is required')
+      .isLength({ min: 3, max: 500 })
+      .withMessage('Reason must be between 3 and 500 characters'),
   ],
 
   // Assign driver to ride (admin)
@@ -1312,6 +1319,7 @@ export const validationRules = {
         'vehicle_type_delete', 'settings_update',
         'promocode_create', 'promocode_update',
         'agent_create', 'agent_update', 'agent_target_paid',
+        'ride_status_update',
       ])
       .withMessage('Invalid action filter'),
     query('resourceType')
@@ -1694,12 +1702,16 @@ export const validationRules = {
     body('description')
       .optional()
       .trim(),
+    body('discountType')
+      .optional()
+      .isIn(['percentage', 'fixed'])
+      .withMessage('Discount type must be percentage or fixed'),
     body('discountValue')
       .optional()
       .isFloat({ min: 0 })
       .withMessage('Valid discount value is required'),
     body('maxDiscount')
-      .optional()
+      .optional({ nullable: true })
       .isFloat({ min: 0 })
       .withMessage('Max discount must be a non-negative number'),
     body('minAmount')
@@ -1707,7 +1719,7 @@ export const validationRules = {
       .isFloat({ min: 0 })
       .withMessage('Min amount must be a non-negative number'),
     body('maxUses')
-      .optional()
+      .optional({ nullable: true })
       .isInt({ min: 1 })
       .withMessage('Max uses must be a positive integer'),
     body('maxUsesPerUser')

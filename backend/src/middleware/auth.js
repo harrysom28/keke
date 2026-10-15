@@ -197,7 +197,6 @@ const AGENTS_MANAGER_ALLOWLIST = [
   { method: 'POST', re: /^\/logout\/?$/ },
   { method: 'GET', re: /^\/agents\/?$/ },
   { method: 'GET', re: new RegExp(`^/agents/${OBJECT_ID}/?$`) },
-  { method: 'GET', re: new RegExp(`^/agents/${OBJECT_ID}/drivers/?$`) },
   { method: 'PATCH', re: new RegExp(`^/agents/${OBJECT_ID}/?$`) },
 ];
 

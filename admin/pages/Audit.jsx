@@ -26,6 +26,7 @@ const ACTION_LABELS = {
   agent_create: 'Agent created',
   agent_update: 'Agent updated',
   agent_target_paid: 'Agent cycle marked paid',
+  ride_status_update: 'Ride status updated',
 };
 
 const RESOURCE_LABELS = {
@@ -120,6 +121,9 @@ function AuditPage({ showToast }) {
         if (v.reason) parts.push(v.reason);
         if (v.resolution) parts.push(`Resolution: ${v.resolution}`);
         if (v.vehicleTypeName) parts.push(v.vehicleTypeName);
+        if (v.code) parts.push(v.code);
+        if (v.discountValue != null) parts.push((v.discountType ? v.discountType + ' ' : '') + v.discountValue);
+        if (v.isActive != null) parts.push(v.isActive ? 'Active' : 'Inactive');
         return parts.length ? parts.join(' · ') : '—';
       },
     },

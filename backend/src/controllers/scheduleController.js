@@ -10,6 +10,7 @@ import { getSocketService } from '../services/socketService.js';
 import { processCancellation } from '../services/escrowWalletService.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import { cache } from '../config/redis.js';
+import { createRequestedRide } from './rideController.js';
 
 /**
  * Get scheduled bookings - GET /api/schedule/list-bookings
@@ -404,8 +405,7 @@ export const getClosestScheduledBooking = asyncHandler(async (req, res) => {
  * Schedule a ride - POST /api/booking/schedule-ride
  */
 export const scheduleRide = asyncHandler(async (req, res) => {
-  const { pickupLocation, dropoffLocation, vehicleTypeId, paymentMethod, scheduledAt, promoCode } = req.body;
-  const riderId = req.user._id;
+  const { scheduledAt } = req.body;
 
   if (!scheduledAt) {
     throw new ValidationError('Scheduled time is required');
@@ -416,22 +416,7 @@ export const scheduleRide = asyncHandler(async (req, res) => {
     throw new ValidationError('Scheduled time must be in the future');
   }
 
-  // Check if rider has active ride
-  const activeRide = await Ride.findActiveRideForRider(riderId);
-  if (activeRide && !activeRide.isScheduled) {
-    throw new ConflictError('You already have an active ride');
-  }
-
-  // This will reuse the requestRide logic but with scheduled flag
-  // For now, return success with instructions
-  res.status(201).json({
-    status: 'success',
-    message: 'Ride scheduled successfully. Use /api/booking/request-ride with scheduledAt parameter.',
-    data: {
-      scheduled_at: scheduledTime,
-      instructions: 'Include scheduledAt in request-ride body to schedule a ride',
-    },
-  });
+  return createRequestedRide(req, res);
 });
 
 /**

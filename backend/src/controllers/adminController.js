@@ -334,7 +334,7 @@ export const getDashboardLive = asyncHandler(async (req, res) => {
       .lean(),
     Ride.find({ status: 'completed' })
       .populate('rider', 'name')
-      .populate('driver.user', 'name')
+      .populate({ path: 'driver', populate: { path: 'user', select: 'name' } })
       .sort({ completedAt: -1 })
       .limit(10)
       .lean(),
@@ -1681,7 +1681,7 @@ export const listRides = asyncHandler(async (req, res) => {
 
   let ridesQuery = Ride.find(filter)
     .populate('rider', 'name phone email')
-    .populate('driver.user', 'name phone email')
+    .populate({ path: 'driver', populate: { path: 'user', select: 'name phone email' } })
     .populate('vehicleType')
     .sort({ createdAt: -1 });
 
@@ -1824,8 +1824,11 @@ export const getRideDetails = asyncHandler(async (req, res) => {
 
   const ride = await Ride.findById(id)
     .populate('rider', 'name email phone profileImage rating')
-    .populate('driver.user', 'name email phone profileImage rating')
-    .populate('driver', 'licenseNumber vehicleDetails rating')
+    .populate({
+      path: 'driver',
+      select: 'licenseNumber vehicleDetails rating user',
+      populate: { path: 'user', select: 'name email phone profileImage rating' },
+    })
     .populate('vehicleType');
 
   if (!ride) {
@@ -1842,6 +1845,7 @@ export const getRideDetails = asyncHandler(async (req, res) => {
     status: 'success',
     data: {
       ride: formatRideResponse(ride),
+      allowed_next_statuses: RIDE_STATUS_TRANSITIONS[ride.status] || [],
       payment: payment ? {
         payment_id: payment._id.toString(),
         amount: payment.amount,
@@ -1866,45 +1870,59 @@ export const getRideDetails = asyncHandler(async (req, res) => {
  */
 export const updateRide = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const updateData = req.body;
+  const updateData = req.body || {};
+
+  if (updateData.fare != null) {
+    throw new ValidationError('Fare cannot be changed from admin.');
+  }
 
   const ride = await Ride.findById(id);
   if (!ride) {
     throw new NotFoundError('Ride');
   }
 
-  // Update allowed fields (with state transition check)
-  if (updateData.status) {
-    const newStatus = updateData.status;
-    if (!canTransitionRideStatus(ride.status, newStatus)) {
-      throw new ValidationError(
-        `Invalid status transition: cannot change ride from "${ride.status}" to "${newStatus}"`
-      );
-    }
-    ride.status = newStatus;
-    ride.statusHistory.push({
-      status: newStatus,
-      timestamp: new Date(),
-      note: `Status updated by admin: ${updateData.reason || 'No reason provided'}`,
-    });
+  const newStatus = updateData.status;
+  const reason = String(updateData.reason || '').trim();
+  if (!reason) {
+    throw new ValidationError('A reason is required to change ride status');
+  }
+  if (!canTransitionRideStatus(ride.status, newStatus)) {
+    throw new ValidationError(
+      `Invalid status transition: cannot change ride from "${ride.status}" to "${newStatus}"`
+    );
   }
 
-  if (updateData.fare?.totalFare) {
-    ride.fare.totalFare = updateData.fare.totalFare;
-  }
+  const previousStatus = ride.status;
+  ride.status = newStatus;
+  ride.statusHistory.push({
+    status: newStatus,
+    timestamp: new Date(),
+    note: `Status updated by admin: ${reason}`,
+  });
 
   await ride.save();
   await ride.populate('rider', 'name phone profileImage');
-  await ride.populate('driver.user', 'name phone profileImage');
+  await ride.populate({ path: 'driver', populate: { path: 'user', select: 'name phone profileImage' } });
   await ride.populate('vehicleType');
 
-  logger.info(`Ride ${id} updated by admin ${req.user._id}`);
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'ride_status_update',
+    resourceType: 'ride',
+    resourceId: id,
+    details: { from: previousStatus, to: newStatus, reason },
+    req,
+  });
+
+  logger.info(`Ride ${id} status ${previousStatus} -> ${newStatus} by admin ${req.user._id}`);
 
   res.json({
     status: 'success',
     message: 'Ride updated successfully',
     data: {
       ride: formatRideResponse(ride),
+      allowed_next_statuses: RIDE_STATUS_TRANSITIONS[ride.status] || [],
     },
   });
 });
@@ -1965,8 +1983,11 @@ export const assignRideDriver = asyncHandler(async (req, res) => {
   driver.isAvailable = false;
   await driver.save();
 
-  await ride.populate('driver.user', 'name phone profileImage');
-  await ride.populate('driver', 'licenseNumber vehicleDetails rating');
+  await ride.populate({
+    path: 'driver',
+    select: 'licenseNumber vehicleDetails rating user',
+    populate: { path: 'user', select: 'name phone profileImage' },
+  });
 
   try {
     const pusherService = (await import('../services/pusherService.js')).default;
@@ -2049,17 +2070,24 @@ export const handleDispute = asyncHandler(async (req, res) => {
         await user.save();
       }
 
-      await logAdminAction({
-        adminId: req.user._id,
-        adminEmail: req.user.email,
-        action: 'dispute_resolve',
-        resourceType: 'ride',
-        resourceId: id,
-        details: { rideId: id, refundAmount, resolution, reason },
-        req,
-      });
     }
   }
+
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'dispute_resolve',
+    resourceType: 'ride',
+    resourceId: id,
+    details: {
+      rideId: id,
+      ticketId: ticket._id.toString(),
+      refundAmount: refundAmount || 0,
+      resolution,
+      reason: reason || null,
+    },
+    req,
+  });
 
   logger.info(`Dispute handled for ride ${id} by admin ${req.user._id}`);
 
@@ -2218,12 +2246,23 @@ export const getRevenueStats = asyncHandler(async (req, res) => {
     },
   ]);
 
+  const promoSpend = await Ride.aggregate([
+    {
+      $match: {
+        discountAmount: { $gt: 0 },
+        createdAt: { $gte: startDate },
+      },
+    },
+    { $group: { _id: null, total: { $sum: '$discountAmount' } } },
+  ]);
+
   res.json({
     status: 'success',
     data: {
       period,
       total_revenue: totalRevenue[0]?.total || 0,
       total_transactions: totalRevenue[0]?.count || 0,
+      promo_spend: promoSpend[0]?.total || 0,
       revenue_by_method: revenueByMethod.reduce((acc, item) => {
         acc[item._id] = {
           total: item.total,
@@ -2840,6 +2879,7 @@ export const listPromocodes = asyncHandler(async (req, res) => {
         max_discount: promo.maxDiscount,
         min_amount: promo.minAmount,
         max_uses: promo.maxUses,
+        max_uses_per_user: promo.maxUsesPerUser,
         used_count: promo.usedCount,
         valid_from: promo.validFrom,
         valid_to: promo.validTo,
@@ -2878,9 +2918,10 @@ export const createPromocode = asyncHandler(async (req, res) => {
     validTo,
     applicableUserTypes,
     applicableVehicleTypes,
+    isActive,
   } = req.body;
 
-  if (!code || !discountType || !discountValue || !validFrom || !validTo) {
+  if (!code || !discountType || discountValue == null || discountValue === '' || !validFrom || !validTo) {
     throw new ValidationError('Code, discount type, discount value, valid from, and valid to are required');
   }
 
@@ -2903,11 +2944,24 @@ export const createPromocode = asyncHandler(async (req, res) => {
     validTo: new Date(validTo),
     applicableUserTypes: applicableUserTypes || ['all'],
     applicableVehicleTypes: applicableVehicleTypes || [],
-    isActive: true,
+    isActive: isActive !== false && isActive !== 'false',
   });
 
   await promocode.populate('applicableVehicleTypes', 'name displayName');
 
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'promocode_create',
+    resourceType: 'promocode',
+    resourceId: promocode._id,
+    details: {
+      code: promocode.code,
+      discountType: promocode.discountType,
+      discountValue: promocode.discountValue,
+    },
+    req,
+  });
   logger.info(`Promocode created by admin ${req.user._id}: ${code}`);
 
   res.status(201).json({
@@ -2939,10 +2993,11 @@ export const updatePromocode = asyncHandler(async (req, res) => {
 
   // Update allowed fields
   if (updateData.description !== undefined) promocode.description = updateData.description;
+  if (updateData.discountType !== undefined) promocode.discountType = updateData.discountType;
   if (updateData.discountValue !== undefined) promocode.discountValue = updateData.discountValue;
-  if (updateData.maxDiscount !== undefined) promocode.maxDiscount = updateData.maxDiscount;
+  if (updateData.maxDiscount !== undefined) promocode.maxDiscount = updateData.maxDiscount === null || updateData.maxDiscount === '' ? null : updateData.maxDiscount;
   if (updateData.minAmount !== undefined) promocode.minAmount = updateData.minAmount;
-  if (updateData.maxUses !== undefined) promocode.maxUses = updateData.maxUses;
+  if (updateData.maxUses !== undefined) promocode.maxUses = updateData.maxUses === null || updateData.maxUses === '' ? null : updateData.maxUses;
   if (updateData.maxUsesPerUser !== undefined) promocode.maxUsesPerUser = updateData.maxUsesPerUser;
   if (updateData.validFrom) promocode.validFrom = new Date(updateData.validFrom);
   if (updateData.validTo) promocode.validTo = new Date(updateData.validTo);
@@ -2953,6 +3008,19 @@ export const updatePromocode = asyncHandler(async (req, res) => {
   await promocode.save();
   await promocode.populate('applicableVehicleTypes', 'name displayName');
 
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'promocode_update',
+    resourceType: 'promocode',
+    resourceId: promocode._id,
+    details: {
+      code: promocode.code,
+      isActive: promocode.isActive,
+      discountValue: promocode.discountValue,
+    },
+    req,
+  });
   logger.info(`Promocode ${id} updated by admin ${req.user._id}`);
 
   res.json({
@@ -3522,10 +3590,17 @@ export const getFinancialSummary = asyncHandler(async (req, res) => {
     { $group: { _id: null, total: { $sum: '$amount' } } },
   ]).then((r) => (r[0]?.total ?? 0));
 
+  const promoSpend = await Ride.aggregate([
+    { $match: { discountAmount: { $gt: 0 } } },
+    { $group: { _id: null, total: { $sum: '$discountAmount' } } },
+  ]).then((r) => (r[0]?.total ?? 0));
+
   res.json({
     status: 'success',
     data: {
       total_platform_revenue: totalPlatformRevenue,
+      promo_spend: promoSpend,
+      net_platform_revenue: totalPlatformRevenue - promoSpend,
       total_driver_payouts: totalDriverPayouts,
       outstanding_liabilities: outstandingLiabilities,
       pending_balances_total: walletAgg.pending,

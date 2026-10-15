@@ -278,22 +278,24 @@ export async function reconcileOrphanedWalletHoldsForRider(riderId) {
 /**
  * Validate rider has sufficient balance for fare + service charge. No money moved.
  */
-export async function validateRiderBalance(riderId, fareAmount) {
+export async function validateRiderBalance(riderId, fareAmount, fareToHold = null) {
   const breakdown = await calculateFareBreakdown(fareAmount);
+  const holdFare = fareToHold == null ? Number(fareAmount) || 0 : Number(fareToHold) || 0;
+  const required = holdFare + breakdown.riderServiceCharge;
   let wallet = await getOrCreateRiderWallet(riderId);
 
-  if (wallet.availableBalance < breakdown.riderTotal && Number(wallet.heldBalance) > 0) {
+  if (wallet.availableBalance < required && Number(wallet.heldBalance) > 0) {
     await reconcileCancelledScheduledRideEscrows(riderId);
     await reconcileOrphanedWalletHoldsForRider(riderId);
     wallet = await getOrCreateRiderWallet(riderId);
   }
 
   if (wallet.frozen) throw new EscrowWalletError('WALLET_FROZEN', 'Wallet is frozen');
-  if (wallet.availableBalance < breakdown.riderTotal) {
-    const shortfall = breakdown.riderTotal - wallet.availableBalance;
+  if (wallet.availableBalance < required) {
+    const shortfall = required - wallet.availableBalance;
     throw new EscrowWalletError('INSUFFICIENT_BALANCE', `Top up ₦${shortfall.toLocaleString()} to book this ride`, {
       available: wallet.availableBalance,
-      required: breakdown.riderTotal,
+      required,
       shortfall,
       breakdown,
     });
@@ -396,7 +398,12 @@ export async function settleRide(rideId, riderId, driverUserId, fareAmount) {
     type: 'hold',
   }).lean();
   const totalHeld = holdTx ? Math.abs(Number(holdTx.amount) || 0) : fareAmount;
-  const serviceCharge = totalHeld - fareAmount;
+  const rideForPromo = await Ride.findById(rideId).select('discountAmount fare.riderServiceCharge').lean();
+  const discountAmount = Math.max(0, Number(rideForPromo?.discountAmount) || 0);
+  const recordedServiceCharge = Number(rideForPromo?.fare?.riderServiceCharge);
+  const serviceCharge = Number.isFinite(recordedServiceCharge) && recordedServiceCharge >= 0
+    ? recordedServiceCharge
+    : Math.max(0, totalHeld - (fareAmount - discountAmount));
 
   const runSettlement = async (useSession) => {
     const session = useSession ? await mongoose.startSession().catch(() => null) : null;
@@ -423,9 +430,11 @@ export async function settleRide(rideId, riderId, driverUserId, fareAmount) {
             balanceBefore: riderWallet.heldBalance + totalHeld,
             balanceAfter: riderWallet.heldBalance,
             description:
-              serviceCharge > 0
-                ? `Ride paid (₦${fareAmount} fare + ₦${serviceCharge} service)`
-                : 'Ride fare paid',
+              discountAmount > 0
+                ? `Ride paid (₦${fareAmount} fare − ₦${discountAmount} promo + ₦${serviceCharge} service)`
+                : serviceCharge > 0
+                  ? `Ride paid (₦${fareAmount} fare + ₦${serviceCharge} service)`
+                  : 'Ride fare paid',
             idempotencyKey,
             status: 'completed',
           },

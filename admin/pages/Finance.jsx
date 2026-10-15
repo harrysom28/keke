@@ -282,6 +282,8 @@ function FinancePage({ showToast }) {
 
   const platformRows = platformSummary ? [
     { label: 'Total platform revenue', value: Utils.formatCurrency(platformSummary.total_platform_revenue ?? 0) },
+    { label: 'Promo spend', value: Utils.formatCurrency(platformSummary.promo_spend ?? 0) },
+    { label: 'Net platform revenue', value: Utils.formatCurrency(platformSummary.net_platform_revenue ?? ((platformSummary.total_platform_revenue ?? 0) - (platformSummary.promo_spend ?? 0))) },
     { label: 'Total driver payouts', value: Utils.formatCurrency(platformSummary.total_driver_payouts ?? 0) },
     { label: 'Outstanding liabilities', value: Utils.formatCurrency(platformSummary.outstanding_liabilities ?? 0) },
     { label: 'Available driver balances', value: Utils.formatCurrency(platformSummary.available_balances_total ?? 0) },
@@ -395,6 +397,7 @@ function FinancePage({ showToast }) {
             <>
               <p className="text-2xl font-bold text-gray-900 dark:text-white">Total revenue: {Utils.formatCurrency(revenue.total_revenue ?? revenue.total ?? revenue.totalRevenue ?? 0)}</p>
               <p className="text-sm text-gray-600 dark:text-gray-400">Transactions: {revenue.total_transactions ?? revenue.total_transactions ?? 0}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Promo spend: {Utils.formatCurrency(revenue.promo_spend ?? 0)}</p>
               {revenue.revenue_by_method && Object.keys(revenue.revenue_by_method).length > 0 && (
                 <div>
                   <h4 className="font-medium text-gray-900 dark:text-white mb-2">Revenue by category (payment method)</h4>

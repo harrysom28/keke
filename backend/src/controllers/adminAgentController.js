@@ -86,27 +86,6 @@ export const getAdminAgent = asyncHandler(async (req, res) => {
   });
 });
 
-export const listAdminAgentDrivers = asyncHandler(async (req, res) => {
-  const agent = await Agent.findById(req.params.id).populate('user', 'name email phone isActive referralCode');
-  if (!agent) throw new NotFoundError('Agent');
-  await ensureAgentReferralCode(agent);
-  await syncReferredDriversForAgents([agent]);
-  const [drivers, rawStats] = await Promise.all([
-    loadReferredDrivers(agent._id),
-    statsForAgentIds([agent._id]),
-  ]);
-  const statsMap = await mergeInviteStats([agent], rawStats);
-  res.json({
-    status: 'success',
-    data: {
-      agent: formatAdminAgent(agent, statsMap.get(String(agent._id)), agent.user),
-      stats: ratesFromStats(statsMap.get(String(agent._id))),
-      drivers,
-      count: drivers.length,
-    },
-  });
-});
-
 export const createAdminAgent = asyncHandler(async (req, res) => {
   const { email_phone_number, name, zone, park, bountyRate, targetCount, targetDeadline, cycleName } = req.body;
   if (!email_phone_number) throw new ValidationError('Email or phone number is required');

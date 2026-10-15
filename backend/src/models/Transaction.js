@@ -28,6 +28,7 @@ const transactionSchema = new mongoose.Schema(
         'refund',
         'balance_release',
         'cancellation_compensation',
+        'promo_subsidy',
       ],
       required: true,
     },

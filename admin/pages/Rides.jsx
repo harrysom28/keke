@@ -67,6 +67,11 @@ function RideDetailPage({ id, onBack, showToast }) {
   const [assigning, setAssigning] = useState(false);
   const [completeModal, setCompleteModal] = useState({ open: false, reason: '', adminNote: '' });
   const [completing, setCompleting] = useState(false);
+  const [statusDraft, setStatusDraft] = useState('');
+  const [statusReason, setStatusReason] = useState('');
+  const [statusSaving, setStatusSaving] = useState(false);
+  const [dispute, setDispute] = useState({ resolution: 'no_action', refundAmount: '', reason: '' });
+  const [disputing, setDisputing] = useState(false);
 
   const loadRide = () => {
     if (!id) return;
@@ -80,6 +85,8 @@ function RideDetailPage({ id, onBack, showToast }) {
   useEffect(() => { loadRide(); }, [id]);
 
   const r = ride?.ride || ride;
+  const nextStatuses = ride?.allowed_next_statuses || [];
+  const canDispute = r && (r.status === 'completed' || r.status === 'issue_flagged');
   const canAssign = r && (r.status === 'requested' || r.status === 'no-driver-found') && !r.driver;
   const canForceComplete = r && ['in-progress', 'issue_flagged', 'driver_offline'].includes(r.status);
   const vehicleTypeId = r?.vehicle_type_id || null;
@@ -123,6 +130,45 @@ function RideDetailPage({ id, onBack, showToast }) {
       setCompleteModal({ open: false, reason: '', adminNote: '' });
       loadRide();
     }).finally(() => setCompleting(false));
+  };
+
+  const handleStatusChange = () => {
+    if (!statusDraft || statusSaving) return;
+    if (statusReason.trim().length < 3) {
+      showToast('Reason must be at least 3 characters', 'warning');
+      return;
+    }
+    setStatusSaving(true);
+    Api.patch('/api/admin/rides/' + id, { status: statusDraft, reason: statusReason.trim() }).then((res) => {
+      if (res.error) { showToast(res.error, 'error'); return; }
+      showToast('Ride status updated');
+      setStatusDraft('');
+      setStatusReason('');
+      loadRide();
+    }).finally(() => setStatusSaving(false));
+  };
+
+  const handleDispute = () => {
+    if (disputing) return;
+    const payload = {
+      resolution: dispute.resolution,
+      reason: dispute.reason.trim() || undefined,
+    };
+    if (dispute.refundAmount !== '') {
+      const amount = parseFloat(dispute.refundAmount);
+      if (Number.isNaN(amount) || amount < 0) {
+        showToast('Refund amount must be a number', 'warning');
+        return;
+      }
+      if (amount > 0) payload.refundAmount = amount;
+    }
+    setDisputing(true);
+    Api.post('/api/admin/rides/' + id + '/dispute', payload).then((res) => {
+      if (res.error) { showToast(res.error, 'error'); return; }
+      showToast('Dispute recorded');
+      setDispute({ resolution: 'no_action', refundAmount: '', reason: '' });
+      loadRide();
+    }).finally(() => setDisputing(false));
   };
 
   if (loading || !ride) return <div className="flex justify-center p-12"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" /></div>;
@@ -183,6 +229,53 @@ function RideDetailPage({ id, onBack, showToast }) {
               className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700"
             >
               Force complete ride
+            </button>
+          </div>
+        )}
+
+        {nextStatuses.length > 0 && (
+          <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-600">
+            <h3 className="font-medium text-gray-900 dark:text-gray-100 mb-2">Change status</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Only transitions the ride already allows are listed. Fare stays as quoted.</p>
+            {nextStatuses.includes('completed') && (
+              <p className="text-sm text-amber-700 dark:text-amber-400 mb-3">Choosing completed here only changes the status. Use Force complete to settle payment on a stuck trip.</p>
+            )}
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="flex flex-col gap-1">
+                <label htmlFor="ride-status" className="text-sm text-gray-700 dark:text-gray-300">New status</label>
+                <select id="ride-status" value={statusDraft} onChange={(e) => setStatusDraft(e.target.value)} className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200">
+                  <option value="">Select status...</option>
+                  {nextStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+              </div>
+              <input type="text" placeholder="Reason (required)" value={statusReason} onChange={(e) => setStatusReason(e.target.value)} className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 min-w-[220px]" />
+              <button type="button" onClick={handleStatusChange} disabled={!statusDraft || statusSaving} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {statusSaving ? 'Saving…' : 'Update status'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {canDispute && (
+          <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-600 space-y-2">
+            <h3 className="font-medium text-gray-900 dark:text-gray-100">Dispute</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">Opens a support ticket for this ride. A refund is applied only when a completed payment exists.</p>
+            <select value={dispute.resolution} onChange={(e) => setDispute((d) => ({ ...d, resolution: e.target.value }))} className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200">
+              <option value="no_action">No refund</option>
+              <option value="refund">Full refund</option>
+              <option value="partial_refund">Partial refund</option>
+              <option value="refund_to_wallet">Refund to wallet</option>
+            </select>
+            <input type="number" min="0" step="0.01" placeholder="Refund amount (optional)" value={dispute.refundAmount} onChange={(e) => setDispute((d) => ({ ...d, refundAmount: e.target.value }))} className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200" />
+            <input type="text" placeholder="Reason" value={dispute.reason} onChange={(e) => setDispute((d) => ({ ...d, reason: e.target.value }))} className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200" />
+            {ride?.payment && ride.payment.status !== 'completed' && dispute.refundAmount && (
+              <p className="text-sm text-amber-700 dark:text-amber-400">This ride&apos;s payment is {ride.payment.status}, so a refund amount will not be applied.</p>
+            )}
+            {!ride?.payment && dispute.refundAmount && (
+              <p className="text-sm text-amber-700 dark:text-amber-400">No payment is on file, so a refund amount will not be applied.</p>
+            )}
+            <button type="button" onClick={handleDispute} disabled={disputing} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+              {disputing ? 'Saving…' : 'Record dispute'}
             </button>
           </div>
         )}

@@ -576,10 +576,60 @@ async function creditCancellationCompensation(driverId, amount, rideId, session 
   return { wallet, transactionId: txnId };
 }
 
+/**
+ * Reimburse a cash-ride promo. The rider handed the driver the discounted fare,
+ * while commission was booked on the full fare. Credit the difference now.
+ * Idempotent per ride via the promo_subsidy Transaction row.
+ */
+async function creditPromoSubsidy(driverId, subsidyAmount, rideId, currency = 'NGN', session = null) {
+  const amount = Math.max(0, Number(subsidyAmount) || 0);
+  if (!driverId || amount <= 0) return { credited: 0 };
+  const opts = session ? { session } : {};
+
+  if (rideId) {
+    const dup = await Transaction.findOne({ rideId, driverId, type: 'promo_subsidy' })
+      .session(session || null)
+      .lean();
+    if (dup) return { duplicate: true, credited: 0 };
+  }
+
+  await getOrCreateWallet(driverId, currency);
+  const before = await DriverWallet.findOne({ driverId }).session(session || null);
+  const balanceBefore = Number(before?.availableBalance) || 0;
+
+  const wallet = await DriverWallet.findOneAndUpdate(
+    { driverId },
+    { $inc: { availableBalance: amount, totalEarned: amount } },
+    { new: true, ...opts }
+  );
+  if (!wallet) throw new Error('Wallet not found');
+
+  const txnId = generateTransactionId('PRM');
+  await Transaction.create(
+    [
+      {
+        transactionId: txnId,
+        rideId,
+        driverId,
+        type: 'promo_subsidy',
+        amount,
+        currency: wallet.currency || currency,
+        balanceBefore,
+        balanceAfter: balanceBefore + amount,
+        metadata: { rideId: rideId?.toString(), source: 'cash_promo' },
+      },
+    ],
+    opts
+  );
+
+  return { wallet, transactionId: txnId, credited: amount };
+}
+
 export {
   getOrCreateWallet,
   creditRideEarning,
   creditCancellationCompensation,
+  creditPromoSubsidy,
   accrueCommissionDebt,
   sweepCommissionOwed,
   getWithdrawableBalance,
