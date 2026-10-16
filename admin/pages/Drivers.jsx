@@ -10,6 +10,15 @@ function DriversPage({ onNavigate, showToast }) {
   const [verificationStatus, setVerificationStatus] = useState('');
   const [agentId, setAgentId] = useState('');
   const [agents, setAgents] = useState([]);
+  const [search, setSearch] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
+  const [voidRequests, setVoidRequests] = useState([]);
+  const [voidConfirm, setVoidConfirm] = useState({ open: false });
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     Api.get('/api/admin/agents').then((res) => {
@@ -22,13 +31,31 @@ function DriversPage({ onNavigate, showToast }) {
     const params = new URLSearchParams({ page: pagination.page, limit: 20 });
     if (verificationStatus) params.set('verificationStatus', verificationStatus);
     if (agentId) params.set('agentId', agentId);
+    if (searchDebounced) params.set('search', searchDebounced);
     Api.get('/api/admin/drivers?' + params).then((res) => {
       if (res.error) { showToast(res.error, 'error'); setDrivers([]); return; }
       const d = res.data?.data || res.data;
       setDrivers(d.drivers || []);
       setPagination((p) => ({ ...p, pages: d.pagination?.pages ?? 1 }));
     }).finally(() => setLoading(false));
-  }, [pagination.page, verificationStatus, agentId]);
+  }, [pagination.page, verificationStatus, agentId, searchDebounced]);
+
+  const loadVoidRequests = () => {
+    Api.get('/api/admin/void-requests').then((res) => {
+      if (res.error) return;
+      setVoidRequests(res.data?.data?.void_requests || []);
+    });
+  };
+
+  useEffect(() => { loadVoidRequests(); }, []);
+
+  const resolveVoid = (driverId, action) => {
+    Api.post('/api/admin/void-requests/' + driverId + '/resolve', { action }).then((res) => {
+      if (res.error) { showToast(res.error, 'error'); return; }
+      showToast(res.data?.message || 'Updated');
+      setVoidRequests((rows) => rows.filter((row) => row.driver_id !== driverId));
+    });
+  };
 
   const columns = [
     { key: 'user', label: 'Name', render: (v) => v?.name ?? '—' },
@@ -53,7 +80,27 @@ function DriversPage({ onNavigate, showToast }) {
   return (
     <div className="space-y-4">
       <C.Breadcrumb items={[{ label: 'Drivers' }]} />
+      {voidRequests.length > 0 && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4 space-y-3">
+          <p className="font-medium text-amber-900 dark:text-amber-100">Pending void requests</p>
+          <p className="text-sm text-amber-800 dark:text-amber-200">An agent flagged these registrations. Approving permanently deletes the user and driver. Rejecting leaves them unchanged.</p>
+          {voidRequests.map((row) => (
+            <div key={row.driver_id} className="flex flex-wrap items-start justify-between gap-3 bg-white dark:bg-gray-800 rounded-lg p-3">
+              <div>
+                <p className="font-medium">{row.user?.name || 'Unnamed'} · {row.user?.phone || row.user?.email || '—'}</p>
+                <p className="text-sm text-gray-600 dark:text-gray-300">Agent: {row.agent?.name || row.agent?.phone || '—'}</p>
+                <p className="text-sm">{row.reason}</p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setVoidConfirm({ open: true, driverId: row.driver_id, name: row.user?.name || row.user?.phone || 'this registration' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm">Approve</button>
+                <button type="button" onClick={() => resolveVoid(row.driver_id, 'reject')} className="px-3 py-1.5 border rounded-lg text-sm dark:border-gray-600">Reject</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="flex gap-2 flex-wrap">
+        <input type="text" placeholder="Search name, email or phone..." value={search} onChange={(e) => { setSearch(e.target.value); setPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600 w-64" />
         <select value={verificationStatus} onChange={(e) => { setVerificationStatus(e.target.value); setPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600">
           <option value="">All statuses</option>
           <option value="pending">Pending</option>
@@ -73,6 +120,15 @@ function DriversPage({ onNavigate, showToast }) {
           <C.Pagination page={pagination.page} totalPages={pagination.pages} onPageChange={(p) => setPagination((prev) => ({ ...prev, page: p }))} />
         </div>
       </div>
+      <C.ConfirmDialog
+        open={voidConfirm.open}
+        onClose={() => setVoidConfirm({ open: false })}
+        onConfirm={() => { if (voidConfirm.driverId) resolveVoid(voidConfirm.driverId, 'approve'); }}
+        title="Void this registration"
+        message={`This permanently deletes ${voidConfirm.name || 'this registration'} and frees the phone number. It cannot be undone.`}
+        danger
+        confirmLabel="Void registration"
+      />
     </div>
   );
 }

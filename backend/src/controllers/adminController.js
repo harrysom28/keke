@@ -14,6 +14,10 @@ import DriverWallet from '../models/DriverWallet.js';
 import PayoutRequest from '../models/PayoutRequest.js';
 import DriverKyc from '../models/DriverKyc.js';
 import DriverVehicle from '../models/DriverVehicle.js';
+import DriverSecurity from '../models/DriverSecurity.js';
+import UserDevice from '../models/UserDevice.js';
+import UserSession from '../models/UserSession.js';
+import UserWallet from '../models/UserWallet.js';
 import RideAuditLog from '../models/RideAuditLog.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
 import { getOrCreateWallet } from '../services/walletService.js';
@@ -1082,7 +1086,8 @@ export const deleteUser = asyncHandler(async (req, res) => {
     throw new NotFoundError('User');
   }
 
-  // Soft delete
+  const releasedPhone = user.phone;
+  const releasedEmail = user.email;
   await user.softDelete();
 
   await logAdminAction({
@@ -1091,7 +1096,7 @@ export const deleteUser = asyncHandler(async (req, res) => {
     action: 'user_delete',
     resourceType: 'user',
     resourceId: id,
-    details: { userId: id, email: user.email },
+    details: { userId: id, email: releasedEmail, phone: releasedPhone },
     req,
   });
   logger.info(`User ${id} deleted by admin ${req.user._id}`);
@@ -1099,6 +1104,182 @@ export const deleteUser = asyncHandler(async (req, res) => {
   res.json({
     status: 'success',
     message: 'User deleted successfully',
+  });
+});
+
+/**
+ * Pending agent requests to erase a registration they created.
+ * GET /api/admin/void-requests
+ */
+export const listVoidRequests = asyncHandler(async (req, res) => {
+  const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limitNum = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20));
+  const skip = (pageNum - 1) * limitNum;
+  const filter = { 'voidRequest.status': 'pending' };
+  const [drivers, total] = await Promise.all([
+    Driver.find(filter)
+      .sort({ 'voidRequest.requestedAt': -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .populate('user', 'name phone email')
+      .populate({
+        path: 'voidRequest.requestedBy',
+        select: 'name',
+        populate: { path: 'user', select: 'name phone email' },
+      })
+      .lean(),
+    Driver.countDocuments(filter),
+  ]);
+
+  res.json({
+    status: 'success',
+    data: {
+      void_requests: drivers.map((driver) => {
+        const agent = driver.voidRequest?.requestedBy;
+        return {
+          driver_id: driver._id.toString(),
+          reason: driver.voidRequest?.reason || '',
+          requested_at: driver.voidRequest?.requestedAt || null,
+          user: driver.user
+            ? {
+                user_id: driver.user._id?.toString(),
+                name: driver.user.name || null,
+                phone: driver.user.phone || null,
+                email: driver.user.email || null,
+              }
+            : null,
+          agent: agent
+            ? {
+                agent_id: agent._id?.toString(),
+                name: agent.name || agent.user?.name || null,
+                phone: agent.user?.phone || null,
+              }
+            : null,
+        };
+      }),
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum) || 1,
+      },
+    },
+  });
+});
+
+/**
+ * Approve permanently deletes an unused registration. Reject leaves it in place.
+ * A rejected flag can be requested again later.
+ * POST /api/admin/void-requests/:driverId/resolve
+ */
+export const resolveVoidRequest = asyncHandler(async (req, res) => {
+  const { driverId } = req.params;
+  const action = String(req.body?.action || '').trim();
+  const adminNote = String(req.body?.note || req.body?.adminNote || '').trim() || null;
+  if (!['approve', 'reject'].includes(action)) {
+    throw new ValidationError('Action must be approve or reject');
+  }
+
+  const driver = await Driver.findById(driverId);
+  if (!driver || driver.voidRequest?.status !== 'pending') {
+    throw new NotFoundError('Void request');
+  }
+
+  if (action === 'reject') {
+    driver.voidRequest.status = 'rejected';
+    driver.voidRequest.adminNote = adminNote;
+    driver.voidRequest.resolvedAt = new Date();
+    driver.voidRequest.resolvedBy = req.user._id;
+    driver.markModified('voidRequest');
+    await driver.save();
+    await logAdminAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'void_registration_reject',
+      resourceType: 'driver',
+      resourceId: driver._id.toString(),
+      details: {
+        driverId: driver._id.toString(),
+        userId: driver.user?.toString(),
+        reason: driver.voidRequest.reason,
+        adminNote,
+      },
+      req,
+    });
+    return res.json({ status: 'success', message: 'Void request rejected. The registration is unchanged.' });
+  }
+
+  const user = await User.findById(driver.user);
+  if (!user) {
+    throw new NotFoundError('User');
+  }
+  const [driverRides, riderRides, walletTx, driverWallet, userWallet, funding, payments] = await Promise.all([
+    Ride.countDocuments({ driver: driver._id }),
+    Ride.countDocuments({ rider: user._id }),
+    Transaction.countDocuments({ driverId: driver._id }),
+    DriverWallet.findOne({ driverId: driver._id }).lean(),
+    UserWallet.findOne({ userId: user._id }).lean(),
+    WalletFundingTransaction.countDocuments({ user: user._id }),
+    Payment.countDocuments({ user: user._id }),
+  ]);
+  if (driverRides > 0 || riderRides > 0) {
+    throw new ValidationError(
+      'This driver has ride history and cannot be voided — use the normal deactivate/delete flow instead.'
+    );
+  }
+  const available = Number(driverWallet?.availableBalance) || 0;
+  const pending = Number(driverWallet?.pendingBalance) || 0;
+  const riderAvailable = Number(userWallet?.availableBalance) || 0;
+  const riderHeld = Number(userWallet?.heldBalance) || 0;
+  if (available > 0 || pending > 0 || riderAvailable > 0 || riderHeld > 0) {
+    throw new ValidationError('This wallet still has a balance, so the registration cannot be voided.');
+  }
+  if (walletTx > 0 || funding > 0 || payments > 0) {
+    throw new ValidationError('This account has payment or wallet records, so the registration cannot be voided.');
+  }
+
+  const reason = driver.voidRequest.reason;
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+    await Driver.deleteOne({ _id: driver._id }, { session });
+    await DriverKyc.deleteOne({ userId: user._id }, { session });
+    await DriverVehicle.deleteOne({ userId: user._id }, { session });
+    await DriverSecurity.deleteOne({ userId: user._id }, { session });
+    if (driverWallet) await DriverWallet.deleteOne({ driverId: driver._id }, { session });
+    if (userWallet) await UserWallet.deleteOne({ userId: user._id }, { session });
+    await UserDevice.deleteMany({ userId: user._id }, { session });
+    await UserSession.deleteMany({ userId: user._id }, { session });
+    await User.deleteOne({ _id: user._id }, { session });
+    await session.commitTransaction();
+  } catch (err) {
+    await session.abortTransaction().catch(() => {});
+    logger.error(`VOID FAILED for driver ${driver._id}, user ${user._id}: ${err.message}`);
+    throw new ValidationError('The registration could not be voided. Nothing was deleted.');
+  } finally {
+    session.endSession();
+  }
+
+  await logAdminAction({
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    action: 'void_registration_approve',
+    resourceType: 'driver',
+    resourceId: driver._id.toString(),
+    details: {
+      driverId: driver._id.toString(),
+      userId: user._id.toString(),
+      phone: user.phone,
+      email: user.email,
+      reason,
+      adminNote,
+    },
+    req,
+  });
+
+  res.json({
+    status: 'success',
+    message: 'Registration voided. That phone and email can be used again.',
   });
 });
 

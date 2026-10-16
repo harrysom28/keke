@@ -415,6 +415,11 @@ export const validationRules = {
       .isMongoId()
       .withMessage('Invalid ID format'),
   ],
+  mongoDriverId: [
+    param('driverId')
+      .isMongoId()
+      .withMessage('Invalid driver ID format'),
+  ],
   mongoUserId: [
     param('userId')
       .isMongoId()
@@ -1321,6 +1326,7 @@ export const validationRules = {
         'agent_create', 'agent_update', 'agent_target_paid',
         'ride_status_update',
         'ride_clawback',
+        'void_registration_approve', 'void_registration_reject',
       ])
       .withMessage('Invalid action filter'),
     query('resourceType')

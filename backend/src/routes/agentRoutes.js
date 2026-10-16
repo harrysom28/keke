@@ -63,6 +63,12 @@ router.patch(
   validate,
   agentController.updateAgentDriverVehicle
 );
+router.post(
+  '/drivers/:id/request-void',
+  validationRules.mongoId,
+  validate,
+  agentController.requestVoidDriverRegistration
+);
 router.post('/drivers', upload, agentController.registerAgentDriver);
 router.post(
   '/invites/:userId/complete-driver',

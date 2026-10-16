@@ -49,6 +49,13 @@ router.patch('/users/:id', validationRules.mongoId, validate, validationRules.up
 router.patch('/users/:id/activate', validationRules.mongoId, validate, adminController.activateUser);
 router.patch('/users/:id/deactivate', validationRules.mongoId, validate, adminController.deactivateUser);
 router.delete('/users/:id', validationRules.mongoId, validate, adminController.deleteUser);
+router.get('/void-requests', adminController.listVoidRequests);
+router.post(
+  '/void-requests/:driverId/resolve',
+  validationRules.mongoDriverId,
+  validate,
+  adminController.resolveVoidRequest
+);
 
 // Field agents (specific routes before :id)
 router.get('/agents', adminAgentController.listAdminAgents);

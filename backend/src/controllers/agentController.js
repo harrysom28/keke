@@ -229,6 +229,13 @@ async function serializeAgentDriver(driver) {
     vehicle_details: driver.vehicleDetails,
     kyc_status: kyc?.verificationStatus || null,
     kyc_rejection: kyc?.rejectionReason || null,
+    void_request: driver.voidRequest?.status
+      ? {
+          status: driver.voidRequest.status,
+          reason: driver.voidRequest.reason || null,
+          requested_at: driver.voidRequest.requestedAt || null,
+        }
+      : null,
   };
 }
 
@@ -761,6 +768,37 @@ export const listAgentDrivers = asyncHandler(async (req, res) => {
     status: 'success',
     data: { drivers: rows, count: rows.length },
   });
+});
+
+/**
+ * Flag a registration this agent created. Does not delete anything.
+ * A pending flag cannot be sent twice. After an admin rejects it, the agent may flag again.
+ */
+export const requestVoidDriverRegistration = asyncHandler(async (req, res) => {
+  const reason = String(req.body?.reason || '').trim();
+  if (reason.length < 3) {
+    throw new ValidationError('A short reason is required');
+  }
+  const driver = await Driver.findById(req.params.id);
+  if (!driver) throw new NotFoundError('Driver');
+  if (!driver.referredByAgentId || String(driver.referredByAgentId) !== String(req.agent._id)) {
+    throw new AuthorizationError('You can only flag a driver you registered');
+  }
+  if (driver.voidRequest?.status === 'pending') {
+    throw new ValidationError('This registration is already flagged for admin review');
+  }
+  driver.voidRequest = {
+    requestedBy: req.agent._id,
+    requestedAt: new Date(),
+    reason,
+    status: 'pending',
+    adminNote: null,
+    resolvedAt: null,
+    resolvedBy: null,
+  };
+  driver.markModified('voidRequest');
+  await driver.save();
+  res.json({ status: 'success', message: 'Flagged for admin review.' });
 });
 
 export const getAgentDriver = asyncHandler(async (req, res) => {

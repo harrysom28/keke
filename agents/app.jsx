@@ -1093,6 +1093,49 @@ function EditVehicleDetailsForm({ driverId, driver, onDone }) {
   );
 }
 
+function VoidRegistrationForm({ driver, onDone }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  if (driver.void_request?.status === 'pending') {
+    return <p className="text-sm text-amber-700">Flagged for admin review.</p>;
+  }
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="text-sm text-red-600">
+        This registration is wrong
+      </button>
+    );
+  }
+  const submit = () => {
+    if (reason.trim().length < 3) {
+      setError('A short reason is required');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    Api.post('/api/agents/drivers/' + driver.driver_id + '/request-void', { reason: reason.trim() }).then((res) => {
+      if (res.error) { setError(res.error); return; }
+      setOpen(false);
+      setReason('');
+      if (onDone) onDone();
+    }).finally(() => setSaving(false));
+  };
+  return (
+    <div className="agent-card p-4 space-y-2">
+      <p className="text-sm font-medium">Ask an admin to void this registration</p>
+      <p className="text-xs text-gray-500">Use this for a wrong phone, a duplicate, or the wrong person. An admin has to approve it. Nothing is deleted until then.</p>
+      <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this registration wrong?" className="w-full rounded-xl border border-gray-200 px-4 py-3" rows={3} />
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <div className="flex gap-2">
+        <button type="button" disabled={saving} onClick={submit} className="px-3 py-2 rounded-lg bg-red-600 text-white text-sm disabled:opacity-50">{saving ? 'Sending…' : 'Flag for admin review'}</button>
+        <button type="button" onClick={() => setOpen(false)} className="px-3 py-2 text-sm text-gray-600">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function DriverDetail({ id, onBack }) {
   const [driver, setDriver] = useState(null);
   const [error, setError] = useState('');
@@ -1154,6 +1197,7 @@ function DriverDetail({ id, onBack }) {
           />
         </div>
       )}
+      <VoidRegistrationForm driver={driver} onDone={load} />
       {isDocumentsPending(driver.next_step) && (
         <div className="agent-card p-4">
           <p className="text-sm font-medium">Add documents</p>

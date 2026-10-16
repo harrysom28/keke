@@ -40,6 +40,8 @@ const auditLogSchema = new mongoose.Schema(
         'agent_target_paid',
         'ride_status_update',
         'ride_clawback',
+        'void_registration_approve',
+        'void_registration_reject',
       ],
       index: true,
     },

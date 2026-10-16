@@ -28,6 +28,8 @@ const ACTION_LABELS = {
   agent_target_paid: 'Agent cycle marked paid',
   ride_status_update: 'Ride status updated',
   ride_clawback: 'Driver refund clawback',
+  void_registration_approve: 'Registration voided',
+  void_registration_reject: 'Void request rejected',
 };
 
 const RESOURCE_LABELS = {

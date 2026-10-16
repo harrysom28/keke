@@ -397,11 +397,23 @@ userSchema.methods.isDeleted = function () {
   return this.deletedAt !== null;
 };
 
-// Method to soft delete
+// Method to soft delete. The real phone and email are prefixed so the unique
+// indexes no longer block a new registration. Email's format validator would
+// reject that prefix, so this save skips validation on purpose.
 userSchema.methods.softDelete = async function () {
   this.deletedAt = new Date();
   this.isActive = false;
-  await this.save();
+  const originalPhone = this.phone || null;
+  const originalEmail = this.email || null;
+  if (originalPhone && !String(originalPhone).startsWith('deleted_')) {
+    this.phone = `deleted_${this._id}_${originalPhone}`;
+  }
+  if (originalEmail && !String(originalEmail).startsWith('deleted_')) {
+    this.email = `deleted_${this._id}_${originalEmail}`;
+  }
+  await this.save({ validateBeforeSave: false });
+  this._deletedPhone = originalPhone;
+  this._deletedEmail = originalEmail;
 };
 
 // Exclude deleted users from queries by default

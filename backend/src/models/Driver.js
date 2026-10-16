@@ -210,6 +210,20 @@ const driverSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    /**
+     * An agent can flag a registration they created. Only an admin can approve
+     * it, and approval is what actually deletes the records.
+     * A rejected flag can be raised again. A pending one cannot be duplicated.
+     */
+    voidRequest: {
+      requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Agent' },
+      requestedAt: { type: Date },
+      reason: { type: String },
+      status: { type: String, enum: ['pending', 'approved', 'rejected'] },
+      adminNote: { type: String, default: null },
+      resolvedAt: { type: Date, default: null },
+      resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    },
   },
   {
     timestamps: true,
