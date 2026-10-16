@@ -184,10 +184,17 @@ export function initRateLimiters() {
     },
   });
 
+  const authRateLimitMax = parseInt(
+    process.env.AUTH_RATE_LIMIT_MAX ||
+      (process.env.NODE_ENV === 'production' ? '30' : '1000'),
+    10
+  );
   limiters.authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: process.env.NODE_ENV === 'production' ? 5 : 1000,
+    max: authRateLimitMax,
     store: makeRedisStore('rl:auth:'),
+    // Same identity key as otpLimiter: phone or email first, IP only when neither is present.
+    keyGenerator: otpRateLimitKey,
     message: {
       status: 'error',
       message: 'Too many authentication attempts, please try again later.',
@@ -200,6 +207,9 @@ export function initRateLimiters() {
       return process.env.NODE_ENV !== 'production' && process.env.SKIP_RATE_LIMIT === 'true';
     },
   });
+  logger.info(
+    `Auth rate limit: ${authRateLimitMax} failed attempts / 15 min, keyed by phone or email`
+  );
 
   limiters.otpLimiter = rateLimit({
     windowMs: parseInt(process.env.OTP_RATE_LIMIT_WINDOW_MS || '900000', 10),
