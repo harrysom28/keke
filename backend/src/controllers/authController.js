@@ -29,10 +29,15 @@ function queueOtpDelivery(phone, otp, purpose, { voice = false } = {}) {
 }
 
 async function otpFallbackChannel(phone, email) {
-  if (!phone) return null;
-  const failures = await recentSmsFailures(phone);
-  if (failures < 2) return null;
-  return email ? 'email' : 'voice';
+  if (!phone || typeof recentSmsFailures !== 'function') return null;
+  try {
+    const failures = await recentSmsFailures(phone);
+    if (failures < 2) return null;
+    return email ? 'email' : 'voice';
+  } catch (err) {
+    logger.warn(`OTP fallback check failed for ${phone}: ${err.message}`);
+    return null;
+  }
 }
 import logger from '../utils/logger.js';
 import { resolveReferralCode, applyReferralToUserData } from '../services/agentReferralService.js';

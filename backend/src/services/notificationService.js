@@ -1385,6 +1385,7 @@ export const registerFcmTokenForUser = async (userId, token) => {
 export default {
   sendEmail,
   sendSMS,
+  recentSmsFailures,
   sendPushNotification,
   sendPushNotificationToMultiple,
   createNotification,
