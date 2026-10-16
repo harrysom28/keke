@@ -51,6 +51,16 @@ const driverWalletSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    /**
+     * Outstanding refund recovery. Set when an already-paid ride is refunded
+     * and the driver's available balance cannot cover the full net they were
+     * credited. Swept from the next earning, same as commissionOwed.
+     */
+    clawbackOwed: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     /** Gross ride credits credited today (UTC day); rolled in ensureWalletDayStats. */
     todayEarnings: {
       type: Number,

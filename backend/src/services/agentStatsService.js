@@ -217,7 +217,11 @@ export async function loadCurrentAgentTarget(agentId) {
 
 export async function decorateAgentCycle(target, verifiedCount) {
   if (!target) return null;
-  const paidRow = await AgentPayout.findOne({ target: target._id, status: 'paid' }).sort({ paidAt: -1 }).lean();
+  const [paidRow, owedCount, requestedCount] = await Promise.all([
+    AgentPayout.findOne({ target: target._id, status: 'paid' }).sort({ paidAt: -1 }).lean(),
+    AgentPayout.countDocuments({ target: target._id, status: 'owed' }),
+    AgentPayout.countDocuments({ target: target._id, status: 'owed', requestedAt: { $ne: null } }),
+  ]);
   const flags = cyclePayoutState(target, verifiedCount, Boolean(paidRow));
   const doc = typeof target.toObject === 'function' ? target.toObject() : { ...target };
   return {
@@ -226,6 +230,8 @@ export async function decorateAgentCycle(target, verifiedCount) {
     ...flags,
     paid_at: paidRow?.paidAt || null,
     paid_reason: paidRow?.reason || null,
+    owed_payout_count: owedCount,
+    payout_requested_count: requestedCount,
   };
 }
 

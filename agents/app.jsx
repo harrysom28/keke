@@ -306,6 +306,40 @@ function LoginPage({ onLogin }) {
   );
 }
 
+function OwedPayoutRequest({ payouts, onDone }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const pending = (payouts || []).filter((row) => !row.requested_at);
+  const requested = (payouts || []).length > 0 && pending.length === 0;
+
+  const requestAll = async () => {
+    setSaving(true);
+    setError('');
+    for (const row of pending) {
+      const res = await Api.post('/api/agents/me/payouts/' + row.payout_id + '/request', {});
+      if (res.error) {
+        setError(res.error);
+        setSaving(false);
+        return;
+      }
+    }
+    setSaving(false);
+    if (onDone) onDone();
+  };
+
+  if (requested) {
+    return <p className="mt-2 text-sm text-amber-700">Requested — awaiting admin</p>;
+  }
+  return (
+    <div className="mt-3">
+      <button type="button" disabled={saving} onClick={requestAll} className="keke-btn w-full py-2.5 rounded-xl font-medium">
+        {saving ? 'Requesting…' : 'Request payout'}
+      </button>
+      {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
+    </div>
+  );
+}
+
 function Overview({ go }) {
   const stored = Auth.getAgent() || {};
   const [data, setData] = useState(null);
@@ -370,6 +404,9 @@ function Overview({ go }) {
           <p className="text-lg font-semibold mt-1">{naira(earnings.bounty_rate)} per active driver</p>
           <p className="mt-1 text-sm text-gray-600">Projected {naira(earnings.projected_owed)}</p>
           <p className="mt-1 text-sm text-gray-600">Paid {naira(earnings.paid)}</p>
+          {(earnings.owed_payouts || []).length > 0 && (
+            <OwedPayoutRequest payouts={earnings.owed_payouts} onDone={load} />
+          )}
         </div>
       )}
       <div className="grid grid-cols-3 gap-3">
@@ -880,9 +917,10 @@ function CompleteInviteForm({ invite, onDone }) {
   );
 }
 
-function AddDocumentsForm({ driverId, onDone }) {
+function AddDocumentsForm({ driverId, licenseNumber, onDone }) {
   const [saving, setSaving] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  const [correctLicense, setCorrectLicense] = useState(false);
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
 
@@ -906,6 +944,14 @@ function AddDocumentsForm({ driverId, onDone }) {
       }
       const fd = new FormData();
       appendDriverPhotos(fd, photos);
+      if (correctLicense) {
+        const nextLicense = fieldValue(form, 'licenseNumber').trim();
+        const reason = fieldValue(form, 'licenseReason').trim();
+        if (!nextLicense) { setError('Enter the corrected licence number'); return; }
+        if (reason.length < 3) { setError('Add a short reason for the correction'); return; }
+        fd.append('licenseNumber', nextLicense);
+        fd.append('licenseReason', reason);
+      }
       setSaving(true);
       const res = await Api.patch('/api/agents/drivers/' + driverId + '/documents', fd);
       setSaving(false);
@@ -926,6 +972,16 @@ function AddDocumentsForm({ driverId, onDone }) {
       <PhotoFileInput name="license_image" label="Licence photo" preparing={preparing} />
       <PhotoFileInput name="id_image" label="ID card photo" preparing={preparing} />
       <PhotoFileInput name="vehicle_image" label="Keke / bike photo" preparing={preparing} />
+      <label className="flex items-center gap-2 text-sm text-gray-700">
+        <input type="checkbox" checked={correctLicense} onChange={(e) => setCorrectLicense(e.target.checked)} />
+        Correct licence number
+      </label>
+      {correctLicense && (
+        <>
+          <input name="licenseNumber" defaultValue={licenseNumber || ''} placeholder="Correct licence number" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+          <input name="licenseReason" placeholder="Reason for the correction" className="w-full rounded-xl border border-gray-200 px-4 py-3" />
+        </>
+      )}
       {error && <p className="text-sm text-red-600">{error}</p>}
       {ok && <p className="text-sm text-emerald-700">{ok}</p>}
       <button type="submit" disabled={saving || preparing} className="keke-btn w-full py-2.5 rounded-xl font-medium">
@@ -1101,7 +1157,7 @@ function DriverDetail({ id, onBack }) {
       {isDocumentsPending(driver.next_step) && (
         <div className="agent-card p-4">
           <p className="text-sm font-medium">Add documents</p>
-          <AddDocumentsForm driverId={driver.driver_id} onDone={(next) => { if (next) setDriver(next); else load(); }} />
+          <AddDocumentsForm driverId={driver.driver_id} licenseNumber={driver.license_number} onDone={(next) => { if (next) setDriver(next); else load(); }} />
         </div>
       )}
     </div>
@@ -1201,6 +1257,7 @@ function Drivers({ go }) {
               {docsFor === d.driver_id && (
                 <AddDocumentsForm
                   driverId={d.driver_id}
+                  licenseNumber={d.license_number}
                   onDone={() => { setDocsFor(null); load(); }}
                 />
               )}

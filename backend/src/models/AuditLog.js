@@ -39,6 +39,7 @@ const auditLogSchema = new mongoose.Schema(
         'agent_update',
         'agent_target_paid',
         'ride_status_update',
+        'ride_clawback',
       ],
       index: true,
     },

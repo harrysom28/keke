@@ -10,6 +10,7 @@ const FINANCE_TABS = [
   { id: 'wallet-topups', label: 'Wallet top-ups' },
   { id: 'payouts', label: 'Payout requests' },
   { id: 'platform', label: 'Platform summary' },
+  { id: 'unmatched', label: 'Unmatched deposits' },
 ];
 
 function FinancePage({ showToast }) {
@@ -27,6 +28,9 @@ function FinancePage({ showToast }) {
   const [payoutPagination, setPayoutPagination] = useState({ page: 1, limit: 20, total: 0, pages: 1 });
   const [payoutStatusFilter, setPayoutStatusFilter] = useState('pending');
   const [platformSummary, setPlatformSummary] = useState(null);
+  const [unmatchedEvents, setUnmatchedEvents] = useState([]);
+  const [reconciling, setReconciling] = useState(false);
+  const [unmatchedRefresh, setUnmatchedRefresh] = useState(0);
   const [revenue, setRevenue] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refundModal, setRefundModal] = useState({ open: false, id: null, amount: '', reason: '', paymentAmount: null });
@@ -103,6 +107,12 @@ function FinancePage({ showToast }) {
           setPayoutPagination((p) => ({ ...p, total: d.pagination?.total ?? 0, pages: d.pagination?.pages ?? 1 }));
         }
       }).finally(() => setLoading(false));
+    } else if (tab === 'unmatched') {
+      Api.get('/api/admin/paystack-events?status=unmatched').then((res) => {
+        if (res.error) { showToast(res.error, 'error'); setUnmatchedEvents([]); return; }
+        const d = res.data?.data || res.data;
+        setUnmatchedEvents(d.events || []);
+      }).finally(() => setLoading(false));
     } else if (tab === 'platform') {
       Api.get('/api/admin/financial-summary').then((res) => {
         if (res.error) showToast(res.error, 'error');
@@ -111,7 +121,7 @@ function FinancePage({ showToast }) {
     } else {
       setLoading(false);
     }
-  }, [tab, pagination.page, withdrawalPagination.page, withdrawalStatusFilter, withdrawalRefresh, walletPagination.page, payoutPagination.page, payoutStatusFilter, dateFrom, dateTo, statusFilter, methodFilter, period]);
+  }, [tab, pagination.page, withdrawalPagination.page, withdrawalStatusFilter, withdrawalRefresh, walletPagination.page, payoutPagination.page, payoutStatusFilter, dateFrom, dateTo, statusFilter, methodFilter, period, unmatchedRefresh]);
 
   const reloadWithdrawals = () => setWithdrawalRefresh((n) => n + 1);
 
@@ -467,6 +477,27 @@ function FinancePage({ showToast }) {
             </div>
           </div>
         </>
+      )}
+
+      {tab === 'unmatched' && (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600 dark:text-gray-400">Paystack deposits that could not be matched to a rider. Reconcile checks the last two days of successful Paystack charges and credits any that can be matched now.</p>
+          <button type="button" disabled={reconciling} onClick={() => { setReconciling(true); Api.post('/api/admin/paystack-events/reconcile', {}).then((r) => { if (r.error) showToast(r.error, 'error'); else { showToast('Reconciliation finished'); setUnmatchedRefresh((n) => n + 1); } }).finally(() => setReconciling(false)); }} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg disabled:opacity-50">{reconciling ? 'Reconciling…' : 'Reconcile recent charges'}</button>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+            <C.DataTable
+              columns={[
+                { key: 'reference', label: 'Reference' },
+                { key: 'event_type', label: 'Event' },
+                { key: 'error', label: 'Note' },
+                { key: 'received_at', label: 'Received', render: (v) => Utils.formatDate(v) },
+              ]}
+              rows={unmatchedEvents}
+              keyField="event_id"
+              loading={loading}
+              emptyMessage="No unmatched deposits"
+            />
+          </div>
+        </div>
       )}
 
       {tab === 'platform' && (

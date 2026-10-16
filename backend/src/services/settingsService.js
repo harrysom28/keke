@@ -79,7 +79,7 @@ export async function calculateFareBreakdown(fareAmount) {
 /**
  * Cancellation policy for a scenario (from DB).
  */
-export async function getCancellationPolicy(scenario) {
+export async function getCancellationPolicy(scenario, progress = null) {
   const s = await getSettings();
   const c = s.cancellation ?? DEFAULTS.cancellation;
   if (scenario === 'beforeAccept' || scenario === 'driverCancel') {
@@ -89,7 +89,20 @@ export async function getCancellationPolicy(scenario) {
     return { riderPenalty: c.afterAcceptPenalty ?? 200, driverPayout: c.afterAcceptPayout ?? 200 };
   }
   if (scenario === 'afterArrival') {
-    return { riderPenalty: 0, driverPayout: c.afterArrivalPayout ?? 150 };
+    const flat = c.afterArrivalPayout ?? 150;
+    let riderPenalty = 0;
+    // Early in the trip the rider still pays nothing. Once half the trip is
+    // done, charge the per-km rate for distance covered, never below the flat
+    // fee and never above the quoted fare or 3x that flat fee.
+    if (progress && !progress.stale && progress.percentCovered >= 0.5 && progress.distanceCoveredKm > 0) {
+      const doc = await AdminSettings.findOne({ key: 'default' }).select('pricing').lean();
+      const perKm = Number(doc?.pricing?.perKmRate) || 150;
+      const raw = progress.distanceCoveredKm * perKm;
+      const fareCap = Number(progress.totalFare) > 0 ? Number(progress.totalFare) : raw;
+      const cap = Math.min(fareCap, flat * 3);
+      riderPenalty = Math.round(Math.max(flat, Math.min(raw, cap)));
+    }
+    return { riderPenalty, driverPayout: flat, distanceBased: riderPenalty > 0 };
   }
   return { riderPenalty: 0, driverPayout: 0 };
 }

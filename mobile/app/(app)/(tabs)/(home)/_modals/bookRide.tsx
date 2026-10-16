@@ -15,9 +15,7 @@ import {
 import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { Path, Svg } from "react-native-svg";
-import RNDateTimePicker, {
-  DateTimePickerEvent,
-} from "@react-native-community/datetimepicker";
+import RNDateTimePicker from "@react-native-community/datetimepicker";
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { AntDesign, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -60,8 +58,6 @@ interface Props {
   sheetOpen?: boolean;
   onSheetClose?: () => void;
 }
-
-type ModeType = "date" | "time" | "datetime" | "countdown";
 
 const MIN_SCHEDULE_LEAD_MINUTES = 60;
 
@@ -159,9 +155,7 @@ const BookRideSheet = ({
   const [selectedDate, setSelectedDate] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).dayOffset); // 0=Today, 1=Tomorrow, 2=day after...
   const [selectedTime, setSelectedTime] = useState(() => getScheduleSelectionFromDate(getMinimumScheduledDateTime()).time);
   const [showTimePicker, setShowTimePicker] = useState(false);
-  const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<ModeType>("date");
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
   const [vehicleTypesLoading, setVehicleTypesLoading] = useState(true);
   const [vehicleTypesError, setVehicleTypesError] = useState<string | null>(null);
@@ -252,68 +246,10 @@ const BookRideSheet = ({
   const [state, setState] = useState({
     pickup_location: "",
     dropoff_location: "",
-    booking_date: "",
-    booking_time: "",
     payment_type: "Wallet", // Default to Wallet
     vehicle_type_id: "",
     vehicle_type_name: "",
   });
-
-  // Format date for display (e.g., "Jan 26, 2026")
-  const formatDateDisplay = (dateStr: string): string => {
-    if (!dateStr) return "";
-    try {
-      const [year, month, day] = dateStr.split('-').map(Number);
-      const date = new Date(year, month - 1, day);
-      return date.toLocaleDateString('en-US', { 
-        month: 'short', 
-        day: 'numeric', 
-        year: 'numeric' 
-      });
-    } catch {
-      return dateStr;
-    }
-  };
-
-  // Format time for display (e.g., "4:30 PM")
-  const formatTimeDisplay = (timeStr: string): string => {
-    if (!timeStr) return "";
-    try {
-      const [hours, minutes] = timeStr.split(':').map(Number);
-      const date = new Date();
-      date.setHours(hours, minutes || 0, 0);
-      return date.toLocaleTimeString('en-US', { 
-        hour: 'numeric', 
-        minute: '2-digit',
-        hour12: true 
-      });
-    } catch {
-      return timeStr;
-    }
-  };
-
-  const onChange = (event: DateTimePickerEvent, date: Date | undefined) => {
-    if (date === undefined) return;
-    setShow(false);
-    if (mode === "date") {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      const formattedDate = `${year}-${month}-${day}`;
-      setState((prev) => ({ ...prev, booking_date: formattedDate }));
-    } else {
-      const hours = String(date.getHours()).padStart(2, "0");
-      const minutes = String(date.getMinutes()).padStart(2, "0");
-      const seconds = String(date.getSeconds()).padStart(2, "0");
-      const formattedTime = `${hours}:${minutes}:${seconds}`;
-      setState((prev) => ({ ...prev, booking_time: formattedTime }));
-    }
-  };
-
-  const showPicker = (str: ModeType) => {
-    setMode(str);
-    setShow(true);
-  };
 
   const resetScheduleDraft = useCallback(() => {
     if (scheduleCleanupDoneRef.current) {
@@ -325,8 +261,6 @@ const BookRideSheet = ({
     setState({
       pickup_location: "",
       dropoff_location: "",
-      booking_date: "",
-      booking_time: "",
       payment_type: "Wallet",
       vehicle_type_id: "",
       vehicle_type_name: "",
@@ -870,43 +804,6 @@ const BookRideSheet = ({
 
   return (
     <>
-      <Modal
-        visible={show}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShow(false)}
-      >
-        <Pressable
-          style={tw.style("flex-1 justify-end bg-black/50")}
-          onPress={() => setShow(false)}
-        >
-          <Pressable
-            style={tw.style("bg-white rounded-t-2xl pt-2 pb-6 px-4")}
-            onPress={(e) => {
-              const ev = e as unknown as { stopPropagation?: () => void };
-              ev.stopPropagation?.();
-            }}
-          >
-            <RNDateTimePicker
-              value={
-                mode === "date" && state.booking_date
-                  ? new Date(state.booking_date + "T00:00:00")
-                  : mode === "time" && state.booking_time
-                  ? new Date(
-                      (state.booking_date || new Date().toISOString().split("T")[0]) +
-                        "T" +
-                        state.booking_time
-                    )
-                  : new Date()
-              }
-              minimumDate={new Date()}
-              mode={mode}
-              onChange={onChange}
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-            />
-          </Pressable>
-        </Pressable>
-      </Modal>
       <BottomSheet
         height={sheetHeight}
         ref={bottomSheetRef}
@@ -1034,6 +931,17 @@ const BookRideSheet = ({
                   </Text>
                   <MaterialCommunityIcons name="clock-outline" size={20} color={BRAND_GREEN} />
                 </TouchableOpacity>
+                {Platform.OS === "android" && showTimePicker ? (
+                  <RNDateTimePicker
+                    value={selectedTime}
+                    mode="time"
+                    display="default"
+                    onChange={(event, date) => {
+                      setShowTimePicker(false);
+                      if (event.type !== "dismissed" && date) handleSelectedTimeChange(date, true);
+                    }}
+                  />
+                ) : (
                 <Modal
                   visible={showTimePicker}
                   transparent
@@ -1075,6 +983,7 @@ const BookRideSheet = ({
                     </Pressable>
                   </Pressable>
                 </Modal>
+                )}
                 <ScrollView
                   horizontal
                   nestedScrollEnabled

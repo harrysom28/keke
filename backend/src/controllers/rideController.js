@@ -28,6 +28,7 @@ import {
   processCancellation,
   splitCancellationPenalty,
   resolveRiderCancellationScenario,
+  measureCancellationDistance,
   debitRiderCancellationFee,
   creditDriverCancellationShare,
   EscrowWalletError,
@@ -803,7 +804,13 @@ export const cancelRide = asyncHandler(async (req, res) => {
   }
 
   const { getCancellationPolicy } = await import('../services/settingsService.js');
-  const policy = await getCancellationPolicy(cancellationScenario);
+  const tripProgress = cancellationScenario === 'afterArrival' && cancelledBy === 'rider'
+    ? await measureCancellationDistance(ride)
+    : null;
+  if (tripProgress && !tripProgress.stale) {
+    ride.distanceCoveredAtCancel = Math.round(tripProgress.distanceCoveredKm * 1000) / 1000;
+  }
+  const policy = await getCancellationPolicy(cancellationScenario, tripProgress);
   cancellationFee = policy.riderPenalty ?? 0;
   if (cancellationScenario === 'afterAccept' && cancellationFee > 0) {
     const { driverShare, platformShare } = splitCancellationPenalty(cancellationFee);
@@ -1105,11 +1112,17 @@ export const cancelRidePreview = asyncHandler(async (req, res) => {
     cancellationScenario = 'afterArrival';
   }
   const { getCancellationPolicy } = await import('../services/settingsService.js');
-  const policy = await getCancellationPolicy(cancellationScenario);
+  const { measureCancellationDistance } = await import('../services/escrowWalletService.js');
+  const tripProgress = cancellationScenario === 'afterArrival'
+    ? await measureCancellationDistance(ride)
+    : null;
+  const policy = await getCancellationPolicy(cancellationScenario, tripProgress);
   feeAmount = policy.riderPenalty ?? 0;
   if (feeAmount > 0) {
     if (cancellationScenario === 'afterAccept') {
       feeReason = 'Driver has already accepted and is on the way';
+    } else if (policy.distanceBased) {
+      feeReason = 'A large part of this trip was already driven';
     } else if (cancellationScenario === 'afterArrival') {
       feeReason = 'Driver has arrived at your pickup location';
     }

@@ -35,6 +35,10 @@ const agentPayoutSchema = new mongoose.Schema(
       default: 'owed',
       index: true,
     },
+    requestedAt: {
+      type: Date,
+      default: null,
+    },
     reason: {
       type: String,
       default: null,

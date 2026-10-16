@@ -1233,11 +1233,13 @@ export const getDriverEarnings = asyncHandler(async (req, res) => {
         pendingBalance: walletDoc?.pendingBalance ?? 0,
         totalEarned: lifetimeEarned,
         commissionOwed: Math.round(Number(walletDoc?.commissionOwed) || 0),
+        clawbackOwed: Math.round(Number(walletDoc?.clawbackOwed) || 0),
         withdrawableBalance: Math.round(getWithdrawableBalance(walletDoc)),
       },
       in_app_payment: earnedToday,
       total_balance: String(totalWalletBalance),
       commission_owed: Math.round(Number(walletDoc?.commissionOwed) || 0),
+      clawback_owed: Math.round(Number(walletDoc?.clawbackOwed) || 0),
       withdrawable_balance: Math.round(getWithdrawableBalance(walletDoc)),
       earnings: {
         total: totalWalletBalance,

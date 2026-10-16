@@ -29,6 +29,8 @@ const transactionSchema = new mongoose.Schema(
         'balance_release',
         'cancellation_compensation',
         'promo_subsidy',
+        'clawback_accrued',
+        'clawback_swept',
       ],
       required: true,
     },

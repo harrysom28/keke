@@ -3,6 +3,7 @@ import axios from 'axios';
 import admin from 'firebase-admin';
 import logger from '../utils/logger.js';
 import Notification from '../models/Notification.js';
+import OtpAttempt from '../models/OtpAttempt.js';
 import User from '../models/User.js';
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
@@ -389,7 +390,34 @@ export const sendEmail = async (to, subject, html, text = null) => {
 /**
  * Send SMS
  */
-export const sendSMS = async (to, message) => {
+export async function recentSmsFailures(phone) {
+  const normalized = normalizeNigeriaPhoneForTermii(phone);
+  if (!normalized) return 0;
+  const recent = await OtpAttempt.find({ phone: normalized }).sort({ createdAt: -1 }).limit(2).lean();
+  if (recent.length < 2) return 0;
+  return recent.every((row) => ['failed', 'rejected', 'expired'].includes(row.deliveryStatus)) ? 2 : 0;
+}
+
+export async function recordTermiiDelivery({ messageId, status, reason }) {
+  if (!messageId) return null;
+  const normalized = String(status || '').toLowerCase();
+  // "Message Sent" / "SENT" means Termii handed the SMS to the carrier.
+  // That is still in flight, so it must not count as a failed delivery.
+  let deliveryStatus = null;
+  if (normalized.includes('deliver')) deliveryStatus = 'delivered';
+  else if (normalized.includes('reject') || normalized.includes('dnd')) deliveryStatus = 'rejected';
+  else if (normalized.includes('expir')) deliveryStatus = 'expired';
+  else if (normalized.includes('fail')) deliveryStatus = 'failed';
+  else if (normalized === 'sent' || normalized.includes('message sent')) deliveryStatus = 'accepted';
+  if (!deliveryStatus) return null;
+  return OtpAttempt.findOneAndUpdate(
+    { messageId: String(messageId) },
+    { $set: { deliveryStatus, rejectReason: reason || null } },
+    { new: true }
+  );
+}
+
+export const sendSMS = async (to, message, meta = {}) => {
   try {
     const config = getTermiiConfig();
     if (!config) {
@@ -412,7 +440,7 @@ export const sendSMS = async (to, message) => {
       from: config.senderId,
       sms: message,
       type: config.type,
-      channel: config.channel,
+      channel: meta.channel || config.channel,
       api_key: config.apiKey,
     };
 
@@ -422,16 +450,33 @@ export const sendSMS = async (to, message) => {
 
     const data = response.data;
     const codeOk = data && String(data.code).toLowerCase() === 'ok';
+    const messageId = data?.message_id || data?.message_id_str || null;
+    await OtpAttempt.create({
+      phone: normalized,
+      messageId: messageId ? String(messageId) : null,
+      purpose: meta.purpose || 'otp',
+      deliveryStatus: codeOk ? 'accepted' : 'failed',
+      rejectReason: codeOk ? null : (data?.message || 'not accepted'),
+    });
     if (!codeOk) {
       logger.error(`Termii SMS rejected or unclear response: ${JSON.stringify(data)}`);
       return false;
     }
 
-    logger.info(`SMS accepted by Termii for ${normalized} (message_id=${data.message_id ?? data.message_id_str ?? 'n/a'})`);
+    logger.info(`SMS accepted by Termii for ${normalized} (message_id=${messageId ?? 'n/a'})`);
     logger.debug?.(`Termii response: ${JSON.stringify(response.data)}`);
     return true;
   } catch (error) {
     const details = error?.response?.data || error.message;
+    const normalized = normalizeNigeriaPhoneForTermii(to);
+    if (normalized) {
+      await OtpAttempt.create({
+        phone: normalized,
+        purpose: meta.purpose || 'otp',
+        deliveryStatus: 'failed',
+        rejectReason: typeof details === 'string' ? details.slice(0, 300) : 'send failed',
+      }).catch(() => {});
+    }
     logger.error(`Failed to send SMS (Termii): ${typeof details === 'string' ? details : JSON.stringify(details)}`);
     return false;
   }

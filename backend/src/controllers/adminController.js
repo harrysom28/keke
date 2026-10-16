@@ -2027,6 +2027,40 @@ export const assignRideDriver = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Take back a driver net that was already credited, after an admin refund.
+ * Logs loudly on failure so the amount can be reconciled by hand.
+ */
+async function clawbackCreditedDriver(ride, reference, req) {
+  const driverId = ride?.driver?._id || ride?.driver;
+  const net = Number(ride?.fare?.driverNetAmount) || 0;
+  if (!driverId || net <= 0 || ride?.status !== 'completed') return null;
+  try {
+    const { recordRefundClawback } = await import('../services/walletService.js');
+    const result = await recordRefundClawback(driverId, net, ride._id, reference);
+    if (!result || result.duplicate || result.skipped) return result;
+    await logAdminAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'ride_clawback',
+      resourceType: 'ride',
+      resourceId: ride._id.toString(),
+      details: {
+        driverId: String(driverId),
+        amount: net,
+        immediateDebit: result.immediateDebit,
+        remainderOwed: result.remainder,
+        reference,
+      },
+      req,
+    });
+    return result;
+  } catch (err) {
+    logger.error(`CLAWBACK FAILED for ride ${ride._id}, driver ${driverId}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Handle dispute - POST /api/admin/rides/:id/dispute
  */
 export const handleDispute = asyncHandler(async (req, res) => {
@@ -2070,6 +2104,7 @@ export const handleDispute = asyncHandler(async (req, res) => {
         await user.save();
       }
 
+      await clawbackCreditedDriver(ride, `dispute:${id}`, req);
     }
   }
 
@@ -2355,12 +2390,8 @@ export const processRefund = asyncHandler(async (req, res) => {
     if (ride?.driver && ride.fare?.driverNetAmount != null && ride.fare?.totalFare > 0) {
       const driverRefundAmount = Math.round((refundAmount / payment.amount) * ride.fare.driverNetAmount * 100) / 100;
       if (driverRefundAmount > 0) {
-        try {
-          const { debitRefund } = await import('../services/walletService.js');
-          await debitRefund(ride.driver, driverRefundAmount, payment.ride, reason || 'Ride refund');
-        } catch (err) {
-          logger.error(`Driver wallet refund failed for payment ${id}: ${err.message}`);
-        }
+        const fullRide = await Ride.findById(payment.ride);
+        if (fullRide) await clawbackCreditedDriver(fullRide, `refund:${id}`, req);
       }
     }
   }

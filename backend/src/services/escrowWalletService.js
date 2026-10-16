@@ -13,6 +13,7 @@ import Driver from '../models/Driver.js';
 import Transaction from '../models/Transaction.js';
 import logger from '../utils/logger.js';
 import { getSettings, calculateFareBreakdown, getCancellationPolicy, getCancellationGuards } from './settingsService.js';
+import { calculateDistance } from '../utils/geolocation.js';
 import {
   creditCancellationCompensation,
   ensureWalletDayStats,
@@ -715,6 +716,46 @@ export async function processCancellation(rideId, riderId, driverUserId, fareAmo
 /**
  * Resolve rider-cancel scenario using the same grace / movement rules as cancelRide.
  */
+const CANCEL_GPS_STALE_MS = 2 * 60 * 1000;
+
+/**
+ * How far the driver has travelled from pickup, using fresh GPS only.
+ * Stale or missing coordinates return { stale: true } so the caller keeps
+ * the flat cancellation fee.
+ */
+export async function measureCancellationDistance(ride) {
+  const pickup = ride.pickupLocation?.coordinates;
+  if (!Array.isArray(pickup) || pickup.length < 2) return { stale: true };
+
+  let driver = ride.driver;
+  if (!driver?.currentLocation && (driver?._id || (driver && typeof driver !== 'object'))) {
+    driver = await Driver.findById(driver?._id || driver).select('currentLocation').lean();
+  }
+  const loc = driver?.currentLocation;
+  const coords = loc?.coordinates;
+  const updatedAt = loc?.lastUpdated ? new Date(loc.lastUpdated).getTime() : 0;
+  if (!Array.isArray(coords) || coords.length < 2 || (coords[0] === 0 && coords[1] === 0)) {
+    return { stale: true };
+  }
+  if (!updatedAt || Date.now() - updatedAt > CANCEL_GPS_STALE_MS) return { stale: true };
+
+  const distanceCoveredKm = calculateDistance(pickup[1], pickup[0], coords[1], coords[0]);
+  let totalTripDistanceKm = Number(ride.distance?.value) || 0;
+  const dropoff = ride.dropoffLocation?.coordinates;
+  if (!(totalTripDistanceKm > 0) && Array.isArray(dropoff) && dropoff.length >= 2) {
+    totalTripDistanceKm = calculateDistance(pickup[1], pickup[0], dropoff[1], dropoff[0]);
+  }
+  if (!(totalTripDistanceKm > 0)) return { stale: true };
+
+  return {
+    stale: false,
+    distanceCoveredKm,
+    totalTripDistanceKm,
+    percentCovered: Math.min(1, distanceCoveredKm / totalTripDistanceKm),
+    totalFare: Number(ride.fare?.totalFare) || 0,
+  };
+}
+
 export async function resolveRiderCancellationScenario(ride) {
   if (['requested', 'searching', 'scheduled'].includes(ride.status)) {
     return 'beforeAccept';

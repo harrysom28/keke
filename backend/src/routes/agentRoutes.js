@@ -47,6 +47,7 @@ router.get('/me', agentController.getAgentMe);
 router.patch('/me', agentController.updateAgentMe);
 router.get('/me/drivers', agentController.listMyDrivers);
 router.get('/overview', agentController.getAgentOverview);
+router.post('/me/payouts/:payoutId/request', agentController.requestAgentPayout);
 router.get('/drivers', agentController.listAgentDrivers);
 router.get('/drivers/:id', validationRules.mongoId, validate, agentController.getAgentDriver);
 router.patch(

@@ -5,6 +5,21 @@ import { validationRules, validate } from '../middleware/validation.js';
 
 const router = express.Router();
 
+router.post('/notifications/termii/webhook', async (req, res) => {
+  try {
+    const { recordTermiiDelivery } = await import('../services/notificationService.js');
+    const body = req.body || {};
+    await recordTermiiDelivery({
+      messageId: body.message_id || body.messageId,
+      status: body.status || body.message_state,
+      reason: body.reason || body.reject_reason || null,
+    });
+    res.json({ received: true });
+  } catch (err) {
+    res.status(500).json({ received: false });
+  }
+});
+
 // All routes require authentication
 router.use(protect);
 

@@ -456,6 +456,11 @@ const WalletScreen = () => {
                 withdrawDetails?.wallet?.commissionOwed ??
                 0
             );
+            const clawback = Number(
+              withdrawDetails?.clawback_owed ??
+                withdrawDetails?.wallet?.clawbackOwed ??
+                0
+            );
             return (
               <>
                 <Text
@@ -472,7 +477,7 @@ const WalletScreen = () => {
                 >
                   ₦{withdrawable.toLocaleString()}
                 </Text>
-                {pending > 0 || owed > 0 ? (
+                {pending > 0 || owed > 0 || clawback > 0 ? (
                   <View style={tw`mb-4`}>
                     {pending > 0 ? (
                       <Text style={tw.style(`text-white/90 text-sm`, { fontFamily: "RobotoMedium" })}>
@@ -482,6 +487,11 @@ const WalletScreen = () => {
                     {owed > 0 ? (
                       <Text style={tw.style(`text-white/90 text-sm mt-1`, { fontFamily: "RobotoMedium" })}>
                         Commission owed: ₦{owed.toLocaleString()}
+                      </Text>
+                    ) : null}
+                    {clawback > 0 ? (
+                      <Text style={tw.style(`text-white/90 text-sm mt-1`, { fontFamily: "RobotoMedium" })}>
+                        Owed from refunds: ₦{clawback.toLocaleString()}
                       </Text>
                     ) : null}
                   </View>

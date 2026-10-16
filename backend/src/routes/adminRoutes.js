@@ -3,6 +3,7 @@ import * as adminController from '../controllers/adminController.js';
 import * as adminAgentController from '../controllers/adminAgentController.js';
 import * as notificationController from '../controllers/notificationController.js';
 import * as payoutController from '../controllers/payoutController.js';
+import { listPaystackWebhookEvents, reconcilePaystackSuccesses } from '../controllers/paystackWebhookController.js';
 import { protect, requireAdminAccess, restrictAgentsManager } from '../middleware/auth.js';
 import { validationRules, validate } from '../middleware/validation.js';
 import { limiters } from '../middleware/rateLimiter.js';
@@ -97,6 +98,8 @@ router.post('/payments/:id/refund', validationRules.mongoId, validate, validatio
 router.get('/withdrawals', adminController.listWithdrawals);
 router.patch('/withdrawals/:id/approve', validationRules.mongoId, validate, adminController.approveWithdrawal);
 router.patch('/withdrawals/:id/reject', validationRules.mongoId, validate, adminController.rejectWithdrawal);
+router.get('/paystack-events', listPaystackWebhookEvents);
+router.post('/paystack-events/reconcile', reconcilePaystackSuccesses);
 
 // Notification broadcasts
 router.post('/notifications/broadcast', notificationController.broadcastNotification);

@@ -273,11 +273,17 @@ function AgentDetailPage({ id, onBack, onNavigate, showToast }) {
             {cycle.payout_status === 'paid' && (
               <span className="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200">Paid</span>
             )}
+            {cycle.payout_status !== 'paid' && cycle.payout_requested_count > 0 && (
+              <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Requested</span>
+            )}
           </div>
           <p className="text-sm text-gray-600">Deadline {cycle.deadline ? new Date(cycle.deadline).toLocaleDateString() : '—'}</p>
           <p className="text-sm text-gray-600">Verified {s.verified ?? 0} / {cycle.targetCount}</p>
           {cycle.target_reached && cycle.payout_status !== 'paid' && (
             <p className="text-sm text-green-700">Target reached. Payout pending.</p>
+          )}
+          {cycle.payout_requested_count > 0 && cycle.payout_status !== 'paid' && (
+            <p className="text-sm text-amber-700">Agent requested payout for {cycle.payout_requested_count} owed {cycle.payout_requested_count === 1 ? 'bounty' : 'bounties'}.</p>
           )}
           {cycle.payout_status === 'paid' && (
             <p className="text-sm text-gray-600">

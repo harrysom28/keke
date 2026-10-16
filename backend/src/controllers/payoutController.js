@@ -208,6 +208,7 @@ export const getMyWallet = asyncHandler(async (req, res) => {
       total_earned: wallet.totalEarned,
       total_withdrawn: wallet.totalWithdrawn,
       commission_owed: Math.round(Number(wallet.commissionOwed) || 0),
+      clawback_owed: Math.round(Number(wallet.clawbackOwed) || 0),
       withdrawable_balance: Math.round(getWithdrawableBalance(wallet)),
       currency: wallet.currency,
     },

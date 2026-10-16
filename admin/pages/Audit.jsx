@@ -27,6 +27,7 @@ const ACTION_LABELS = {
   agent_update: 'Agent updated',
   agent_target_paid: 'Agent cycle marked paid',
   ride_status_update: 'Ride status updated',
+  ride_clawback: 'Driver refund clawback',
 };
 
 const RESOURCE_LABELS = {

@@ -392,6 +392,18 @@ export async function listBanksNigeria() {
  * @param {{ account_number: string, bank_code: string }} params
  * @returns {Promise<{ account_name?: string, account_number?: string, error?: string }>}
  */
+function logResolveFailure(bankCode, accountNumber, status, detail) {
+  const digits = String(accountNumber || '').replace(/\D/g, '');
+  const key = getSecretKey() || '';
+  logger.warn('Paystack resolveAccountName failed', {
+    bankCode: bankCode || null,
+    accountLast4: digits.slice(-4) || null,
+    httpStatus: status || null,
+    detail: detail || null,
+    keyMode: key.startsWith('sk_test_') ? 'test' : key.startsWith('sk_live_') ? 'live' : 'unknown',
+  });
+}
+
 export async function resolveAccountName({ account_number, bank_code }) {
   const secretKey = getSecretKey();
   if (!secretKey) {
@@ -433,6 +445,7 @@ export async function resolveAccountName({ account_number, bank_code }) {
       typeof data?.message === 'string' && data.message.trim()
         ? data.message.trim()
         : 'Could not verify account details.';
+    logResolveFailure(code, digits, null, msg);
     return { error: msg };
   } catch (err) {
     const status = err?.response?.status;
@@ -443,39 +456,39 @@ export async function resolveAccountName({ account_number, bank_code }) {
     }
 
     if (bodyMsg) {
-      logger.warn(`Paystack resolveAccountName: ${bodyMsg}`);
+      logResolveFailure(code, digits, status, bodyMsg);
       return { error: bodyMsg };
     }
 
     if (status === 404) {
       const msg =
         'This account could not be verified for the selected bank. Check the account number and that the bank matches your statement.';
-      logger.warn(`Paystack resolveAccountName: HTTP ${status}`);
+      logResolveFailure(code, digits, status, msg);
       return { error: msg };
     }
 
     if (status === 401 || status === 403) {
-      logger.warn(`Paystack resolveAccountName: HTTP ${status}`);
+      logResolveFailure(code, digits, status, 'unauthorized');
       return { error: 'Account verification is temporarily unavailable. Try again later.' };
     }
 
     if (typeof status === 'number' && status >= 500) {
-      logger.warn(`Paystack resolveAccountName: HTTP ${status}`);
+      logResolveFailure(code, digits, status, 'upstream');
       return { error: 'Account verification is temporarily unavailable. Try again later.' };
     }
 
     const ax = typeof err?.message === 'string' ? err.message.trim() : '';
     if (ax && !isAxiosTransportMessage(ax)) {
-      logger.warn(`Paystack resolveAccountName: ${ax}`);
+      logResolveFailure(code, digits, status, ax);
       return { error: ax };
     }
 
     if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
-      logger.warn('Paystack resolveAccountName: timeout');
+      logResolveFailure(code, digits, status, 'timeout');
       return { error: 'Account verification timed out. Try again.' };
     }
 
-    logger.warn(`Paystack resolveAccountName: HTTP ${status || 'unknown'}`);
+    logResolveFailure(code, digits, status, 'unknown');
     return { error: 'Could not verify account details.' };
   }
 }

@@ -1320,6 +1320,7 @@ export const validationRules = {
         'promocode_create', 'promocode_update',
         'agent_create', 'agent_update', 'agent_target_paid',
         'ride_status_update',
+        'ride_clawback',
       ])
       .withMessage('Invalid action filter'),
     query('resourceType')

@@ -851,11 +851,15 @@ export const withdrawBalance = asyncHandler(async (req, res) => {
   const driverWallet = await DriverWallet.findOne({ driverId: driver._id }).lean();
   const withdrawable = getWithdrawableBalance(driverWallet);
   if (withdrawable < amount) {
-    const owed = Math.round(Number(driverWallet?.commissionOwed) || 0);
+    const commission = Math.round(Number(driverWallet?.commissionOwed) || 0);
+    const clawback = Math.round(Number(driverWallet?.clawbackOwed) || 0);
     const available = Math.round(withdrawable);
+    const reserved = [];
+    if (commission > 0) reserved.push(`₦${commission.toLocaleString()} reserved for platform commission from cash rides`);
+    if (clawback > 0) reserved.push(`₦${clawback.toLocaleString()} reserved to repay a refunded ride`);
     throw new ValidationError(
-      owed > 0
-        ? `You can withdraw up to ₦${available.toLocaleString()}. ₦${owed.toLocaleString()} of your balance is reserved for platform commission from cash rides.`
+      reserved.length
+        ? `You can withdraw up to ₦${available.toLocaleString()}. ${reserved.join('; ')}.`
         : `You can withdraw up to ₦${available.toLocaleString()}.`
     );
   }

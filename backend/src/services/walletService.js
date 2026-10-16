@@ -14,10 +14,10 @@ const PENDING_HOURS = Number(process.env.WALLET_PENDING_HOURS) || 24;
  */
 const COMMISSION_DEBT_CEILING = Number(process.env.DRIVER_COMMISSION_DEBT_CEILING) || 0;
 
-/** Withdrawable funds = available minus outstanding commission debt (floored at 0). */
+/** Withdrawable funds = available minus commission debt and refund clawback (floored at 0). */
 function getWithdrawableBalance(wallet) {
   const available = Number(wallet?.availableBalance) || 0;
-  const owed = Number(wallet?.commissionOwed) || 0;
+  const owed = (Number(wallet?.commissionOwed) || 0) + (Number(wallet?.clawbackOwed) || 0);
   return Math.max(0, available - owed);
 }
 
@@ -95,8 +95,13 @@ async function getOrCreateWallet(driverId, currency = 'NGN') {
 }
 
 /**
- * Credit driver's pending balance after ride completion.
- * Uses atomic findOneAndUpdate to avoid race conditions; then creates audit records.
+ * Credit driver's available balance as soon as a wallet or card ride completes.
+ * Older credits may still sit in pendingCredits until the release cron drains
+ * them; new credits are not added there.
+ *
+ * After the credit lands, outstanding debt is collected in this order:
+ * 1. commissionOwed — routine cash-ride commission, usually the smaller amount
+ * 2. clawbackOwed — recovery of a refund on a ride this driver was already paid
  */
 async function creditRideEarning(driverId, driverNetAmount, commissionAmount, rideId, currency = 'NGN', session = null) {
   if (driverNetAmount < 0 || commissionAmount < 0) {
@@ -113,20 +118,16 @@ async function creditRideEarning(driverId, driverNetAmount, commissionAmount, ri
   await ensureWalletDayStats(driverId);
   wallet = await DriverWallet.findOne({ driverId }).session(session || null);
   if (!wallet) throw new Error('Wallet not found');
-  const balanceBeforePending = wallet.pendingBalance;
-  const balanceAfterPending = balanceBeforePending + driverNetAmount;
-  const availableAt = new Date(Date.now() + PENDING_HOURS * 60 * 60 * 1000);
+  const balanceBefore = Number(wallet.availableBalance) || 0;
 
-  // Atomic update: no read-modify-write race
   wallet = await DriverWallet.findOneAndUpdate(
     { driverId },
     {
       $inc: {
-        pendingBalance: driverNetAmount,
+        availableBalance: driverNetAmount,
         totalEarned: driverNetAmount,
         todayEarnings: driverNetAmount,
       },
-      $push: { pendingCredits: { amount: driverNetAmount, availableAt, rideId } },
     },
     { new: true, ...opts }
   );
@@ -142,9 +143,9 @@ async function creditRideEarning(driverId, driverNetAmount, commissionAmount, ri
         type: 'ride_earning',
         amount: driverNetAmount,
         currency,
-        balanceBefore: balanceBeforePending,
-        balanceAfter: balanceAfterPending,
-        metadata: { rideId: rideId?.toString(), pending: true },
+        balanceBefore,
+        balanceAfter: balanceBefore + driverNetAmount,
+        metadata: { rideId: rideId?.toString(), pending: false },
       },
     ],
     opts
@@ -167,6 +168,15 @@ async function creditRideEarning(driverId, driverNetAmount, commissionAmount, ri
         },
       ],
       opts
+    );
+  }
+
+  try {
+    await sweepCommissionOwed(driverId, session);
+    await sweepClawbackOwed(driverId, session);
+  } catch (err) {
+    logger.error(
+      `creditRideEarning: debt sweep failed for driver ${driverId} (ride ${rideId}): ${err.message}`
     );
   }
 
@@ -286,6 +296,135 @@ async function sweepCommissionOwed(driverId, session = null) {
 }
 
 /**
+ * Recover an already-paid ride earning after an admin refund.
+ * Debits available balance immediately, and records anything that cannot be
+ * covered as clawbackOwed. Idempotent per ride.
+ */
+async function recordRefundClawback(driverId, amount, rideId, reference, session = null) {
+  const clawbackAmount = Math.round((Number(amount) || 0) * 100) / 100;
+  if (clawbackAmount <= 0) return { skipped: true, reason: 'non_positive' };
+
+  const opts = session ? { session } : {};
+  const existing = await Transaction.findOne({
+    rideId,
+    driverId,
+    type: { $in: ['clawback_accrued', 'refund'] },
+  })
+    .session(session || null)
+    .lean();
+  if (existing) return { duplicate: true, accrued: 0 };
+
+  const earning = await Transaction.findOne({ rideId, driverId, type: 'ride_earning' })
+    .session(session || null)
+    .lean();
+  if (!earning) return { skipped: true, reason: 'driver_not_credited' };
+
+  await getOrCreateWallet(driverId);
+  const wallet = await DriverWallet.findOne({ driverId }).session(session || null);
+  if (!wallet) throw new Error('Wallet not found');
+
+  let immediateDebit = Math.min(Number(wallet.availableBalance) || 0, clawbackAmount);
+  immediateDebit = Math.round(immediateDebit * 100) / 100;
+  const balanceBefore = Number(wallet.availableBalance) || 0;
+
+  if (immediateDebit > 0) {
+    const debited = await DriverWallet.findOneAndUpdate(
+      { driverId, availableBalance: { $gte: immediateDebit } },
+      { $inc: { availableBalance: -immediateDebit } },
+      { new: true, ...opts }
+    );
+    if (!debited) immediateDebit = 0;
+  }
+
+  const remainder = Math.round((clawbackAmount - immediateDebit) * 100) / 100;
+  let after = await DriverWallet.findOne({ driverId }).session(session || null);
+  if (remainder > 0) {
+    after = await DriverWallet.findOneAndUpdate(
+      { driverId },
+      { $inc: { clawbackOwed: remainder } },
+      { new: true, ...opts }
+    );
+  }
+  if (!after) throw new Error('Wallet not found');
+
+  const txnId = generateTransactionId('CLW');
+  await Transaction.create(
+    [
+      {
+        transactionId: txnId,
+        rideId,
+        driverId,
+        type: 'clawback_accrued',
+        amount: -immediateDebit,
+        currency: after.currency || 'NGN',
+        balanceBefore,
+        balanceAfter: Number(after.availableBalance) || 0,
+        metadata: {
+          rideId: rideId?.toString(),
+          reference: reference || null,
+          remainderOwed: remainder,
+          clawbackAmount,
+        },
+      },
+    ],
+    opts
+  );
+
+  return {
+    wallet: after,
+    immediateDebit,
+    remainder,
+    transactionId: txnId,
+  };
+}
+
+/**
+ * Sweep outstanding refund clawback out of available balance. Call after
+ * sweepCommissionOwed so routine commission debt is collected first.
+ */
+async function sweepClawbackOwed(driverId, session = null) {
+  const opts = session ? { session } : {};
+  const wallet = await DriverWallet.findOne({ driverId }).session(session || null);
+  if (!wallet) return { swept: 0 };
+
+  const sweep = Math.min(
+    Number(wallet.availableBalance) || 0,
+    Number(wallet.clawbackOwed) || 0
+  );
+  if (sweep <= 0) return { swept: 0 };
+
+  const balanceBefore = wallet.availableBalance;
+  const updated = await DriverWallet.findOneAndUpdate(
+    { driverId, availableBalance: { $gte: sweep }, clawbackOwed: { $gte: sweep } },
+    { $inc: { availableBalance: -sweep, clawbackOwed: -sweep } },
+    { new: true, ...opts }
+  );
+  if (!updated) {
+    logger.debug(`sweepClawbackOwed: skipped for driver ${driverId} (concurrent change)`);
+    return { swept: 0 };
+  }
+
+  const txnId = generateTransactionId('CLS');
+  await Transaction.create(
+    [
+      {
+        transactionId: txnId,
+        driverId,
+        type: 'clawback_swept',
+        amount: -sweep,
+        currency: updated.currency,
+        balanceBefore,
+        balanceAfter: updated.availableBalance,
+        metadata: { clawbackOwedAfter: updated.clawbackOwed },
+      },
+    ],
+    opts
+  );
+
+  return { swept: sweep, wallet: updated };
+}
+
+/**
  * Release pending credits to available balance for a driver (availableAt <= now).
  * Creates balance_release transaction(s). Call from cron or before payout.
  */
@@ -324,8 +463,9 @@ async function releasePendingForDriver(driverId, session = null) {
     opts
   );
 
-  // Newly-available funds repay outstanding commission debt first.
+  // Same order as a fresh credit: commission debt, then refund clawback.
   await sweepCommissionOwed(driverId, session);
+  await sweepClawbackOwed(driverId, session);
 
   return { released: totalRelease };
 }
@@ -628,6 +768,8 @@ async function creditPromoSubsidy(driverId, subsidyAmount, rideId, currency = 'N
 export {
   getOrCreateWallet,
   creditRideEarning,
+  recordRefundClawback,
+  sweepClawbackOwed,
   creditCancellationCompensation,
   creditPromoSubsidy,
   accrueCommissionDebt,

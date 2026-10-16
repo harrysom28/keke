@@ -18,7 +18,22 @@ import {
   reconcileCancelledScheduledRideEscrows,
   computeRiderWalletApiTotals,
 } from '../services/escrowWalletService.js';
-const { sendEmail, sendSMS } = notificationService;
+const { sendEmail, sendSMS, recentSmsFailures } = notificationService;
+
+function queueOtpDelivery(phone, otp, purpose, { voice = false } = {}) {
+  sendSMS(phone, termiiOtpSmsBody(otp), { purpose, channel: voice ? 'voice' : undefined }).then((sent) => {
+    if (!sent) logger.warn(`OTP SMS was not accepted for ${phone} (${purpose})`);
+  }).catch((err) => {
+    logger.error(`❌ Error sending OTP SMS to ${phone}: ${err.message}`);
+  });
+}
+
+async function otpFallbackChannel(phone, email) {
+  if (!phone) return null;
+  const failures = await recentSmsFailures(phone);
+  if (failures < 2) return null;
+  return email ? 'email' : 'voice';
+}
 import logger from '../utils/logger.js';
 import { resolveReferralCode, applyReferralToUserData } from '../services/agentReferralService.js';
 
@@ -124,6 +139,7 @@ export const register = asyncHandler(async (req, res) => {
 
     // Respond immediately after OTP is stored (do not block on SMS/email providers)
     const message = baseMessage;
+    const fallback = await otpFallbackChannel(userDoc.phone, userDoc.email);
     const response = res.status(statusCode).json({
       status: 'success',
       message,
@@ -134,15 +150,14 @@ export const register = asyncHandler(async (req, res) => {
           email: userDoc.email,
         },
         otp_queued: true,
+        ...(fallback ? { fallback_channel: fallback } : {}),
       },
     });
 
     // Fire-and-forget delivery after responding
     setImmediate(() => {
       if (userDoc.phone) {
-        sendSMS(userDoc.phone, termiiOtpSmsBody(otp)).catch((err) => {
-          logger.error(`❌ Error sending OTP SMS to ${userDoc.phone}: ${err.message}`);
-        });
+        queueOtpDelivery(userDoc.phone, otp, 'register', { voice: fallback === 'voice' });
       }
 
       if (userDoc.email) {
@@ -700,6 +715,7 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
       ...formatted,
       balance: String(walletTotal),
       commission_owed: Math.round(Number(w?.commissionOwed) || 0),
+      clawback_owed: Math.round(Number(w?.clawbackOwed) || 0),
       withdrawable_balance: Math.round(getWithdrawableBalance(w)),
     };
   }
@@ -909,17 +925,16 @@ export const requestLoginOtp = asyncHandler(async (req, res) => {
       ? `Login code queued via ${queuedMethods.join(' and ')}`
       : 'Code generated. Check your phone or email.';
 
+  const fallback = await otpFallbackChannel(user.phone, user.email);
   res.json({
     status: 'success',
     message,
-    data: { otp_queued: true },
+    data: { otp_queued: true, ...(fallback ? { fallback_channel: fallback } : {}) },
   });
 
   setImmediate(() => {
     if (user.phone) {
-      sendSMS(user.phone, termiiOtpSmsBody(otp)).catch((err) => {
-        logger.error(`❌ Error sending login OTP SMS to ${user.phone}: ${err.message}`);
-      });
+      queueOtpDelivery(user.phone, otp, 'login', { voice: fallback === 'voice' });
     }
 
     if (user.email) {
@@ -949,6 +964,7 @@ async function sendOtpForUser(res, userDoc, statusCode, baseMessage) {
     if (userDoc.email) await storeOTP(userDoc.email.toLowerCase(), otp, 'verification');
 
   const message = baseMessage;
+  const fallback = await otpFallbackChannel(userDoc.phone, userDoc.email);
   const response = res.status(statusCode).json({
     status: 'success',
     message,
@@ -959,14 +975,13 @@ async function sendOtpForUser(res, userDoc, statusCode, baseMessage) {
         email: userDoc.email,
       },
       otp_queued: true,
+      ...(fallback ? { fallback_channel: fallback } : {}),
     },
   });
 
   setImmediate(() => {
     if (userDoc.phone) {
-      sendSMS(userDoc.phone, termiiOtpSmsBody(otp)).catch((err) => {
-        logger.error(`❌ Error sending OTP SMS to ${userDoc.phone}: ${err.message}`);
-      });
+      queueOtpDelivery(userDoc.phone, otp, 'resend', { voice: fallback === 'voice' });
     }
 
     if (userDoc.email) {
@@ -1045,19 +1060,19 @@ export const forgotPasswordInit = asyncHandler(async (req, res) => {
       ? `Password reset code queued via ${queuedMethods.join(' and ')}`
       : 'Code generated but could not be sent. Please contact support.';
 
+  const fallback = await otpFallbackChannel(user.phone, user.email);
   res.json({
     status: 'success',
     message,
     data: {
       otp_queued: true,
+      ...(fallback ? { fallback_channel: fallback } : {}),
     },
   });
 
   setImmediate(() => {
     if (user.phone) {
-      sendSMS(user.phone, termiiOtpSmsBody(otp)).catch((err) => {
-        logger.error(`❌ Error sending password reset OTP SMS to ${user.phone}: ${err.message}`);
-      });
+      queueOtpDelivery(user.phone, otp, 'password_reset', { voice: fallback === 'voice' });
     }
 
     if (user.email) {

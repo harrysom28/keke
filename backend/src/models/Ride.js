@@ -271,6 +271,8 @@ const rideSchema = new mongoose.Schema(
       lng: { type: Number, default: null },
     },
     arrival_distance_from_pickup: { type: Number, default: null }, // meters
+    /** Kilometers from pickup to the driver's last fresh GPS point at rider cancel. */
+    distanceCoveredAtCancel: { type: Number, default: null },
     arrival_proximity_status: {
       type: String,
       enum: ['confirmed', 'probable', 'unlikely', 'unverifiable', 'blocked', null],

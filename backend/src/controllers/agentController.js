@@ -8,6 +8,7 @@ import Driver from '../models/Driver.js';
 import DriverKyc from '../models/DriverKyc.js';
 import VehicleType from '../models/VehicleType.js';
 import Agent from '../models/Agent.js';
+import AgentPayout from '../models/AgentPayout.js';
 import { generateTokenPair } from '../utils/jwt.js';
 import { createSession } from '../services/sessionService.js';
 import { generateOTP, storeOTP, verifyOTP, deleteOTP, wasOtpIssuedRecently } from '../utils/otp.js';
@@ -184,6 +185,33 @@ async function applyAgentDriverUploads({ driver, user, files, licenseNumber }) {
   if (selfieUrl && user && !user.profileImage) {
     user.profileImage = selfieUrl;
     await user.save({ validateBeforeSave: false });
+  }
+
+  const nextLicense = String(licenseNumber || '').trim();
+  if (nextLicense && nextLicense !== String(driver.licenseNumber || '').trim()) {
+    const taken = await Driver.findOne({ licenseNumber: nextLicense, _id: { $ne: driver._id } }).select('_id').lean();
+    if (taken) throw new ConflictError('Union / licence number is already registered.');
+    driver.licenseNumber = nextLicense;
+    await driver.save();
+    // Re-open review against the existing licence photo. The number change is
+    // not treated as already verified.
+    await DriverKyc.findOneAndUpdate(
+      { userId: user._id },
+      {
+        $set: {
+          idNumber: nextLicense,
+          verificationStatus: 'pending',
+          rejectionReason: null,
+        },
+        $setOnInsert: {
+          userId: user._id,
+          idType: 'drivers_license',
+          idImageUrl: 'pending',
+          selfieUrl: 'pending',
+        },
+      },
+      { upsert: true }
+    );
   }
 
   return { selfieUrl, idImageUrl, licenseImageUrl, vehicleImages };
@@ -608,6 +636,11 @@ export const getAgentOverview = asyncHandler(async (req, res) => {
     loadCurrentAgentTarget(req.agent._id),
     sumPaidAgentBounty(req.agent._id),
   ]);
+  const owedPayouts = target
+    ? await AgentPayout.find({ agent: req.agent._id, target: target._id, status: 'owed' })
+      .select('amount requestedAt')
+      .lean()
+    : [];
   const decorated = await decorateAgentCycle(target, stats.verified);
   const days = daysRemaining(target?.deadline);
   const cycleOpen = target?.status === 'active' && decorated?.payout_status !== 'paid';
@@ -631,15 +664,56 @@ export const getAgentOverview = asyncHandler(async (req, res) => {
             payout_status: decorated.payout_status,
             paid_at: decorated.paid_at,
             paid_reason: decorated.paid_reason,
+            owed_payout_count: decorated.owed_payout_count || 0,
+            payout_requested_count: decorated.payout_requested_count || 0,
           }
         : null,
       earnings: {
         bounty_rate: req.agent.bountyRate || 0,
         projected_owed: (req.agent.bountyRate || 0) * stats.active,
         paid,
+        owed_total: owedPayouts.reduce((sum, row) => sum + (Number(row.amount) || 0), 0),
+        owed_payouts: owedPayouts.map((row) => ({
+          payout_id: row._id.toString(),
+          amount: row.amount,
+          requested_at: row.requestedAt || null,
+        })),
         note: 'Projected bounty is for currently active drivers. Paid is the sum of bounties marked paid by admin.',
       },
     },
+  });
+});
+
+export const requestAgentPayout = asyncHandler(async (req, res) => {
+  const payoutId = req.params.payoutId;
+  if (!/^[a-fA-F0-9]{24}$/.test(String(payoutId || ''))) {
+    throw new ValidationError('Invalid payout id');
+  }
+  const payout = await AgentPayout.findOne({ _id: payoutId, agent: req.agent._id });
+  if (!payout) throw new NotFoundError('Payout');
+  if (payout.status !== 'owed') {
+    throw new ValidationError('Only an owed payout can be requested');
+  }
+  if (payout.requestedAt) {
+    throw new ValidationError('This payout was already requested');
+  }
+  payout.requestedAt = new Date();
+  await payout.save();
+
+  try {
+    const { sendEmail } = await import('../services/notificationService.js');
+    const admins = await User.find({ role: 'admin' }).select('email').lean();
+    const subject = `Agent payout requested: ₦${Number(payout.amount).toLocaleString()}`;
+    const body = `${req.agent.name || 'An agent'} asked to be paid ₦${Number(payout.amount).toLocaleString()} for an owed bounty.\nReview in Admin → Agents.`;
+    await Promise.allSettled(admins.filter((admin) => admin.email).map((admin) => sendEmail(admin.email, subject, body)));
+  } catch (err) {
+    logger.warn(`Agent payout request email failed: ${err.message}`);
+  }
+
+  res.json({
+    status: 'success',
+    message: 'Payout requested',
+    data: { payout_id: payout._id.toString(), requested_at: payout.requestedAt },
   });
 });
 
@@ -712,7 +786,15 @@ export const updateAgentDriverDocuments = asyncHandler(async (req, res) => {
   if (!driver) throw new NotFoundError('Driver');
 
   const files = Array.isArray(req.files) ? req.files : [];
-  if (!files.length) throw new ValidationError('Upload at least one document photo');
+  const nextLicense = String(req.body?.licenseNumber || req.body?.license_number || '').trim();
+  const licenseReason = String(req.body?.licenseReason || req.body?.reason || '').trim();
+  const correctingLicense = Boolean(nextLicense) && nextLicense !== String(driver.licenseNumber || '').trim();
+  if (!files.length && !correctingLicense) {
+    throw new ValidationError('Upload at least one document photo');
+  }
+  if (correctingLicense && licenseReason.length < 3) {
+    throw new ValidationError('A short reason is required to correct the licence number');
+  }
 
   const user = driver.user;
   if (!user) throw new NotFoundError('Driver');
@@ -721,8 +803,11 @@ export const updateAgentDriverDocuments = asyncHandler(async (req, res) => {
     driver,
     user,
     files,
-    licenseNumber: driver.licenseNumber,
+    licenseNumber: correctingLicense ? nextLicense : driver.licenseNumber,
   });
+  if (correctingLicense) {
+    logger.info(`Agent ${req.agent._id} corrected licence for driver ${driver._id}: ${licenseReason}`);
+  }
 
   res.json({
     status: 'success',

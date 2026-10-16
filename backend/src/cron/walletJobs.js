@@ -8,6 +8,7 @@
 import cron from 'node-cron';
 import logger from '../utils/logger.js';
 import { releaseAllPendingBalances } from '../services/walletService.js';
+import { reprocessStuckPaystackEvents } from '../controllers/paystackWebhookController.js';
 
 let releaseRunning = false;
 
@@ -28,6 +29,21 @@ async function runRelease() {
 
 // Every 15 minutes; releasePendingForDriver is a no-op for wallets with no due credits.
 cron.schedule('*/15 * * * *', runRelease);
+
+let paystackReplayRunning = false;
+async function replayStuckPaystackEvents() {
+  if (paystackReplayRunning) return;
+  paystackReplayRunning = true;
+  try {
+    const count = await reprocessStuckPaystackEvents();
+    if (count > 0) logger.info(`[Cron] Replayed ${count} stuck Paystack webhook events`);
+  } catch (err) {
+    logger.error(`[Cron] Paystack webhook replay failed: ${err.message}`);
+  } finally {
+    paystackReplayRunning = false;
+  }
+}
+cron.schedule('*/5 * * * *', replayStuckPaystackEvents);
 
 // Catch up overdue credits shortly after boot (e.g. after downtime or deploys).
 setTimeout(runRelease, 15_000);
