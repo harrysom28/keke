@@ -520,6 +520,9 @@ const startServer = async () => {
     // must clear after the 24h hold regardless of deploy target).
     await import('./cron/walletJobs.js');
 
+    // Paystack -> wallet reconciliation: credits any successful payment the webhook missed (idempotent).
+    await import('./cron/paystackReconcileJobs.js');
+
     // Preload places + pickup points into memory for 1–3ms autocomplete
     schedulePreloadRefresh();
 

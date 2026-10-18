@@ -10,6 +10,7 @@ import logger from '../utils/logger.js';
 import { normalizePhone, phonesMatch } from '../utils/phone.js';
 import { resolvePromoCodeForRide } from '../services/promoCodeService.js';
 import { createRequestedRide } from './rideController.js';
+import { creditRiderBalance } from '../services/riderBalanceService.js';
 
 /**
  * Create emergency contact - POST /api/emergency/contact/create
@@ -644,9 +645,35 @@ export const claimMilestoneOffer = asyncHandler(async (req, res) => {
     throw new ValidationError('You have already claimed this reward.');
   }
 
-  user.tenRideFreeClaimed = true;
-  user.balance = (Number(user.balance) || 0) + MILESTONE_REWARD_AMOUNT;
-  await user.save();
+  // Claim atomically first so a double tap cannot pay twice, then credit the balance a booking spends.
+  const claimed = await User.findOneAndUpdate(
+    { _id: userId, tenRideFreeClaimed: { $ne: true } },
+    { $set: { tenRideFreeClaimed: true } },
+    { new: true }
+  ).select('_id');
+  if (!claimed) {
+    throw new ValidationError('You have already claimed this reward.');
+  }
+  let credit;
+  try {
+    credit = await creditRiderBalance(userId, MILESTONE_REWARD_AMOUNT, {
+      type: 'reward',
+      idempotencyKey: `reward:milestone:${userId}`,
+      description: 'Milestone reward',
+    });
+  } catch (err) {
+    await User.findByIdAndUpdate(userId, { $set: { tenRideFreeClaimed: false } });
+    throw err;
+  }
+
+  if (!credit.credited) {
+    if (credit.pending) {
+      // An earlier attempt claimed the ledger row but never confirmed the balance update. Do not say "claimed".
+      throw new ValidationError('Your reward is being processed. If it does not appear shortly, contact support.');
+    }
+    // The ledger already shows this exact reward as paid: nothing moved now, so do not report a new claim.
+    throw new ValidationError('You have already claimed this reward.');
+  }
 
   logger.info(`Milestone reward claimed: user ${userId}, +₦${MILESTONE_REWARD_AMOUNT} wallet`);
 
@@ -655,7 +682,7 @@ export const claimMilestoneOffer = asyncHandler(async (req, res) => {
     data: {
       claimed: true,
       reward_amount: MILESTONE_REWARD_AMOUNT,
-      new_balance: user.balance,
+      new_balance: credit.balanceAfter,
       message: `₦${MILESTONE_REWARD_AMOUNT.toLocaleString()} has been added to your wallet. Use it on your next ride!`,
     },
   });
@@ -775,9 +802,39 @@ export const claimReferralReward = asyncHandler(async (req, res) => {
     throw new ValidationError(`You need ${required} successful invites (registration + first ride completed) to claim. You have ${successfulInvites} successful invites.`);
   }
 
-  user.referralRewardsClaimedCount = (user.referralRewardsClaimedCount || 0) + 1;
-  user.balance = (Number(user.balance) || 0) + rewardAmount;
-  await user.save();
+  // Claim atomically first (count must still match what we validated), then credit the balance a booking spends.
+  const countMatches =
+    claimedCount === 0
+      ? { $in: [0, null] } // older rows may not have the field at all; $in with null also matches a missing field
+      : claimedCount;
+  const claimedRef = await User.findOneAndUpdate(
+    { _id: userId, referralRewardsClaimedCount: countMatches },
+    { $inc: { referralRewardsClaimedCount: 1 } },
+    { new: true }
+  ).select('_id');
+  if (!claimedRef) {
+    throw new ValidationError('Reward already claimed. Please refresh and try again.');
+  }
+  let credit;
+  try {
+    credit = await creditRiderBalance(userId, rewardAmount, {
+      type: 'reward',
+      idempotencyKey: `reward:referral:${userId}:${claimedCount + 1}`,
+      description: 'Referral reward',
+    });
+  } catch (err) {
+    await User.findByIdAndUpdate(userId, { $inc: { referralRewardsClaimedCount: -1 } });
+    throw err;
+  }
+
+  if (!credit.credited) {
+    if (credit.pending) {
+      // An earlier attempt claimed the ledger row but never confirmed the balance update. Do not say "claimed".
+      throw new ValidationError('Your reward is being processed. If it does not appear shortly, contact support.');
+    }
+    // The ledger already shows this exact reward as paid: nothing moved now, so do not report a new claim.
+    throw new ValidationError('You have already claimed this reward.');
+  }
 
   const rewardLabel = rewardType === 'cash' ? `₦${rewardAmount} cash` : `₦${rewardAmount} free ride credit`;
   logger.info(`Referral reward claimed: user ${userId}, +₦${rewardAmount} (${rewardType})`);
@@ -788,7 +845,7 @@ export const claimReferralReward = asyncHandler(async (req, res) => {
       claimed: true,
       reward_amount: rewardAmount,
       reward_type: rewardType,
-      new_balance: user.balance,
+      new_balance: credit.balanceAfter,
       message: `₦${rewardAmount.toLocaleString()} has been added to your wallet. ${rewardType === 'free_ride' ? 'Use it on your next ride!' : ''}`,
     },
   });

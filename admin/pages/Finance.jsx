@@ -29,6 +29,7 @@ function FinancePage({ showToast }) {
   const [payoutStatusFilter, setPayoutStatusFilter] = useState('pending');
   const [platformSummary, setPlatformSummary] = useState(null);
   const [unmatchedEvents, setUnmatchedEvents] = useState([]);
+  const [unmatchedPayments, setUnmatchedPayments] = useState([]);
   const [reconciling, setReconciling] = useState(false);
   const [unmatchedRefresh, setUnmatchedRefresh] = useState(0);
   const [revenue, setRevenue] = useState(null);
@@ -113,6 +114,12 @@ function FinancePage({ showToast }) {
         const d = res.data?.data || res.data;
         setUnmatchedEvents(d.events || []);
       }).finally(() => setLoading(false));
+      // Payments the reconciliation job found at Paystack but could not credit to exactly one rider (read-only).
+      Api.get('/api/admin/paystack-unmatched-payments?status=open').then((res) => {
+        if (res.error) { setUnmatchedPayments([]); return; }
+        const d = res.data?.data || res.data;
+        setUnmatchedPayments(d.payments || []);
+      });
     } else if (tab === 'platform') {
       Api.get('/api/admin/financial-summary').then((res) => {
         if (res.error) showToast(res.error, 'error');
@@ -496,6 +503,26 @@ function FinancePage({ showToast }) {
               keyField="event_id"
               loading={loading}
               emptyMessage="No unmatched deposits"
+            />
+          </div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white pt-2">Paid at Paystack, not credited to a rider</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">Found by the automatic check. Each one could not be tied to exactly one active rider, or crediting it failed. They clear by themselves once credited.</p>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+            <C.DataTable
+              columns={[
+                { key: 'reference', label: 'Reference' },
+                { key: 'amount', label: 'Amount', render: (v) => (v == null ? '—' : `₦${Number(v).toLocaleString()}`) },
+                { key: 'reason', label: 'Why' },
+                { key: 'customer_name', label: 'Customer' },
+                { key: 'account_number', label: 'Account' },
+                { key: 'attempts', label: 'Tries' },
+                { key: 'last_error', label: 'Last error' },
+                { key: 'paid_at', label: 'Paid', render: (v) => Utils.formatDate(v) },
+              ]}
+              rows={unmatchedPayments}
+              keyField="payment_id"
+              loading={loading}
+              emptyMessage="Nothing waiting for review"
             />
           </div>
         </div>

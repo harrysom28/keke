@@ -21,7 +21,9 @@ import UserWallet from '../models/UserWallet.js';
 import RideAuditLog from '../models/RideAuditLog.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
 import { getOrCreateWallet } from '../services/walletService.js';
+import { creditRiderBalance, adjustRiderBalance, getRiderBalance } from '../services/riderBalanceService.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
+import PaystackUnmatchedPayment from '../models/PaystackUnmatchedPayment.js';
 import { generateTokenPair, generateAccessToken } from '../utils/jwt.js';
 import { addToBlacklist } from '../services/tokenBlacklist.js';
 import { extractTokenFromRequest } from '../middleware/auth.js';
@@ -867,8 +869,16 @@ export const listUsers = asyncHandler(async (req, res) => {
     : [];
   const driverByUserId = Object.fromEntries(drivers.map((d) => [d.user.toString(), d]));
 
+  const riderIds = users.filter((u) => u.role === 'passenger').map((u) => u._id);
+  const riderWallets = riderIds.length
+    ? await UserWallet.find({ userId: { $in: riderIds } }).select('userId availableBalance heldBalance').lean()
+    : [];
+  const walletByUserId = Object.fromEntries(riderWallets.map((w) => [w.userId.toString(), w]));
+
   const usersPayload = users.map((user) => {
     const out = formatUserResponse(user);
+    const w = walletByUserId[user._id.toString()];
+    if (w) out.balance = Number(w.availableBalance) || 0; // wallet is the balance; User.balance is only a mirror
     if (user.role === 'driver') {
       const dr = driverByUserId[user._id.toString()];
       out.driver_verification_status = dr?.verificationStatus || 'pending';
@@ -916,10 +926,19 @@ export const getUserDetails = asyncHandler(async (req, res) => {
     driver = await Driver.findOne({ user: id });
   }
 
+  const userOut = formatUserResponse(user);
+  if (user.role === 'passenger') {
+    const bal = await getRiderBalance(id);
+    userOut.balance = bal.available; // wallet is the balance
+    userOut.held_balance = bal.held;
+    userOut.balance_source = bal.source;
+    userOut.balance_mirror = user.balance || 0; // legacy User.balance, for spotting drift
+  }
+
   res.json({
     status: 'success',
     data: {
-      user: formatUserResponse(user),
+      user: userOut,
       statistics: {
         total_rides: totalRides,
         completed_rides: completedRides,
@@ -963,9 +982,51 @@ export const updateUser = asyncHandler(async (req, res) => {
   if (updateData.role) user.role = updateData.role;
   if (updateData.isActive !== undefined) user.isActive = updateData.isActive;
   if (updateData.isVerified !== undefined) user.isVerified = updateData.isVerified;
-  if (updateData.balance !== undefined) user.balance = updateData.balance;
+  // A rider's balance is the wallet. Changing it is a signed, reasoned, audited adjustment, never a bare field write.
+  let balanceAdjustment = null;
+  if (updateData.balance !== undefined) {
+    if (user.role !== 'passenger') {
+      // Drivers' money lives in DriverWallet; this endpoint never writes a balance for them.
+      if (Number(updateData.balance) !== (Number(user.balance) || 0)) {
+        throw new ValidationError('Balance can only be adjusted for riders');
+      }
+    } else {
+      const { available } = await getRiderBalance(id);
+      const delta = Math.round((Number(updateData.balance) - available) * 100) / 100;
+      if (delta !== 0) {
+        const reason = String(updateData.balanceReason || '').trim();
+        if (reason.length < 3) {
+          throw new ValidationError('balanceReason is required when changing a rider balance');
+        }
+        balanceAdjustment = { delta, reason, before: available };
+      }
+    }
+  }
 
   await user.save();
+
+  if (balanceAdjustment) {
+    const result = await adjustRiderBalance(id, balanceAdjustment.delta, {
+      reason: balanceAdjustment.reason,
+      adminId: req.user._id,
+      // Only set when the client sends one (retry of the same request); a plain edit is protected by the delta itself.
+      idempotencyKey: req.get?.('Idempotency-Key') ? `admin:balance:${id}:${req.get('Idempotency-Key')}` : undefined,
+    });
+    await logAdminAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'wallet_adjust',
+      resourceType: 'user',
+      resourceId: id,
+      details: {
+        before: balanceAdjustment.before,
+        after: result.balanceAfter,
+        delta: balanceAdjustment.delta,
+        reason: balanceAdjustment.reason,
+      },
+      req,
+    });
+  }
 
   // When admin approves a driver, set Driver.verificationStatus so app and admin stay in sync
   if (updateData.isVerified === true && user.role === 'driver') {
@@ -2272,18 +2333,22 @@ export const handleDispute = asyncHandler(async (req, res) => {
   if (refundAmount && refundAmount > 0) {
     const payment = await Payment.findOne({ ride: id, status: 'completed' });
     if (payment) {
+      // Credit first: the key is per payment, so a retry cannot pay twice, and if the credit throws the payment is
+      // still 'completed' and the dispute can simply be resolved again.
+      if (resolution === 'refund_to_wallet') {
+        await creditRiderBalance(ride.rider._id, refundAmount, {
+          type: 'refund',
+          rideId: ride._id,
+          idempotencyKey: `refund:dispute:${payment._id}`,
+          description: `Dispute refund: ${reason || 'Admin dispute resolution'}`,
+        });
+      }
+
       payment.refundAmount = refundAmount;
       payment.status = 'refunded';
       payment.refundReason = reason || 'Admin dispute resolution';
       payment.refundedAt = new Date();
       await payment.save();
-
-      // Refund to user wallet or original payment method
-      const user = await User.findById(ride.rider._id);
-      if (user && resolution === 'refund_to_wallet') {
-        user.balance += refundAmount;
-        await user.save();
-      }
 
       await clawbackCreditedDriver(ride, `dispute:${id}`, req);
     }
@@ -2524,9 +2589,13 @@ export const processRefund = asyncHandler(async (req, res) => {
   // Process refund based on method
   if (method === 'wallet' || payment.method === 'wallet') {
     // Refund to wallet
-    const user = await User.findById(payment.user._id);
-    user.balance += refundAmount;
-    await user.save();
+    await creditRiderBalance(payment.user._id, refundAmount, {
+      type: 'refund',
+      rideId: payment.ride?._id || payment.ride || undefined,
+      // cumulative refunded-so-far makes a retry of THIS refund a no-op while a later partial refund still goes through
+      idempotencyKey: `refund:payment:${payment._id}:${Number(payment.refundAmount) || 0}`,
+      description: 'Admin payment refund to wallet',
+    });
   } else if (payment.method === 'stripe' || payment.method === 'card') {
     // Process Stripe refund
     try {
@@ -4016,6 +4085,44 @@ export const getWalletSummary = asyncHandler(async (req, res) => {
       pending_funding_amount: pendingSum,
       failed_count: failedCount,
       failed_amount: failedSum,
+    },
+  });
+});
+
+/**
+ * Paystack payments that were received but could not be credited to exactly one rider (read-only).
+ * GET /api/admin/paystack-unmatched-payments?status=open|resolved|ignored|all
+ * Written by the reconciliation job (services/paystackReconcileService.js); a human decides what to do.
+ */
+export const listPaystackUnmatchedPayments = asyncHandler(async (req, res) => {
+  const status = ['open', 'resolved', 'ignored', 'all'].includes(req.query.status) ? req.query.status : 'open';
+  const { pageNum, limitNum, skip } = parseAdminPagination(req.query);
+  const filter = status === 'all' ? {} : { status };
+  const [rows, total] = await Promise.all([
+    PaystackUnmatchedPayment.find(filter).sort({ paidAt: -1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+    PaystackUnmatchedPayment.countDocuments(filter),
+  ]);
+  res.json({
+    status: 'success',
+    data: {
+      payments: rows.map((r) => ({
+        payment_id: r._id.toString(),
+        reference: r.reference,
+        amount: r.amountNaira,
+        channel: r.channel,
+        reason: r.reason,
+        customer_code: r.customerCode,
+        customer_name: r.customerName,
+        account_number: r.accountNumber,
+        candidate_user_ids: (r.candidateUserIds || []).map(String),
+        attempts: r.attempts,
+        last_error: r.lastError,
+        status: r.status,
+        paid_at: r.paidAt,
+        first_seen_at: r.firstSeenAt,
+        last_seen_at: r.lastSeenAt,
+      })),
+      pagination: { page: pageNum, limit: limitNum, total, pages: Math.max(1, Math.ceil(total / limitNum)) },
     },
   });
 });

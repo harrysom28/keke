@@ -1,12 +1,11 @@
 import Payment from '../models/Payment.js';
 import User from '../models/User.js';
-import UserWallet from '../models/UserWallet.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import DriverWallet from '../models/DriverWallet.js';
 import { getOrCreateWallet, getWithdrawableBalance, releasePendingForDriver, debitForPayout } from '../services/walletService.js';
-import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
+import { NotFoundError, ValidationError, ConflictError, AuthorizationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
@@ -21,6 +20,9 @@ import {
 } from '../services/paystackService.js';
 import { calculateFareBreakdown as calculateFareBreakdownFromSettings } from '../services/settingsService.js';
 import { startRideSearchAfterCardPayment } from '../services/rideCardPaymentDispatch.js';
+import { creditWalletFromPaystack } from '../services/walletFundingService.js';
+import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
+import { creditRiderBalance, debitRiderBalance, getRiderBalance } from '../services/riderBalanceService.js';
 
 // Initialize Stripe (if API key is provided)
 const stripe = process.env.STRIPE_SECRET_KEY
@@ -57,8 +59,8 @@ export const initializePayment = asyncHandler(async (req, res) => {
 
   // For wallet payments, check balance
   if (method === 'wallet') {
-    const user = await User.findById(userId);
-    if (user.balance < amount) {
+    const { available } = await getRiderBalance(userId);
+    if (available < amount) {
       throw new ValidationError('Insufficient wallet balance');
     }
   }
@@ -110,9 +112,19 @@ export const initializePayment = asyncHandler(async (req, res) => {
 
   // For wallet payments, process immediately
   if (method === 'wallet') {
-    const user = await User.findById(userId);
-    user.balance -= amount;
-    await user.save();
+    let debit;
+    try {
+      debit = await debitRiderBalance(userId, amount, {
+        type: 'fare_debit',
+        rideId,
+        idempotencyKey: `fare:wallet:${rideId}`,
+        description: 'Ride paid from wallet',
+      });
+    } catch (err) {
+      if (err.code === 'INSUFFICIENT_BALANCE' || err.code === 'WALLET_FROZEN') throw new ValidationError(err.message);
+      throw err;
+    }
+    if (!debit.debited) throw new ConflictError('Ride has already been paid');
 
     const payment = await Payment.create({
       user: userId,
@@ -197,15 +209,20 @@ export const payForRideWithWallet = asyncHandler(async (req, res) => {
   const amount = Number(
     ride.fare?.riderChargeTotal != null ? ride.fare.riderChargeTotal : ride.fare?.totalFare || 0
   );
-  const user = await User.findById(userId);
-
-  if (user.balance < amount) {
-    throw new ValidationError('Insufficient wallet balance');
+  // Deduct from the rider wallet (one atomic, never-negative update; the key makes a second pay call a no-op)
+  let debit;
+  try {
+    debit = await debitRiderBalance(userId, amount, {
+      type: 'fare_debit',
+      rideId,
+      idempotencyKey: `fare:wallet:${rideId}`,
+      description: 'Ride paid from wallet',
+    });
+  } catch (err) {
+    if (err.code === 'INSUFFICIENT_BALANCE' || err.code === 'WALLET_FROZEN') throw new ValidationError(err.message);
+    throw err;
   }
-
-  // Deduct from wallet
-  user.balance -= amount;
-  await user.save();
+  if (!debit.debited) throw new ConflictError('Ride has already been paid');
 
   // Create payment record
   const payment = await Payment.create({
@@ -242,7 +259,7 @@ export const payForRideWithWallet = asyncHandler(async (req, res) => {
     message: 'Payment completed successfully',
     data: {
       payment: formatPaymentResponse(payment),
-      remaining_balance: user.balance,
+      remaining_balance: debit.balanceAfter,
     },
   });
 });
@@ -312,7 +329,7 @@ export const initializeWalletTopup = asyncHandler(async (req, res) => {
 /**
  * Verify wallet top-up after user returns from Paystack - POST /api/payment/verify-wallet-topup
  * Session-free so it works on standalone MongoDB (no replica set required).
- * Idempotency: findOne before write; duplicate-key (11000) on Payment.create treated as already credited.
+ * Idempotency: creditWalletFromPaystack (WalletFundingTransaction keyed by Paystack reference), shared with the webhook.
  */
 export const verifyWalletTopup = asyncHandler(async (req, res) => {
   const userId = req.user._id;
@@ -348,76 +365,63 @@ export const verifyWalletTopup = asyncHandler(async (req, res) => {
     throw new ValidationError('This payment is not a wallet top-up for your account');
   }
 
-  const user = await User.findById(userId);
+  const user = await User.findById(userId).select('balance');
   if (!user) throw new NotFoundError('User');
 
-  const existingPayment = await Payment.findOne({
+  // Top-ups credited by the old verify (before this ledger existed) left only a completed Payment row. Honour it,
+  // otherwise re-opening an old success link would credit that payment a second time.
+  const legacyCredited = await Payment.findOne({
     user: userId,
-    $or: [
-      { transactionId: ref },
-      { 'metadata.paystackReference': ref },
-    ],
-  });
-  if (existingPayment) {
-    logger.info(`Verify wallet top-up: already processed ${ref}`);
-    const currentUser = await User.findById(userId).select('balance');
+    status: 'completed',
+    $or: [{ transactionId: ref }, { 'metadata.paystackReference': ref }],
+  }).select('_id').lean();
+  if (legacyCredited && !(await WalletFundingTransaction.exists({ reference: ref }))) {
+    logger.info(`Verify wallet top-up: already credited before ledger existed ${ref}`);
     return res.json({
       status: 'success',
       message: 'Payment already credited',
-      data: { balance: currentUser?.balance ?? user.balance, already_credited: true },
+      data: { balance: (await getRiderBalance(userId)).available, already_credited: true },
     });
   }
 
-  try {
-    await Payment.create({
-      user: userId,
-      amount: amountNaira,
-      method: 'card',
-      status: 'completed',
-      transactionId: ref,
-      paidAt: new Date(),
-      metadata: new Map(Object.entries({
-        paystackReference: ref,
-        type: 'wallet_topup',
-        userId: userId.toString(),
-      })),
-    });
-  } catch (err) {
-    if (err.code === 11000) {
-      logger.info(`Verify wallet top-up: concurrent duplicate for ${ref}`);
-      const currentUser = await User.findById(userId).select('balance');
-      return res.json({
-        status: 'success',
-        message: 'Payment already credited',
-        data: { balance: currentUser?.balance ?? user.balance, already_credited: true },
-      });
+  // One ledger for card top-ups: WalletFundingTransaction, keyed by the Paystack reference. The webhook uses the
+  // same function, so the webhook and this verify can never both credit the same payment. It also sends the
+  // "Wallet credited" notification, so none is sent here.
+  const result = await creditWalletFromPaystack(ref, amountNaira, userId.toString(), {
+    channel: 'card',
+    ip: req.ip,
+  });
+
+  if (result.credited) {
+    logger.info(`Verify wallet top-up: credited ₦${amountNaira} to user ${userId} (ref: ${ref})`);
+    // Keep the Payment history row this endpoint always created (creditWalletFromPaystack only completes an existing one).
+    try {
+      const existingPayment = await Payment.findOne({ $or: [{ reference: ref }, { transactionId: ref }] }).select('_id').lean();
+      if (!existingPayment) {
+        await Payment.create({
+          user: userId,
+          amount: amountNaira,
+          method: 'card',
+          status: 'completed',
+          paymentType: 'wallet_topup',
+          reference: ref,
+          transactionId: ref,
+          paidAt: new Date(),
+          metadata: new Map(Object.entries({ paystackReference: ref, type: 'wallet_topup', userId: userId.toString() })),
+        });
+      }
+    } catch (paymentRowError) {
+      // The money is already credited and ledgered; a missing history row must not fail the request.
+      logger.warn(`Verify wallet top-up: Payment history row not written for ${ref}: ${paymentRowError.message}`);
     }
-    logger.error(`Verify wallet top-up: Payment.create failed: ${err.message}`);
-    throw err;
+  } else {
+    logger.info(`Verify wallet top-up: already processed ${ref}`);
   }
 
-  await User.findByIdAndUpdate(userId, { $inc: { balance: amountNaira } });
-  logger.info(`Verify wallet top-up: credited ₦${amountNaira} to user ${userId} (ref: ${ref})`);
-
-  const updatedUser = await User.findById(userId).select('balance');
-  try {
-    const { sendToUser } = await import('../services/notificationService.js');
-    await sendToUser(userId, user.role === 'driver' ? 'driver' : 'rider', {
-      title: 'Wallet credited',
-      message: `Top-up: ₦${amountNaira.toLocaleString()} added. New balance: ₦${Number(updatedUser?.balance ?? 0).toLocaleString()}.`,
-      type: 'alert',
-      priority: 'high',
-      screen: 'wallet',
-      event_key: 'wallet_funded',
-      data: { subType: 'wallet_funded', amount: String(amountNaira) },
-    });
-  } catch (notificationError) {
-    logger.error(`Verify wallet top-up notification failed: ${notificationError.message}`);
-  }
   return res.json({
     status: 'success',
-    message: 'Wallet topped up successfully',
-    data: { balance: updatedUser?.balance ?? 0, already_credited: false },
+    message: result.credited ? 'Wallet topped up successfully' : 'Payment already credited',
+    data: { balance: (await getRiderBalance(userId)).available, already_credited: !result.credited },
   });
 });
 
@@ -708,9 +712,20 @@ export async function refundChargedCardRideIfNeeded(ride, options = {}) {
 }
 
 /**
+ * Stripe wallet top-ups credit the RIDER wallet. Anyone else (drivers, admins, agents) gets a 403 before a wallet is
+ * created or any money moves. Drivers' money lives in DriverWallet and is not topped up here.
+ */
+function assertRiderTopUp(req) {
+  if (req.user?.role !== 'passenger') {
+    throw new AuthorizationError('Wallet top-up is only available to riders.');
+  }
+}
+
+/**
  * Top-up wallet - POST /api/user/profile/topup
  */
 export const topUpWallet = asyncHandler(async (req, res) => {
+  assertRiderTopUp(req);
   const userId = req.user._id;
   const { amount, method, paymentIntentId } = req.body;
 
@@ -746,15 +761,21 @@ export const topUpWallet = asyncHandler(async (req, res) => {
         throw new ValidationError('Amount mismatch');
       }
 
-      // Add to wallet
-      user.balance += amount;
-      await user.save();
-
-      // Dual-write to rider UserWallet so GET /wallet and fare check see correct balance
-      const riderWallet = await UserWallet.findOne({ userId, userType: 'rider' });
-      if (riderWallet) {
-        riderWallet.availableBalance = (Number(riderWallet.availableBalance) || 0) + amount;
-        await riderWallet.save();
+      // Add to the rider wallet. Same key as confirmStripePayment, so the two paths can never both credit this intent.
+      const credit = await creditRiderBalance(userId, amount, {
+        type: 'topup',
+        idempotencyKey: `stripe:${paymentIntent.id}`,
+        providerRef: paymentIntent.id,
+        description: 'Wallet top-up (card)',
+      });
+      if (!credit.credited) {
+        // This intent was already credited (by an earlier call or by confirmStripePayment): pay nothing, notify nothing.
+        if (credit.pending) throw new ValidationError('Your top-up is being processed. Contact support if it does not appear shortly.');
+        return res.json({
+          status: 'success',
+          message: 'Payment already credited',
+          data: { balance: credit.balanceAfter, already_credited: true },
+        });
       }
 
       // Create payment record
@@ -775,7 +796,7 @@ export const topUpWallet = asyncHandler(async (req, res) => {
         const { sendToUser } = await import('../services/notificationService.js');
         await sendToUser(userId, user.role === 'driver' ? 'driver' : 'rider', {
           title: 'Wallet credited',
-          message: `Top-up: ₦${Number(amount).toLocaleString()} added. New balance: ₦${Number(user.balance).toLocaleString()}.`,
+          message: `Top-up: ₦${Number(amount).toLocaleString()} added. New balance: ₦${Number(credit.balanceAfter).toLocaleString()}.`,
           type: 'alert',
           priority: 'high',
           screen: 'wallet',
@@ -791,7 +812,7 @@ export const topUpWallet = asyncHandler(async (req, res) => {
         message: 'Wallet topped up successfully',
         data: {
           payment: formatPaymentResponse(payment),
-          balance: user.balance,
+          balance: credit.balanceAfter,
         },
       });
     } catch (error) {
@@ -814,7 +835,7 @@ export const topUpWallet = asyncHandler(async (req, res) => {
       message: 'Top-up request created. Balance will be updated after verification.',
       data: {
         payment: formatPaymentResponse(payment),
-        balance: user.balance,
+        balance: (await getRiderBalance(userId)).available,
       },
     });
   }
@@ -1035,9 +1056,15 @@ export const retrieveChange = asyncHandler(async (req, res) => {
   }
 
   // Add change to wallet
-  const user = await User.findById(userId);
-  user.balance += changeAmount;
-  await user.save();
+  const credit = await creditRiderBalance(userId, changeAmount, {
+    type: 'change_return',
+    rideId,
+    idempotencyKey: `change:${rideId}`,
+    description: 'Change returned after cash ride',
+  });
+  if (credit.pending) {
+    throw new ValidationError('Your change is being processed. If it does not appear shortly, contact support.');
+  }
 
   // Update ride
   ride.changeAmount = 0;
@@ -1050,7 +1077,7 @@ export const retrieveChange = asyncHandler(async (req, res) => {
     message: 'Change retrieved successfully',
     data: {
       change_amount: changeAmount,
-      new_balance: user.balance,
+      new_balance: credit.balanceAfter,
     },
   });
 });
@@ -1213,6 +1240,7 @@ export const getBankAccounts = asyncHandler(async (req, res) => {
  * Confirm Stripe payment - POST /api/payment/confirm
  */
 export const confirmStripePayment = asyncHandler(async (req, res) => {
+  assertRiderTopUp(req);
   const { paymentIntentId } = req.body;
 
   if (!paymentIntentId) {
@@ -1230,9 +1258,10 @@ export const confirmStripePayment = asyncHandler(async (req, res) => {
       throw new ValidationError('Payment not completed');
     }
 
-    // Find payment record
+    // Find payment record. Only the caller's own payment: someone else's intent gets the very same "not found" as a
+    // missing one, so this endpoint cannot be used to learn that a payment exists or to credit another user.
     const payment = await Payment.findOne({ stripePaymentIntentId: paymentIntentId });
-    if (!payment) {
+    if (!payment || String(payment.user) !== String(req.user._id)) {
       throw new NotFoundError('Payment record');
     }
 
@@ -1270,21 +1299,27 @@ export const confirmStripePayment = asyncHandler(async (req, res) => {
 
     // If payment is for wallet top-up, update user balance
     if (!payment.ride && payment.amount > 0) {
-      const user = await User.findById(payment.user);
+      const user = await User.findById(payment.user).select('role');
       if (user) {
-        user.balance += payment.amount;
-        await user.save();
+        const credit = await creditRiderBalance(user._id, payment.amount, {
+          type: 'topup',
+          idempotencyKey: `stripe:${paymentIntentId}`,
+          providerRef: paymentIntentId,
+          description: 'Wallet top-up (card)',
+        });
         try {
-          const { sendToUser } = await import('../services/notificationService.js');
-          await sendToUser(user._id, user.role === 'driver' ? 'driver' : 'rider', {
-            title: 'Wallet credited',
-            message: `Top-up: ₦${Number(payment.amount).toLocaleString()} added. New balance: ₦${Number(user.balance).toLocaleString()}.`,
-            type: 'alert',
-            priority: 'high',
-            screen: 'wallet',
-            event_key: 'wallet_funded',
-            data: { subType: 'wallet_funded', amount: String(payment.amount) },
-          });
+          if (credit.credited) {
+            const { sendToUser } = await import('../services/notificationService.js');
+            await sendToUser(user._id, user.role === 'driver' ? 'driver' : 'rider', {
+              title: 'Wallet credited',
+              message: `Top-up: ₦${Number(payment.amount).toLocaleString()} added. New balance: ₦${Number(credit.balanceAfter).toLocaleString()}.`,
+              type: 'alert',
+              priority: 'high',
+              screen: 'wallet',
+              event_key: 'wallet_funded',
+              data: { subType: 'wallet_funded', amount: String(payment.amount) },
+            });
+          }
         } catch (notificationError) {
           logger.error(`Stripe wallet top-up notification failed: ${notificationError.message}`);
         }
@@ -1302,6 +1337,8 @@ export const confirmStripePayment = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     logger.error(`Stripe payment confirmation error: ${error.message}`);
+    // Keep the 404 for a missing or foreign payment (it used to be flattened into a 400 here).
+    if (error instanceof NotFoundError) throw error;
     throw new ValidationError('Payment confirmation failed');
   }
 });

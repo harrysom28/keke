@@ -17,6 +17,7 @@ import Driver from '../models/Driver.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import { initializeTransaction, verifyTransaction, createDVAForUser } from '../services/paystackService.js';
 import { creditWalletFromPaystack } from '../services/walletFundingService.js';
+import { getRiderBalance } from '../services/riderBalanceService.js';
 import {
   reconcileCancelledScheduledRideEscrows,
   reconcileOrphanedWalletHoldsForRider,
@@ -201,11 +202,10 @@ export const verifyWalletPayment = asyncHandler(async (req, res) => {
 
   const existingLedger = await WalletFundingTransaction.findOne({ reference }).lean();
   if (existingLedger) {
-    const user = await User.findById(userId).select('balance').lean();
     return res.json({
       status: 'success',
       data: {
-        balance: user?.balance ?? 0,
+        balance: (await getRiderBalance(userId)).available,
         already_credited: true,
       },
     });
@@ -216,11 +216,10 @@ export const verifyWalletPayment = asyncHandler(async (req, res) => {
     ip: req.ip,
   });
 
-  const user = await User.findById(userId).select('balance').lean();
   res.json({
     status: 'success',
     data: {
-      balance: user?.balance ?? 0,
+      balance: (await getRiderBalance(userId)).available,
       already_credited: false,
     },
   });

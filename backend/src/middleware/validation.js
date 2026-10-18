@@ -1101,6 +1101,12 @@ export const validationRules = {
       .optional()
       .isFloat({ min: 0 })
       .withMessage('Balance must be a non-negative number'),
+    body('balanceReason')
+      .optional()
+      .isString()
+      .trim()
+      .isLength({ min: 3, max: 300 })
+      .withMessage('balanceReason must be 3-300 characters'),
   ],
 
   // Reject driver
@@ -1317,7 +1323,7 @@ export const validationRules = {
       .optional()
       .isIn([
         'user_activate', 'user_deactivate', 'user_delete',
-        'driver_approve', 'driver_reject', 'refund', 'dispute_resolve',
+        'driver_approve', 'driver_reject', 'refund', 'dispute_resolve', 'wallet_adjust', 'wallet_reconcile',
         'withdrawal_approve', 'withdrawal_reject',
         'driver_kyc_approve', 'driver_kyc_reject', 'driver_vehicle_approve', 'driver_vehicle_reject',
         'payout_approve', 'payout_reject',

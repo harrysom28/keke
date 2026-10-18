@@ -107,6 +107,7 @@ router.patch('/withdrawals/:id/approve', validationRules.mongoId, validate, admi
 router.patch('/withdrawals/:id/reject', validationRules.mongoId, validate, adminController.rejectWithdrawal);
 router.get('/paystack-events', listPaystackWebhookEvents);
 router.post('/paystack-events/reconcile', reconcilePaystackSuccesses);
+router.get('/paystack-unmatched-payments', adminController.listPaystackUnmatchedPayments);
 
 // Notification broadcasts
 router.post('/notifications/broadcast', notificationController.broadcastNotification);
