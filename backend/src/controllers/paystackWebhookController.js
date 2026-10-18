@@ -10,6 +10,7 @@ import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import logger from '../utils/logger.js';
 import { creditWalletFromPaystack } from '../services/walletFundingService.js';
 import PaystackWebhookEvent from '../models/PaystackWebhookEvent.js';
+import PaystackUnmatchedEvent from '../models/PaystackUnmatchedEvent.js';
 
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || process.env.PAYSTACK_WEBHOOK_SECRET || '';
 
@@ -25,6 +26,42 @@ function paystackLog(level, message, meta = {}) {
     service: 'paystack_webhook',
   };
   logger[level](message, logMeta);
+}
+
+async function recordUnmatchedPaystackCharge({ reference, kind, customerCode, amount, channel, reason, rawPayload }) {
+  if (!reference || !kind) return;
+  try {
+    await PaystackUnmatchedEvent.findOneAndUpdate(
+      { reference: String(reference), kind },
+      {
+        $set: {
+          customerCode: customerCode || null,
+          amount: Number.isFinite(Number(amount)) ? Number(amount) : null,
+          channel: channel || null,
+          reason: reason || null,
+          rawPayload: rawPayload || null,
+        },
+        $setOnInsert: { reference: String(reference), kind },
+      },
+      { upsert: true }
+    );
+  } catch (err) {
+    paystackLog('error', 'Could not store unmatched Paystack charge', {
+      reference,
+      kind,
+      error: err.message,
+    });
+  }
+}
+
+/** Exactly one live user, or null. Soft-deleted users are excluded by the User query. */
+async function findSoleUser(filter) {
+  const users = await User.find(filter).select('_id').limit(2);
+  return users.length === 1 ? users[0] : null;
+}
+
+async function matchCount(filter) {
+  return User.countDocuments(filter);
 }
 
 /**
@@ -72,19 +109,37 @@ async function handleChargeSuccess(event, ip) {
     }
     const expectedKobo = payment?.amount != null ? Math.round(Number(payment.amount) * 100) : null;
     if (expectedKobo != null && amountKobo !== expectedKobo) {
-      paystackLog('warn', 'Paystack amount mismatch - possible fraud', {
+      paystackLog('error', 'Paystack amount mismatch - possible fraud', {
         reference,
         expectedKobo,
         receivedKobo: amountKobo,
         userId,
         ip,
       });
-      return;
+      await recordUnmatchedPaystackCharge({
+        reference,
+        kind: 'unmatched',
+        customerCode,
+        amount: amountNaira,
+        channel,
+        reason: `amount mismatch expected ${expectedKobo} kobo got ${amountKobo}`,
+        rawPayload: event,
+      });
+      return 'unmatched';
     }
     const user = await User.findById(userId).select('balance');
     if (!user) {
-      paystackLog('warn', 'Paystack wallet_topup user not found', { userId, reference });
-      return;
+      paystackLog('error', 'Paystack wallet_topup user not found', { userId, reference });
+      await recordUnmatchedPaystackCharge({
+        reference,
+        kind: 'unmatched',
+        customerCode,
+        amount: amountNaira,
+        channel,
+        reason: 'wallet_topup user not found',
+        rawPayload: event,
+      });
+      return 'unmatched';
     }
     await creditWalletFromPaystack(reference, amountNaira, userId, {
       paymentId: payment?._id?.toString(),
@@ -97,19 +152,32 @@ async function handleChargeSuccess(event, ip) {
   // DVA inbound: Paystack sends authorization.channel "dedicated_nuban" (Titan/Wema DVA);
   // older flows may use "bank_transfer". See Paystack DVA docs (charge.success sample).
   const isDvaInbound = channel === 'bank_transfer' || channel === 'dedicated_nuban';
+  const accountNumber = data.authorization?.receiver_bank_account_number || null;
   if (isDvaInbound) {
-    let user = null;
-    if (userId) {
-      user = await User.findById(userId).select('balance');
-    }
-    if (!user && customerCode) {
-      user = await User.findOne({ paystackCustomerCode: customerCode }).select('balance');
-    }
-    if (!user) {
-      paystackLog('warn', 'Paystack DVA: no user for charge', { reference, customerCode, userId, channel });
+    const matched = await resolveDvaUser({ userId, customerCode, accountNumber });
+    if (!matched.user) {
+      const reason = matched.reason;
+      paystackLog('error', 'Paystack DVA: charge not credited', {
+        reference,
+        customerCode,
+        userId,
+        channel,
+        accountNumber,
+        amountNaira,
+        reason,
+      });
+      await recordUnmatchedPaystackCharge({
+        reference,
+        kind: 'unmatched',
+        customerCode,
+        amount: amountNaira,
+        channel,
+        reason,
+        rawPayload: event,
+      });
       return 'unmatched';
     }
-    userId = user._id.toString();
+    userId = matched.user._id.toString();
     await creditWalletFromPaystack(reference, amountNaira, userId, {
       channel: channel === 'dedicated_nuban' ? 'dedicated_nuban' : 'bank_transfer',
       ip,
@@ -119,30 +187,73 @@ async function handleChargeSuccess(event, ip) {
 
   // Some banks / Paystack versions omit or vary `channel`; DVA inbound still ties to Paystack customer.
   if (
-    customerCode &&
+    (customerCode || accountNumber) &&
     metadata.type !== 'wallet_topup' &&
     Number(amountNaira) > 0
   ) {
     const existing = await WalletFundingTransaction.findOne({ reference }).lean();
     if (existing) return;
-    const userByCustomer = await User.findOne({ paystackCustomerCode: customerCode }).select(
-      'balance'
-    );
-    if (userByCustomer) {
-      paystackLog('info', 'Paystack inbound credit via customer_code fallback', {
+    const matched = await resolveDvaUser({
+      userId: null,
+      customerCode,
+      accountNumber,
+    });
+    if (matched.user) {
+      paystackLog('info', 'Paystack inbound credit via customer or account fallback', {
         reference,
         channel,
         customerCode,
       });
-      await creditWalletFromPaystack(reference, amountNaira, userByCustomer._id.toString(), {
+      await creditWalletFromPaystack(reference, amountNaira, matched.user._id.toString(), {
         channel: 'bank_transfer',
         ip,
       });
       return;
     }
-    paystackLog('warn', 'Paystack inbound credit unmatched', { reference, channel, customerCode });
+    paystackLog('error', 'Paystack inbound credit unmatched', {
+      reference,
+      channel,
+      customerCode,
+      amountNaira,
+      reason: matched.reason,
+    });
+    await recordUnmatchedPaystackCharge({
+      reference,
+      kind: 'unmatched',
+      customerCode,
+      amount: amountNaira,
+      channel,
+      reason: matched.reason,
+      rawPayload: event,
+    });
     return 'unmatched';
   }
+}
+
+/**
+ * One live user, in order: explicit user id, Paystack customer code, receiving account.
+ * More than one match is left unmatched so money is not credited to the wrong rider.
+ */
+async function resolveDvaUser({ userId, customerCode, accountNumber }) {
+  if (userId) {
+    const byId = await User.findById(userId).select('_id');
+    if (byId) return { user: byId, reason: null };
+  }
+  if (customerCode) {
+    const filter = { paystackCustomerCode: customerCode };
+    const user = await findSoleUser(filter);
+    if (user) return { user, reason: null };
+    const count = await matchCount(filter);
+    if (count > 1) return { user: null, reason: `customer code matched ${count} users` };
+  }
+  if (accountNumber) {
+    const filter = { $or: [{ dvaAccountNumber: accountNumber }, { topupAccountNumber: accountNumber }] };
+    const user = await findSoleUser(filter);
+    if (user) return { user, reason: null };
+    const count = await matchCount(filter);
+    if (count > 1) return { user: null, reason: `account number matched ${count} users` };
+  }
+  return { user: null, reason: 'no matching user' };
 }
 
 /**
@@ -265,6 +376,16 @@ export async function processSavedPaystackEvent(eventId, ip = '') {
     saved.status = 'failed';
     saved.error = err.message;
     await saved.save();
+    const data = event.data || {};
+    await recordUnmatchedPaystackCharge({
+      reference: saved.reference || data.reference,
+      kind: 'failed',
+      customerCode: data.customer?.customer_code || null,
+      amount: Number(data.amount) ? Number(data.amount) / 100 : null,
+      channel: data.channel || data.authorization?.channel || null,
+      reason: err.message,
+      rawPayload: event,
+    });
     paystackLog('error', 'Paystack webhook async processing failed', {
       event: eventType,
       reference: saved.reference,
@@ -288,24 +409,44 @@ export async function reprocessStuckPaystackEvents() {
 
 export async function listPaystackWebhookEvents(req, res) {
   const status = req.query.status || 'unmatched';
-  const events = await PaystackWebhookEvent.find({ status })
-    .sort({ receivedAt: -1 })
-    .limit(100)
-    .select('reference eventType status error receivedAt processedAt')
-    .lean();
+  const kind = status === 'failed' ? 'failed' : 'unmatched';
+  const [events, charges] = await Promise.all([
+    PaystackWebhookEvent.find({ status })
+      .sort({ receivedAt: -1 })
+      .limit(100)
+      .select('reference eventType status error receivedAt processedAt')
+      .lean(),
+    PaystackUnmatchedEvent.find({ kind })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .select('reference kind customerCode amount channel reason createdAt')
+      .lean(),
+  ]);
+  const rows = [
+    ...events.map((row) => ({
+      event_id: row._id.toString(),
+      reference: row.reference,
+      event_type: row.eventType,
+      status: row.status,
+      error: row.error,
+      amount: null,
+      received_at: row.receivedAt,
+      processed_at: row.processedAt,
+    })),
+    ...charges.map((row) => ({
+      event_id: `charge-${row._id.toString()}`,
+      reference: row.reference,
+      event_type: row.channel || row.kind,
+      status: row.kind,
+      error: row.reason,
+      amount: row.amount,
+      received_at: row.createdAt,
+      processed_at: null,
+    })),
+  ];
   res.json({
     status: 'success',
-    data: {
-      events: events.map((row) => ({
-        event_id: row._id.toString(),
-        reference: row.reference,
-        event_type: row.eventType,
-        status: row.status,
-        error: row.error,
-        received_at: row.receivedAt,
-        processed_at: row.processedAt,
-      })),
-    },
+    data: { events: rows },
   });
 }
 

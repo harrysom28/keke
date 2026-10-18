@@ -10,10 +10,18 @@ import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import logger from '../utils/logger.js';
 
+function isTransientMongoError(err) {
+  if (!err) return false;
+  if (err.code === 112) return true;
+  const labels = err.errorLabels || err.errorResponse?.errorLabels || [];
+  return Array.isArray(labels) && labels.includes('TransientTransactionError');
+}
+
 /**
  * Credit user wallet from Paystack (charge.success).
  * Idempotent: if a WalletFundingTransaction with this reference exists, abort.
  * Updates User.balance, creates WalletFundingTransaction, marks Payment completed.
+ * Retries only transient transaction conflicts. A committed credit is never applied twice.
  * @param {string} reference - Paystack transaction reference
  * @param {number} amountNaira - Amount in NGN (not kobo)
  * @param {string} userId - User ID (string or ObjectId)
@@ -21,6 +29,24 @@ import logger from '../utils/logger.js';
  * @returns {Promise<{ credited: boolean, balanceAfter?: number }>}
  */
 export async function creditWalletFromPaystack(reference, amountNaira, userId, options = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await creditWalletFromPaystackOnce(reference, amountNaira, userId, options);
+    } catch (err) {
+      lastError = err;
+      if (!isTransientMongoError(err) || attempt === 3) throw err;
+      logger.warn('WalletFunding: retrying after transient transaction error', {
+        reference,
+        attempt,
+        error: err.message,
+      });
+    }
+  }
+  throw lastError;
+}
+
+async function creditWalletFromPaystackOnce(reference, amountNaira, userId, options = {}) {
   const { paymentId, channel = 'card', ip } = options;
   const uid = mongoose.Types.ObjectId.isValid(userId) ? userId : new mongoose.Types.ObjectId(userId);
 
@@ -86,8 +112,18 @@ export async function creditWalletFromPaystack(reference, amountNaira, userId, o
         opts
       );
     } else {
-      user.balance = ledgerBalanceAfter;
-      await user.save(opts);
+      // No escrow wallet yet. Increment the legacy balance without saving the
+      // partial user document: that save fails validation because phone/email
+      // were not loaded. getOrCreateRiderWallet copies User.balance later.
+      const updated = await User.findByIdAndUpdate(
+        uid,
+        { $inc: { balance: Number(amountNaira) } },
+        { new: true, ...opts }
+      ).select('balance');
+      if (!updated || !Number.isFinite(Number(updated.balance))) {
+        throw new Error('User balance update failed');
+      }
+      ledgerBalanceAfter = Number(updated.balance);
     }
 
     await WalletFundingTransaction.create(

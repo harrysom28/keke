@@ -488,6 +488,7 @@ function FinancePage({ showToast }) {
               columns={[
                 { key: 'reference', label: 'Reference' },
                 { key: 'event_type', label: 'Event' },
+                { key: 'amount', label: 'Amount', render: (v) => (v == null ? '—' : `₦${Number(v).toLocaleString()}`) },
                 { key: 'error', label: 'Note' },
                 { key: 'received_at', label: 'Received', render: (v) => Utils.formatDate(v) },
               ]}
