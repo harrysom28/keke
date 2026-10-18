@@ -384,6 +384,22 @@ userSchema.pre('save', async function (next) {
   next();
 });
 
+// Every rider gets exactly one wallet at creation (rider wallet service is idempotent and race-safe).
+// Lazy ensureRiderWallet calls in the money functions keep the invariant even if this hook fails or is skipped.
+userSchema.pre('save', function (next) {
+  this.$locals.wasNew = this.isNew;
+  next();
+});
+userSchema.post('save', async function (doc) {
+  if (!doc.$locals?.wasNew || doc.role !== 'passenger') return;
+  try {
+    const { ensureRiderWallet } = await import('../services/riderBalanceService.js');
+    await ensureRiderWallet(doc._id);
+  } catch (err) {
+    console.error(`rider wallet not created for new user ${doc._id}: ${err.message}`);
+  }
+});
+
 // Method to compare password
 userSchema.methods.comparePassword = async function (candidatePassword) {
   if (!this.password) {

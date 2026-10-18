@@ -8,6 +8,8 @@ import Stripe from 'stripe';
 import { computeCommission } from './commissionService.js';
 import { creditRideEarning, accrueCommissionDebt, creditPromoSubsidy } from './walletService.js';
 import { settleRide as escrowSettleRide } from './escrowWalletService.js';
+import UserWalletTransaction from '../models/UserWalletTransaction.js';
+import { debitRiderBalance, ensureRiderWallet } from './riderBalanceService.js';
 
 // Initialize Stripe (if API key is provided)
 const stripe = process.env.STRIPE_SECRET_KEY
@@ -144,6 +146,21 @@ export const processRidePayment = async (ride) => {
           transactionId = payment.transactionId;
           logger.info(`Escrow wallet payment settled for ride ${ride._id}: rider ${riderCharged}, settlement ${settlementFare}`);
         } else {
+          // Create the rider wallet BEFORE the transaction opens (creating it inside one can abort it on a race).
+          await ensureRiderWallet(ride.rider);
+          const fareKey = `fare:wallet:${ride._id}`;
+          // Already charged for this ride (e.g. the rider paid with the pay-for-ride endpoint)? Do not charge or
+          // record a second payment: reuse the existing one.
+          const alreadyCharged = await UserWalletTransaction.exists({ idempotencyKey: fareKey, status: 'completed' });
+          if (alreadyCharged) {
+            payment = await Payment.findOne({ ride: ride._id, method: 'wallet', status: 'completed' });
+            if (payment) {
+              transactionId = payment.transactionId;
+              logger.info(`Wallet payment for ride ${ride._id} was already charged; reusing payment ${payment._id}`);
+              break;
+            }
+          }
+
           // Atomic: create payment record and debit rider balance in a transaction
           const session = await mongoose.startSession().catch(() => null);
           const useSession = session != null;
@@ -169,13 +186,28 @@ export const processRidePayment = async (ride) => {
             payment = Array.isArray(created) ? created[0] : created;
             transactionId = payment.transactionId;
 
-            const updated = await User.findOneAndUpdate(
-              { _id: ride.rider, balance: { $gte: riderCharged } },
-              { $inc: { balance: -riderCharged } },
-              { new: true, ...opts }
-            );
-            if (!updated) {
-              throw new Error('Insufficient wallet balance or concurrent update');
+            // Debit the rider wallet (atomic, never below zero). Key = this ride, so a retry cannot charge twice.
+            // If the ledger already holds this charge without a Payment row (alreadyCharged above), only the Payment
+            // row is written: no second debit.
+            try {
+              if (!alreadyCharged) {
+                const debit = await debitRiderBalance(ride.rider, riderCharged, {
+                  type: 'fare_debit',
+                  rideId: ride._id,
+                  idempotencyKey: fareKey,
+                  description: 'Ride paid from wallet',
+                  session: useSession ? session : null,
+                });
+                if (!debit.debited) {
+                  // Another process owns this charge (pending, or completed a moment ago). Never record a payment for it.
+                  throw new Error('Wallet charge for this ride is already in progress');
+                }
+              }
+            } catch (debitErr) {
+              if (debitErr.code === 'INSUFFICIENT_BALANCE' || debitErr.code === 'WALLET_FROZEN') {
+                throw new Error('Insufficient wallet balance or concurrent update');
+              }
+              throw debitErr;
             }
             if (useSession) await session.commitTransaction();
             logger.info(`Wallet payment processed for ride ${ride._id}: ${riderCharged}`);

@@ -11,6 +11,7 @@ import UserWallet from '../models/UserWallet.js';
 import UserNotification from '../models/UserNotification.js';
 import mongoose from 'mongoose';
 import { getPusherService } from './pusherService.js';
+import { getRiderBalance } from './riderBalanceService.js';
 
 let firebaseInitialized = false;
 try {
@@ -930,7 +931,10 @@ export const evaluateTargetingRules = async (rules = {}, userId, userRole) => {
       }
     }
 
-    const walletBalance = Number(user.balance) || 0;
+    const walletBalance =
+      normalizedRole === 'driver'
+        ? Number(user.balance) || 0
+        : (await getRiderBalance(userId)).available;
     if (rules.min_wallet_balance != null && walletBalance < Number(rules.min_wallet_balance)) {
       return false;
     }

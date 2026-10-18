@@ -1,8 +1,8 @@
 import Payment from '../models/Payment.js';
-import User from '../models/User.js';
 import Ride from '../models/Ride.js';
 import logger from '../utils/logger.js';
 import Stripe from 'stripe';
+import { creditRiderBalance } from './riderBalanceService.js';
 
 // Initialize Stripe (if API key is provided)
 const stripe = process.env.STRIPE_SECRET_KEY
@@ -44,12 +44,13 @@ export const processRideRefund = async (ride, cancellationFee = 0) => {
     switch (payment.method) {
       case 'wallet':
         // Refund to wallet
-        const user = await User.findById(ride.rider);
-        if (user) {
-          user.balance += refundAmount;
-          await user.save();
-          logger.info(`Refunded ${refundAmount} to wallet for user ${user._id}`);
-        }
+        await creditRiderBalance(ride.rider?._id || ride.rider, refundAmount, {
+          type: 'refund',
+          rideId: ride._id,
+          idempotencyKey: `refund:ride:${ride._id}`,
+          description: 'Ride cancellation refund',
+        });
+        logger.info(`Refunded ${refundAmount} to wallet for user ${ride.rider?._id || ride.rider}`);
 
         // Update payment record
         await payment.processRefund(refundAmount, 'Ride cancellation refund', `WLT-REFUND-${Date.now()}`);

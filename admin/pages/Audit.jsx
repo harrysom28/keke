@@ -11,6 +11,8 @@ const ACTION_LABELS = {
   driver_reject: 'Driver rejected',
   refund: 'Refund processed',
   dispute_resolve: 'Dispute resolved',
+  wallet_adjust: 'Wallet balance adjusted',
+  wallet_reconcile: 'Wallet reconciled',
   withdrawal_approve: 'Withdrawal approved',
   withdrawal_reject: 'Withdrawal rejected',
   driver_kyc_approve: 'Driver KYC approved',

@@ -23,6 +23,8 @@ const auditLogSchema = new mongoose.Schema(
         'driver_reject',
         'refund',
         'dispute_resolve',
+        'wallet_adjust',
+        'wallet_reconcile',
         'withdrawal_approve',
         'withdrawal_reject',
         'driver_kyc_approve',

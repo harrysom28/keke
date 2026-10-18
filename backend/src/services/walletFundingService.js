@@ -9,6 +9,7 @@ import UserWallet from '../models/UserWallet.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import logger from '../utils/logger.js';
+import { ensureRiderWallet } from './riderBalanceService.js';
 
 function isTransientMongoError(err) {
   if (!err) return false;
@@ -61,6 +62,11 @@ async function creditWalletFromPaystackOnce(reference, amountNaira, userId, opti
     const user = await User.findById(uid).select('balance').lean();
     return { credited: false, balanceAfter: user?.balance };
   }
+
+  // Every rider has a wallet. Create it (seeded from User.balance) BEFORE the transaction opens, so the transaction's
+  // snapshot can see it and the credit below is always one atomic wallet update.
+  const roleDoc = await User.findById(uid).select('role').lean();
+  if (roleDoc && roleDoc.role !== 'driver') await ensureRiderWallet(uid);
 
   const session = await mongoose.startSession().catch(() => null);
   const useSession = session != null;

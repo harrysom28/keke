@@ -12,6 +12,7 @@ import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import Transaction from '../models/Transaction.js';
 import logger from '../utils/logger.js';
+import { ensureRiderWallet, syncRiderMirror } from './riderBalanceService.js';
 import { getSettings, calculateFareBreakdown, getCancellationPolicy, getCancellationGuards } from './settingsService.js';
 import { calculateDistance } from '../utils/geolocation.js';
 import {
@@ -51,22 +52,13 @@ function isTransactionUnsupportedError(err) {
   return message.includes('Transaction numbers are only allowed on a replica set member or mongos');
 }
 
+/**
+ * Keep the legacy User.balance mirror equal to the rider wallet after a hold/release/charge.
+ * The mirror is written only by riderBalanceService; this just asks it to re-sync.
+ */
 async function syncLegacyUserBalanceFromWallet(userId, walletDoc = null, session = null) {
-  const wallet =
-    walletDoc ||
-    (await UserWallet.findOne({ userId, userType: 'rider' })
-      .session(session || undefined)
-      .select('availableBalance'));
-
-  if (!wallet) return null;
-
-  await User.findByIdAndUpdate(
-    userId,
-    { $set: { balance: Number(wallet.availableBalance) || 0 } },
-    session ? { session } : undefined
-  );
-
-  return wallet;
+  await syncRiderMirror(userId, { session });
+  return walletDoc;
 }
 
 /**
@@ -77,6 +69,12 @@ async function syncLegacyUserBalanceFromWallet(userId, walletDoc = null, session
  */
 export function computeRiderWalletApiTotals(userBalanceRaw, escrowWallet) {
   const userBalance = Number(userBalanceRaw) || 0;
+  // Once balances have been reconciled, set RIDER_BALANCE_WALLET_ONLY=true: the wallet alone is the balance.
+  if (escrowWallet && process.env.RIDER_BALANCE_WALLET_ONLY === 'true') {
+    const available = Number(escrowWallet.availableBalance) || 0;
+    const held = Number(escrowWallet.heldBalance) || 0;
+    return { availableBalance: available, heldBalance: held, balance: available + held };
+  }
   if (!escrowWallet) {
     return { availableBalance: userBalance, heldBalance: 0, balance: userBalance };
   }
@@ -94,36 +92,12 @@ export function computeRiderWalletApiTotals(userBalanceRaw, escrowWallet) {
 }
 
 /**
- * Get or create rider wallet; if new, sync availableBalance from User.balance.
+ * Get the rider wallet, creating it if missing (race-safe, seeded from User.balance; see riderBalanceService).
+ * An existing wallet is NEVER topped up from User.balance here: the gap between the two numbers can contain the same
+ * payment counted twice, so only a human-approved reconciliation (scripts/reconcileRiderBalances.js) may move it.
  */
 export async function getOrCreateRiderWallet(userId) {
-  let wallet = await UserWallet.findOne({ userId, userType: 'rider' });
-  const user = await User.findById(userId).select('balance').lean();
-  const userBalance = Number(user?.balance) || 0;
-
-  // If escrow wallet already exists, do a safe one-time sync for migrated accounts:
-  // only when wallet shows unused/empty, but legacy User.balance has funds.
-  if (wallet) {
-    const walletAvail = Number(wallet.availableBalance) || 0;
-    const walletHeld = Number(wallet.heldBalance) || 0;
-    const walletSpent = Number(wallet.totalSpent) || 0;
-    const walletEarned = Number(wallet.totalEarned) || 0;
-    const looksUnused = walletAvail === 0 && walletHeld === 0 && walletSpent === 0 && walletEarned === 0;
-    if (looksUnused && userBalance > 0) {
-      wallet.availableBalance = userBalance;
-      await wallet.save();
-    }
-    return wallet;
-  }
-
-  const initial = userBalance;
-  wallet = await UserWallet.create({
-    userId,
-    userType: 'rider',
-    availableBalance: Math.max(0, initial),
-    heldBalance: 0,
-  });
-  return wallet;
+  return ensureRiderWallet(userId);
 }
 
 /**
