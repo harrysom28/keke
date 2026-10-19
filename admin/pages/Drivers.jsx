@@ -1,7 +1,12 @@
 const { useState, useEffect } = React;
 const Api = window.AdminApi;
+const Auth = window.AdminAuth;
 const Utils = window.AdminUtils;
 const C = window.AdminComponents;
+
+// drivers_manager can only view, approve and suspend drivers (the API enforces it;
+// this hides the controls and skips the calls it would be refused anyway).
+const isDriversManager = () => Auth.getRole() === 'drivers_manager';
 
 function DriversPage({ onNavigate, showToast }) {
   const [drivers, setDrivers] = useState([]);
@@ -21,6 +26,7 @@ function DriversPage({ onNavigate, showToast }) {
   }, [search]);
 
   useEffect(() => {
+    if (isDriversManager()) return;
     Api.get('/api/admin/agents').then((res) => {
       if (!res.error) setAgents(res.data?.data?.agents || []);
     });
@@ -41,6 +47,7 @@ function DriversPage({ onNavigate, showToast }) {
   }, [pagination.page, verificationStatus, agentId, searchDebounced]);
 
   const loadVoidRequests = () => {
+    if (isDriversManager()) return;
     Api.get('/api/admin/void-requests').then((res) => {
       if (res.error) return;
       setVoidRequests(res.data?.data?.void_requests || []);
@@ -107,12 +114,12 @@ function DriversPage({ onNavigate, showToast }) {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
         </select>
-        <select value={agentId} onChange={(e) => { setAgentId(e.target.value); setPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600">
+        {!isDriversManager() && <select value={agentId} onChange={(e) => { setAgentId(e.target.value); setPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600">
           <option value="">All agents</option>
           {agents.filter((a) => a.status === 'active').map((a) => (
             <option key={a.agent_id} value={a.agent_id}>{a.name || a.phone || a.email || a.agent_id}</option>
           ))}
-        </select>
+        </select>}
       </div>
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
         <C.DataTable columns={columns} rows={drivers} keyField="driver_id" loading={loading} onRowClick={(row) => onNavigate('driver-detail', row.driver_id || row.user?.user_id)} emptyMessage="No drivers found" />
@@ -259,6 +266,7 @@ function DriverRideHistory({ driverId, showToast, onNavigate }) {
 }
 
 function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
+  const restricted = isDriversManager();
   const [driver, setDriver] = useState(null);
   const [loading, setLoading] = useState(true);
   const [detailTab, setDetailTab] = useState('review');
@@ -294,7 +302,7 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
     });
   };
 
-  const doSuspend = () => Api.patch('/api/admin/users/' + review.user_id + '/deactivate').then((r) => {
+  const doSuspend = () => Api.patch('/api/admin/drivers/' + review.user_id + '/suspend').then((r) => {
     if (r.error) showToast(r.error, 'error');
     else { showToast('Driver suspended'); loadDriver(); }
     setModal({ open: false, type: '', reason: '' });
@@ -385,7 +393,7 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
           { id: 'review', label: 'Review' },
           { id: 'financials', label: 'Financials' },
           { id: 'rides', label: 'Ride history' },
-        ].map((tab) => (
+        ].filter((tab) => !restricted || tab.id === 'review').map((tab) => (
           <button
             key={tab.id}
             type="button"
@@ -408,7 +416,7 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
           <div>
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{u.name || 'Unnamed driver'}</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">{u.email || 'No email'} {u.phone ? `· ${Utils.formatPhoneForDisplay(u.phone)}` : ''}</p>
-            {d.referred_by_agent_id && (
+            {d.referred_by_agent_id && !restricted && (
               <button
                 type="button"
                 onClick={() => onNavigate && onNavigate('agent-detail', d.referred_by_agent_id)}
@@ -468,14 +476,14 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
           {d.has_driver_profile && d.verification_status === 'pending' && (
             <>
               <button type="button" onClick={() => setModal({ open: true, type: 'verify' })} className="px-3 py-1.5 bg-green-600 text-white rounded-lg">Approve driver</button>
-              <button type="button" onClick={() => setModal({ open: true, type: 'reject', reason: '' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg">Reject driver</button>
+              {!restricted && <button type="button" onClick={() => setModal({ open: true, type: 'reject', reason: '' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg">Reject driver</button>}
             </>
           )}
           {review.user_id && (review.is_active ? (
             <button type="button" onClick={() => setModal({ open: true, type: 'suspend' })} className="px-3 py-1.5 bg-amber-600 text-white rounded-lg">Suspend driver</button>
-          ) : (
+          ) : (!restricted && (
             <button type="button" onClick={() => setModal({ open: true, type: 'restore' })} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg">Restore driver</button>
-          ))}
+          )))}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t dark:border-gray-700">
@@ -561,7 +569,7 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
                 {identity.verification_status !== 'verified' && (
                   <button type="button" onClick={() => setModal({ open: true, type: 'approve-kyc' })} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm">Approve identity</button>
                 )}
-                <button type="button" onClick={() => setModal({ open: true, type: 'reject-kyc', reason: '' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm">Reject identity</button>
+                {!restricted && <button type="button" onClick={() => setModal({ open: true, type: 'reject-kyc', reason: '' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm">Reject identity</button>}
               </div>
             )}
           </div>
@@ -651,7 +659,7 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
                 {vehicle.verification_status !== 'verified' && (
                   <button type="button" onClick={() => setModal({ open: true, type: 'approve-vehicle' })} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm">Approve vehicle</button>
                 )}
-                <button type="button" onClick={() => setModal({ open: true, type: 'reject-vehicle', reason: '' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm">Reject vehicle</button>
+                {!restricted && <button type="button" onClick={() => setModal({ open: true, type: 'reject-vehicle', reason: '' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm">Reject vehicle</button>}
               </div>
             )}
           </div>

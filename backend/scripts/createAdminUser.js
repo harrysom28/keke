@@ -15,7 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '../.env') });
 
-const ADMIN_PANEL_ROLES = ['admin', 'agents_manager'];
+const ADMIN_PANEL_ROLES = ['admin', 'agents_manager', 'drivers_manager'];
 
 export async function createAdminUser({
   name = 'Admin User',

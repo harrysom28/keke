@@ -174,10 +174,10 @@ export const requireAdmin = (req, res, next) => {
   next();
 };
 
-const ADMIN_PANEL_ROLES = ['admin', 'agents_manager'];
+const ADMIN_PANEL_ROLES = ['admin', 'agents_manager', 'drivers_manager'];
 
 /**
- * Any admin-panel login (full admin or agents_manager).
+ * Any admin-panel login (full admin, agents_manager or drivers_manager).
  */
 export const requireAdminAccess = (req, res, next) => {
   if (!req.user) {
@@ -192,23 +192,49 @@ export const requireAdminAccess = (req, res, next) => {
 };
 
 const OBJECT_ID = '[a-fA-F0-9]{24}';
+const idPath = (prefix, suffix = '') => new RegExp(`^${prefix}/${OBJECT_ID}${suffix}/?$`);
+
 const AGENTS_MANAGER_ALLOWLIST = [
   { method: 'GET', re: /^\/me\/?$/ },
   { method: 'POST', re: /^\/logout\/?$/ },
   { method: 'GET', re: /^\/agents\/?$/ },
-  { method: 'GET', re: new RegExp(`^/agents/${OBJECT_ID}/?$`) },
-  { method: 'PATCH', re: new RegExp(`^/agents/${OBJECT_ID}/?$`) },
+  { method: 'GET', re: idPath('/agents') },
+  { method: 'PATCH', re: idPath('/agents') },
 ];
 
 /**
- * agents_manager may only hit the Agents allowlist. Full admin is unchanged.
+ * drivers_manager: look at drivers, approve them, suspend them. Nothing else.
+ * There is deliberately no reject, no restore (activate), no wallet/earnings/
+ * rides, and no generic /users/:id/deactivate (that one works on any user,
+ * including admins; the driver-only /drivers/:id/suspend replaces it).
  */
-export const restrictAgentsManager = (req, res, next) => {
-  if (!req.user || req.user.role !== 'agents_manager') {
+const DRIVERS_MANAGER_ALLOWLIST = [
+  { method: 'GET', re: /^\/me\/?$/ },
+  { method: 'POST', re: /^\/logout\/?$/ },
+  { method: 'GET', re: /^\/drivers\/?$/ },
+  { method: 'GET', re: idPath('/drivers') },
+  { method: 'PATCH', re: idPath('/drivers', '/verify') },
+  { method: 'PATCH', re: idPath('/drivers/kyc', '/approve') },
+  { method: 'PATCH', re: idPath('/drivers/vehicle', '/approve') },
+  { method: 'PATCH', re: idPath('/drivers', '/suspend') },
+];
+
+const STAFF_ALLOWLISTS = {
+  agents_manager: AGENTS_MANAGER_ALLOWLIST,
+  drivers_manager: DRIVERS_MANAGER_ALLOWLIST,
+};
+
+/**
+ * Restricted staff roles may only hit their own allowlist. Full admin is unchanged.
+ * The role comes from the database user (req.user), never from the token.
+ */
+export const restrictStaffRoles = (req, res, next) => {
+  const allowlist = req.user ? STAFF_ALLOWLISTS[req.user.role] : null;
+  if (!allowlist) {
     return next();
   }
 
-  const allowed = AGENTS_MANAGER_ALLOWLIST.some(
+  const allowed = allowlist.some(
     (rule) => rule.method === req.method && rule.re.test(req.path || '')
   );
   if (!allowed) {
