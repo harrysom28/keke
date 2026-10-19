@@ -66,6 +66,11 @@ import FindRideSheet from "./_modals/findRide";
 import PaymentReceiptModal from "@/shared/modal/paymentReceipt";
 import { Portal } from "@gorhom/portal";
 import TripCompletedModal from "@/shared/modal/tripCompleted";
+import {
+  RiderDropoffPrompt,
+  parseRiderDropoffPrompt,
+  type RiderDropoffPromptData,
+} from "@/components/ride-in-transit/RiderDropoffPrompt";
 import { getGreeting } from "@/lib/getGreeting";
 import { router, useLocalSearchParams } from "expo-router";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
@@ -2060,6 +2065,26 @@ export default function HomeScreen() {
     },
   });
 
+  // Trip-ending prompts from the driver (confirm request, or review of a trip ended away from the pin).
+  // They arrive three ways - user channel, ride channel, push tap - so de-duplicate by ride + request.
+  const [dropoffPrompt, setDropoffPrompt] = useState<RiderDropoffPromptData | null>(null);
+  const dropoffSeenRef = useRef<Set<string>>(new Set());
+  const showDropoffPrompt = useCallback(
+    (kind: string, payload: Record<string, unknown> | null | undefined) => {
+      const parsed = parseRiderDropoffPrompt(
+        kind,
+        payload,
+        (temp as any)?.ride_id ?? (temp as any)?._id ?? null
+      );
+      if (!parsed) return;
+      const key = `${parsed.kind}:${parsed.rideId}:${parsed.expiresAt ?? ""}`;
+      if (dropoffSeenRef.current.has(key)) return;
+      dropoffSeenRef.current.add(key);
+      setDropoffPrompt(parsed);
+    },
+    [temp]
+  );
+
   const riderPusherUserId =
     user?.profile?.user_id ?? (user?.profile as { _id?: string } | undefined)?._id ?? null;
 
@@ -2183,6 +2208,11 @@ export default function HomeScreen() {
 
       // ── Ride state alerts ────────────────────────────────────────────────
       const subType = payload?.subType ?? payload?.event_key ?? name;
+
+      if (subType === "dropoff_confirm_request" || subType === "dropoff_review") {
+        showDropoffPrompt(String(subType), payload);
+        return;
+      }
 
       if (subType === "fare_locked") {
         const amt = payload?.amount ?? payload?.fare ?? payload?.cost ?? null;
@@ -2451,6 +2481,14 @@ export default function HomeScreen() {
         ""
     ).trim();
 
+    if (notifSubType === "dropoff_confirm_request" || notifSubType === "dropoff_review") {
+      showDropoffPrompt(
+        String(notifSubType),
+        (notificationEvent?.data ?? null) as Record<string, unknown> | null
+      );
+      return;
+    }
+
     if (notifSubType === "trip_flagged") {
       handleRideFlagged(
         (notificationEvent?.data ?? null) as Record<string, unknown> | null
@@ -2505,7 +2543,7 @@ export default function HomeScreen() {
       setPaymentReceipt(true);
       getActiveRide();
     }
-  }, [notificationEvent, applyRideAcceptedPatchFn, handleRideCancelled, handleRideFlagged]);
+  }, [notificationEvent, applyRideAcceptedPatchFn, handleRideCancelled, handleRideFlagged, showDropoffPrompt]);
 
   // Use throttled location update hook to prevent rate limiting
   const updateLocation = useThrottledLocationUpdate();
@@ -2643,6 +2681,11 @@ export default function HomeScreen() {
           setRide((prev) => ({ ...prev, screen: "SUMMARY" }));
           activeRideSheetRef?.current?.open();
         }}
+      />
+      <RiderDropoffPrompt
+        prompt={dropoffPrompt}
+        onClose={() => setDropoffPrompt(null)}
+        onAnswered={() => getActiveRide()}
       />
       <TripCompletedModal
         // saved ride data
@@ -3379,6 +3422,7 @@ export default function HomeScreen() {
               openPostRideSummary(snapshot as Partial<TRide> & Record<string, unknown>);
             }}
             chatOpenSignal={chatOpenKick}
+            onDropoffPrompt={showDropoffPrompt}
           />
         ) : null}
       </Portal>

@@ -28,6 +28,12 @@ export const FEE_CONFIG = {
   arrival: {
     maxRadiusMeters: 150,
   },
+  dropoff: {
+    freeRadiusMeters: 500,
+    confirmRadiusMeters: 3000,
+    liveFixMaxAgeSeconds: 30,
+    riderConfirmWindowSeconds: 120,
+  },
   wallet: {
     minTopupAmount: 500,
     minWithdrawAmount: 1000,

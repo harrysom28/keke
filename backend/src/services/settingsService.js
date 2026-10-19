@@ -25,6 +25,12 @@ const DEFAULTS = {
   arrival: {
     maxRadiusMeters: 150,
   },
+  dropoff: {
+    freeRadiusMeters: 500,
+    confirmRadiusMeters: 3000,
+    liveFixMaxAgeSeconds: 30,
+    riderConfirmWindowSeconds: 120,
+  },
   wallet: {
     minTopupAmount: 500,
     minWithdrawAmount: 1000,
@@ -44,11 +50,43 @@ export async function getSettings() {
     fees: { ...DEFAULTS.fees, ...(doc?.fees && typeof doc.fees === 'object' ? doc.fees : {}) },
     cancellation: { ...DEFAULTS.cancellation, ...(doc?.cancellation && typeof doc.cancellation === 'object' ? doc.cancellation : {}) },
     arrival: { ...DEFAULTS.arrival, ...(doc?.arrival && typeof doc.arrival === 'object' ? doc.arrival : {}) },
+    dropoff: { ...DEFAULTS.dropoff, ...(doc?.dropoff && typeof doc.dropoff === 'object' ? doc.dropoff : {}) },
     wallet: { ...DEFAULTS.wallet, ...(doc?.wallet && typeof doc.wallet === 'object' ? doc.wallet : {}) },
   };
   cachedSettings = raw;
   cacheExpiry = Date.now() + CACHE_TTL_MS;
   return cachedSettings;
+}
+
+export const DROPOFF_DEFAULTS = DEFAULTS.dropoff;
+
+/** Allowed range for each trip-ending setting (inclusive). */
+export const DROPOFF_LIMITS = {
+  freeRadiusMeters: [100, 1000],
+  confirmRadiusMeters: [1000, 10000],
+  liveFixMaxAgeSeconds: [10, 120],
+  riderConfirmWindowSeconds: [30, 600],
+};
+
+/**
+ * Validate an admin update of the `dropoff` group against the stored values.
+ * Returns { value } (the full merged group) or { error } (a message for the admin).
+ * Every sent field must be a whole number inside its range, and confirmRadiusMeters must exceed freeRadiusMeters.
+ */
+export function validateDropoffUpdate(input, current = {}) {
+  const merged = { ...DEFAULTS.dropoff, ...(current || {}) };
+  for (const [key, [min, max]] of Object.entries(DROPOFF_LIMITS)) {
+    if (input?.[key] === undefined) continue;
+    const n = Number(input[key]);
+    if (!Number.isInteger(n) || n < min || n > max) {
+      return { error: `dropoff.${key} must be a whole number between ${min} and ${max}` };
+    }
+    merged[key] = n;
+  }
+  if (!(merged.confirmRadiusMeters > merged.freeRadiusMeters)) {
+    return { error: 'dropoff.confirmRadiusMeters must be greater than dropoff.freeRadiusMeters' };
+  }
+  return { value: merged };
 }
 
 export function invalidateCache() {

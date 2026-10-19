@@ -164,6 +164,7 @@ export const DRIVER_START_RIDE = `${SERVER_URL}driver/rides/start`;
 export const DRIVER_MARK_PICKUP_ARRIVED = `${SERVER_URL}driver/rides/arrived`;
 export const DRIVER_REJECT_RIDE = `${SERVER_URL}driver/rides/cancel`;
 export const DRIVER_COMPLETE_RIDE = `${SERVER_URL}driver/rides/complete`;
+export const DRIVER_REQUEST_DROPOFF_CONFIRM = `${SERVER_URL}driver/rides/request-dropoff-confirm`;
 export const DRIVER_CONFIRM_PAYMENT = `${SERVER_URL}driver/ride/confirm-payment`;
 export const DRIVER_PAY_CHANGE = `${SERVER_URL}driver/ride/change-payment`;
 

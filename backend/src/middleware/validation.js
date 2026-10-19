@@ -31,6 +31,36 @@ export const validate = (req, res, next) => {
 /**
  * Validation rules
  */
+/**
+ * Optional GPS fix sent with "end trip". All fields are untrusted; the server re-validates
+ * freshness, accuracy and plausibility before using any of it.
+ */
+const dropoffLocationRules = [
+  body('location').optional({ nullable: true }).isObject().withMessage('location must be an object'),
+  body('location.lat')
+    .if(body('location').isObject())
+    .isFloat({ min: -90, max: 90 })
+    .withMessage('location.lat must be a valid latitude'),
+  body('location.lng')
+    .if(body('location').isObject())
+    .isFloat({ min: -180, max: 180 })
+    .withMessage('location.lng must be a valid longitude'),
+  body('location.accuracy')
+    .if(body('location').isObject())
+    .optional({ nullable: true })
+    .isFloat({ min: 0, max: 100000 })
+    .withMessage('location.accuracy must be a positive number'),
+  body('location.capturedAt')
+    .if(body('location').isObject())
+    .isFloat({ min: 0 })
+    .withMessage('location.capturedAt must be a timestamp in milliseconds'),
+  body('location.mocked')
+    .if(body('location').isObject())
+    .optional({ nullable: true })
+    .isBoolean({ strict: true })
+    .withMessage('location.mocked must be true or false'),
+];
+
 export const validationRules = {
   // User registration
   register: [
@@ -614,6 +644,31 @@ export const validationRules = {
       .optional()
       .isIn(['pending', 'completed', 'failed'])
       .withMessage('Invalid payment status'),
+    ...dropoffLocationRules,
+    // Sent as 2 by the current driver app. Absent = old build = old end-trip rules.
+    body('dropoff_flow')
+      .optional({ nullable: true })
+      .isInt({ min: 0, max: 100 })
+      .withMessage('dropoff_flow must be a whole number'),
+    body('reason')
+      .optional({ nullable: true })
+      .isIn(['rider_requested_stop', 'pin_inaccurate', 'road_blocked', 'other'])
+      .withMessage('Invalid reason for ending the trip here'),
+  ],
+
+  // Driver asks the rider to confirm ending the trip away from the destination
+  requestDropoffConfirm: [
+    body('rideId')
+      .notEmpty()
+      .withMessage('Ride ID is required')
+      .isMongoId()
+      .withMessage('Invalid ride ID'),
+    ...dropoffLocationRules,
+  ],
+
+  // Rider answers a dropoff confirm request / review prompt
+  dropoffConfirm: [
+    body('confirmed').isBoolean({ strict: true }).withMessage('confirmed must be true or false'),
   ],
 
   // Confirm payment (driver: rideId)

@@ -287,6 +287,17 @@ const rideSchema = new mongoose.Schema(
       default: null,
     },
     dropoff_distance_from_destination: { type: Number, default: null },
+    /** Why the driver ended the trip away from the pin (Tier 2). */
+    dropoff_end_reason: { type: String, default: null },
+    /** Which position the server judged the dropoff by. */
+    dropoff_distance_source: { type: String, enum: ['live', 'saved', null], default: null },
+    /** GPS accuracy (m) of the live fix used, when source is 'live'. */
+    dropoff_live_accuracy: { type: Number, default: null },
+    /** Rider's answer to a dropoff confirm request / review prompt. */
+    dropoff_rider_response: { type: String, enum: ['confirmed', 'disputed', null], default: null },
+    dropoff_rider_responded_at: { type: Date, default: null },
+    /** When the driver asked the rider to confirm ending the trip (Tier 3). */
+    dropoff_confirm_requested_at: { type: Date, default: null },
     // Real-time tracking
     tracking: {
       currentLocation: {

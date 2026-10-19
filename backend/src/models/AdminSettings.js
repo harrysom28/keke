@@ -87,6 +87,13 @@ const adminSettingsSchema = new mongoose.Schema(
     arrival: {
       maxRadiusMeters: { type: Number, default: 150 },
     },
+    // Trip ending (driver taps End Trip near the destination). See utils/dropoffProximity.js.
+    dropoff: {
+      freeRadiusMeters: { type: Number, default: 500 },
+      confirmRadiusMeters: { type: Number, default: 3000 },
+      liveFixMaxAgeSeconds: { type: Number, default: 30 },
+      riderConfirmWindowSeconds: { type: Number, default: 120 },
+    },
     wallet: {
       minTopupAmount: { type: Number, default: 500 },
       minWithdrawAmount: { type: Number, default: 1000 },
