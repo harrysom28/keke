@@ -37,7 +37,7 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['passenger', 'driver', 'admin', 'agents_manager'],
+      enum: ['passenger', 'driver', 'admin', 'agents_manager', 'drivers_manager'],
       default: 'passenger',
     },
     isVerified: {
@@ -342,7 +342,7 @@ userSchema.pre('validate', function (next) {
 
 // Coerce legacy/invalid role values so saves don't fail enum validation
 userSchema.pre('save', function (next) {
-  const validRoles = ['passenger', 'driver', 'admin', 'agents_manager'];
+  const validRoles = ['passenger', 'driver', 'admin', 'agents_manager', 'drivers_manager'];
   if (this.role && !validRoles.includes(this.role)) {
     this.role = 'passenger';
   }

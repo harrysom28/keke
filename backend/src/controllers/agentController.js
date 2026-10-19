@@ -340,7 +340,7 @@ function duplicateDriverFieldError(err) {
 }
 
 async function createReferredDriverForUser({ req, user, fields, vehicle }) {
-  if (['admin', 'agents_manager'].includes(user.role)) {
+  if (['admin', 'agents_manager', 'drivers_manager'].includes(user.role)) {
     throw new ConflictError('This phone number belongs to a staff account.');
   }
   if (fields.name && !user.name) user.name = fields.name;
@@ -945,7 +945,7 @@ export const registerAgentDriver = asyncHandler(async (req, res) => {
     applyAgentAttribution(user, req, fields);
     await user.save();
   } else {
-    if (['admin', 'agents_manager'].includes(user.role)) {
+    if (['admin', 'agents_manager', 'drivers_manager'].includes(user.role)) {
       throw new ConflictError('This phone number belongs to a staff account.');
     }
     if (!user.name) user.name = fields.name;

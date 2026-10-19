@@ -4,7 +4,7 @@ import * as adminAgentController from '../controllers/adminAgentController.js';
 import * as notificationController from '../controllers/notificationController.js';
 import * as payoutController from '../controllers/payoutController.js';
 import { listPaystackWebhookEvents, reconcilePaystackSuccesses } from '../controllers/paystackWebhookController.js';
-import { protect, requireAdminAccess, restrictAgentsManager } from '../middleware/auth.js';
+import { protect, requireAdminAccess, restrictStaffRoles } from '../middleware/auth.js';
 import { validationRules, validate } from '../middleware/validation.js';
 import { limiters } from '../middleware/rateLimiter.js';
 
@@ -13,11 +13,12 @@ const router = express.Router();
 // Admin authentication routes (public, rate-limited)
 router.post('/login', limiters.adminLoginLimiter, validationRules.adminLogin, validate, adminController.adminLogin);
 
-// All admin routes require an admin-panel login. agents_manager is then
-// limited to the Agents allowlist; full admin is unchanged.
+// All admin routes require an admin-panel login. agents_manager and
+// drivers_manager are then limited to their own allowlists (see auth.js);
+// full admin is unchanged.
 router.use(protect);
 router.use(requireAdminAccess);
-router.use(restrictAgentsManager);
+router.use(restrictStaffRoles);
 
 // Admin profile
 router.post('/logout', adminController.adminLogout);
@@ -79,6 +80,7 @@ router.patch('/drivers/vehicle/:userId/reject', validationRules.mongoUserId, val
 router.get('/drivers/:id', validationRules.mongoId, validate, adminController.getDriverDetails);
 router.patch('/drivers/:id/verify', validationRules.mongoId, validate, adminController.verifyDriver);
 router.patch('/drivers/:id/reject', validationRules.mongoId, validate, validationRules.rejectDriver, validate, adminController.rejectDriver);
+router.patch('/drivers/:id/suspend', validationRules.mongoId, validate, adminController.suspendDriver);
 router.get('/drivers/:id/earnings', validationRules.mongoId, validate, adminController.getDriverEarnings);
 router.get('/drivers/:id/rides', validationRules.mongoId, validate, adminController.getDriverRides);
 

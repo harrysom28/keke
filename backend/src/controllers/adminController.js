@@ -114,7 +114,7 @@ export const adminLogin = asyncHandler(async (req, res) => {
   // Find admin user
   const admin = await User.findOne({
     email: email.toLowerCase(),
-    role: { $in: ['admin', 'agents_manager'] },
+    role: { $in: ['admin', 'agents_manager', 'drivers_manager'] },
   }).select('+password');
   logger.info(`Admin found: ${!!admin}`);
   if (!admin) {
@@ -178,7 +178,7 @@ export const adminLogout = asyncHandler(async (req, res) => {
  */
 export const getAdminProfile = asyncHandler(async (req, res) => {
   const admin = await User.findById(req.user._id);
-  if (!admin || !['admin', 'agents_manager'].includes(admin.role)) {
+  if (!admin || !['admin', 'agents_manager', 'drivers_manager'].includes(admin.role)) {
     throw new NotFoundError('Admin');
   }
 
@@ -1142,6 +1142,49 @@ export const deactivateUser = asyncHandler(async (req, res) => {
   res.json({
     status: 'success',
     message: 'User deactivated successfully',
+    data: {
+      user: formatUserResponse(user),
+    },
+  });
+});
+
+/**
+ * Suspend a driver - PATCH /api/admin/drivers/:id/suspend
+ *
+ * Driver-only counterpart of deactivateUser. :id may be the Driver id or the
+ * driver's User id. It refuses any user whose role is not 'driver', so it can
+ * never suspend a passenger or an admin. Already-suspended drivers are a no-op.
+ */
+export const suspendDriver = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const driverDoc = await Driver.findById(id).select('user').lean();
+  const userId = driverDoc?.user || id;
+
+  const user = await User.findOne({ _id: userId, role: 'driver' });
+  if (!user) {
+    throw new NotFoundError('Driver');
+  }
+
+  if (user.isActive) {
+    user.isActive = false;
+    await user.save();
+
+    await logAdminAction({
+      adminId: req.user._id,
+      adminEmail: req.user.email,
+      action: 'user_deactivate',
+      resourceType: 'user',
+      resourceId: user._id.toString(),
+      details: { userId: user._id.toString(), email: user.email, via: 'driver_suspend' },
+      req,
+    });
+    logger.info(`Driver user ${user._id} suspended by admin ${req.user._id}`);
+  }
+
+  res.json({
+    status: 'success',
+    message: 'Driver suspended successfully',
     data: {
       user: formatUserResponse(user),
     },

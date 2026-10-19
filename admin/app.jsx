@@ -114,10 +114,17 @@ function LoginPage({ onLogin }) {
   );
 }
 
+// Restricted staff logins only see their own pages. Full admin has no entry here.
+// (The API enforces the same limits; this just keeps the UI honest.)
+const STAFF_ROLE_ACCESS = {
+  agents_manager: { home: 'agents', pages: ['agents', 'agent-detail'], nav: ['agents'] },
+  drivers_manager: { home: 'drivers', pages: ['drivers', 'driver-detail'], nav: ['drivers'] },
+};
+const getStaffAccess = () => STAFF_ROLE_ACCESS[Auth.getRole()] || null;
+
 function App() {
   const [authenticated, setAuthenticated] = useState(false);
-  const isAgentsManager = () => Auth.getRole() === 'agents_manager';
-  const [page, setPage] = useState(() => (Auth.getRole() === 'agents_manager' ? 'agents' : 'dashboard'));
+  const [page, setPage] = useState(() => getStaffAccess()?.home || 'dashboard');
   const [detailId, setDetailId] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -144,8 +151,9 @@ function App() {
   }, []);
 
   const onNavigate = useCallback((p, id) => {
-    if (Auth.getRole() === 'agents_manager' && p !== 'agents' && p !== 'agent-detail') {
-      setPage('agents');
+    const access = getStaffAccess();
+    if (access && !access.pages.includes(p)) {
+      setPage(access.home);
       setDetailId(null);
       return;
     }
@@ -173,7 +181,8 @@ function App() {
     { id: 'notifications', label: 'Notifications', icon: '🔔' },
     { id: 'audit', label: 'Audit logs', icon: '📋' },
   ];
-  const visibleNav = isAgentsManager() ? nav.filter((item) => item.id === 'agents') : nav;
+  const staffAccess = getStaffAccess();
+  const visibleNav = staffAccess ? nav.filter((item) => staffAccess.nav.includes(item.id)) : nav;
 
   const pageTitles = {
     dashboard: 'Dashboard',
@@ -194,8 +203,9 @@ function App() {
 
   useEffect(() => {
     if (!authenticated) return;
-    if (Auth.getRole() === 'agents_manager' && page !== 'agents' && page !== 'agent-detail') {
-      setPage('agents');
+    const access = getStaffAccess();
+    if (access && !access.pages.includes(page)) {
+      setPage(access.home);
       setDetailId(null);
     }
   }, [authenticated, page]);
@@ -220,8 +230,9 @@ function App() {
       <LoginPage
         onLogin={() => {
           setAuthenticated(true);
-          if (Auth.getRole() === 'agents_manager') {
-            setPage('agents');
+          const access = getStaffAccess();
+          if (access) {
+            setPage(access.home);
             setDetailId(null);
           }
         }}
@@ -230,10 +241,10 @@ function App() {
   }
 
   const Pages = window.AdminPages || {};
-  const agentsOnly = Auth.getRole() === 'agents_manager';
+  const staffHome = getStaffAccess();
   let Content = null;
-  if (agentsOnly && page !== 'agents' && page !== 'agent-detail') {
-    Content = Pages.Agents;
+  if (staffHome && !staffHome.pages.includes(page)) {
+    Content = staffHome.home === 'agents' ? Pages.Agents : Pages.Drivers;
   } else if (page === 'dashboard') Content = Pages.Dashboard;
   else if (page === 'users') Content = Pages.Users;
   else if (page === 'user-detail') Content = Pages.UserDetail;
