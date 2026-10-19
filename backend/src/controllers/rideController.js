@@ -19,7 +19,9 @@ import {
 } from '../services/driverNotificationService.js';
 import { mapRideStatusForClientApi, getLifecycleStatus, logRideLifecycle } from '../utils/rideStatus.js';
 import { getSocketService } from '../services/socketService.js';
-import { calculateFareBreakdown as calculateFareBreakdownFromSettings } from '../services/settingsService.js';
+import { calculateFareBreakdown as calculateFareBreakdownFromSettings, getSettings } from '../services/settingsService.js';
+import { finalizeDriverCompletion, emitTripEvent, formatDistanceForCopy } from '../services/rideCompletionService.js';
+import { proximityFieldsForCompletion, DROPOFF_FLAG_FAR, DROPOFF_FLAG_DISPUTED } from '../utils/dropoffProximity.js';
 import {
   validateRiderBalance,
   holdRideFunds,
@@ -1780,4 +1782,154 @@ export const forceCompleteRide = asyncHandler(async (req, res) => {
     fare: lockedFare,
     completedBy: 'rider',
   });
+});
+
+/** Snapshot of the dropoff-confirmation state returned by confirmDropoff (also for repeat calls). */
+function dropoffConfirmState(ride, extra = {}) {
+  return {
+    rideId: ride._id.toString(),
+    rideStatus: ride.status,
+    dropoff_proximity_status: ride.dropoff_proximity_status ?? null,
+    dropoff_distance_from_destination: ride.dropoff_distance_from_destination ?? null,
+    dropoff_rider_response: ride.dropoff_rider_response ?? null,
+    flag: ride.flag ?? null,
+    ...extra,
+  };
+}
+
+/**
+ * Rider answers a dropoff prompt.
+ * POST /api/rides/:rideId/dropoff-confirm  { confirmed: boolean }
+ *
+ *  - ride in-progress + driver asked for confirmation (within the window) + confirmed:true
+ *      -> the trip ends now (same completion path as the driver, paid once)
+ *  - ride completed by the driver away from the pin (Tier 2)
+ *      -> confirmed:true clears the far flag; confirmed:false disputes it and opens a support ticket
+ *  - anything already answered is a no-op that returns the current state
+ */
+export const confirmDropoff = asyncHandler(async (req, res) => {
+  const riderId = req.user?._id;
+  const { rideId } = req.params;
+  const confirmed = req.body?.confirmed === true;
+
+  const ride = await Ride.findById(rideId).populate('rider', 'name phone profileImage rating');
+  if (!ride) throw new NotFoundError('Ride');
+
+  if (ride.rider?._id?.toString() !== riderId.toString()) {
+    throw new ValidationError('You do not have permission to respond for this ride');
+  }
+
+  const respond = (r, extra = {}) =>
+    res.json({ status: 'success', data: dropoffConfirmState(r, extra) });
+
+  // Idempotent: already answered -> current state, nothing else happens.
+  if (ride.dropoff_rider_response) {
+    return respond(ride, { noop: true });
+  }
+
+  // ── Trip still running: the driver asked the rider to end it ───────────────
+  if (ride.status === 'in-progress') {
+    const requestedMs = ride.dropoff_confirm_requested_at
+      ? new Date(ride.dropoff_confirm_requested_at).getTime()
+      : null;
+    if (!requestedMs) {
+      throw new ConflictError('Your driver has not asked you to confirm the end of this trip.', {
+        code: 'DROPOFF_CONFIRM_NOT_REQUESTED',
+      });
+    }
+    const windowSeconds = Number((await getSettings())?.dropoff?.riderConfirmWindowSeconds ?? 120);
+    if (Date.now() - requestedMs > windowSeconds * 1000) {
+      throw new ConflictError('This request has expired. Ask your driver to send it again.', {
+        code: 'DROPOFF_CONFIRM_EXPIRED',
+      });
+    }
+
+    if (!confirmed) {
+      await emitTripEvent(
+        ride,
+        'dropoff_confirm_declined',
+        { subType: 'dropoff_confirm_declined', rideId: ride._id.toString() },
+        { rider: false, driver: true }
+      );
+      return respond(ride, { declined: true });
+    }
+
+    const driver = await Driver.findById(ride.driver);
+    if (!driver) throw new NotFoundError('Driver profile');
+
+    const proximity = proximityFieldsForCompletion({
+      tier: 'rider',
+      distanceMeters: ride.dropoff_distance_from_destination,
+      source: ride.dropoff_distance_source,
+      accuracy: ride.dropoff_live_accuracy,
+      unverified: false,
+    });
+
+    try {
+      await finalizeDriverCompletion(ride, driver, {
+        completedBy: 'driver',
+        proximity,
+        extraSet: { dropoff_rider_response: 'confirmed', dropoff_rider_responded_at: new Date() },
+      });
+    } catch (err) {
+      // Lost a race with another completion (driver tap, second confirm): report the real state.
+      if (err instanceof ValidationError) {
+        const latest = await Ride.findById(rideId);
+        return respond(latest || ride, { noop: true });
+      }
+      throw err;
+    }
+
+    const done = await Ride.findById(rideId);
+    return respond(done, { completedByRiderConfirmation: true });
+  }
+
+  // ── Trip already ended by the driver away from the pin (Tier 2 review) ─────
+  const reviewable =
+    ride.status === 'completed' &&
+    ride.dropoff_proximity_status === 'unlikely' &&
+    Boolean(ride.dropoff_end_reason);
+  if (!reviewable) {
+    return respond(ride, { noop: true });
+  }
+
+  const noResponseYet = { _id: ride._id, $or: [{ dropoff_rider_response: null }, { dropoff_rider_response: { $exists: false } }] };
+  const answeredAt = new Date();
+
+  if (confirmed) {
+    const claim = await Ride.updateOne(noResponseYet, {
+      $set: { dropoff_rider_response: 'confirmed', dropoff_rider_responded_at: answeredAt },
+    });
+    if (claim.modifiedCount === 1) {
+      await Ride.updateOne({ _id: ride._id, flag: DROPOFF_FLAG_FAR }, { $set: { flag: null } });
+    }
+  } else {
+    const claim = await Ride.updateOne(noResponseYet, {
+      $set: {
+        dropoff_rider_response: 'disputed',
+        dropoff_rider_responded_at: answeredAt,
+        flag: DROPOFF_FLAG_DISPUTED,
+      },
+    });
+    if (claim.modifiedCount === 1) {
+      // Same channel other ride problems use to reach admins: a high-priority support ticket.
+      try {
+        await SupportTicket.create({
+          user: riderId,
+          ride: ride._id,
+          category: 'ride_issue',
+          subject: 'Rider disputed where the trip ended',
+          description: `Rider says the driver ended ride ${ride._id.toString()} ${formatDistanceForCopy(
+            ride.dropoff_distance_from_destination
+          )} from the destination (driver reason: ${ride.dropoff_end_reason}).`,
+          priority: 'high',
+        });
+      } catch (err) {
+        logger.warn(`Dropoff dispute ticket create failed for ride ${rideId}: ${err.message}`);
+      }
+    }
+  }
+
+  const latest = await Ride.findById(rideId);
+  return respond(latest || ride);
 });

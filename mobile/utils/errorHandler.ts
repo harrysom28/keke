@@ -30,6 +30,11 @@ const CODE_MESSAGES: Record<string, string> = {
   TOO_FAR_FROM_PICKUP: "You're too far from the pickup point. Move closer and try again.",
   OFFER_EXPIRED: "This ride offer has expired.",
   OFFER_GONE: "This ride is no longer available.",
+  DROPOFF_REASON_REQUIRED: "You're away from the destination. Tell us why you're ending the trip here.",
+  DROPOFF_TOO_FAR: "You're too far from the destination to end the trip alone. Ask the rider to confirm.",
+  DROPOFF_CONFIRM_NOT_NEEDED: "You're close enough to end the trip yourself.",
+  DROPOFF_CONFIRM_NOT_REQUESTED: "Your driver hasn't asked you to confirm the end of this trip.",
+  DROPOFF_CONFIRM_EXPIRED: "This request has expired. Ask your driver to send it again.",
 };
 
 function firstValidationMessage(errors: Record<string, string[] | string> | undefined): string | null {

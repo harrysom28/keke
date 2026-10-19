@@ -25,6 +25,13 @@ export const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 /**
+ * Straight-line distance in whole meters (wraps calculateDistance so there is one haversine).
+ * Args are (lat, lng) pairs, same order as calculateDistance.
+ */
+export const calculateDistanceMeters = (lat1, lon1, lat2, lon2) =>
+  Math.round(calculateDistance(lat1, lon1, lat2, lon2) * 1000);
+
+/**
  * Convert degrees to radians
  */
 const toRadians = (degrees) => {

@@ -197,6 +197,7 @@ router.post('/rides/cancel', validationRules.rejectRide, validate, driverControl
 router.post('/rides/arrived', validationRules.markArrived, validate, driverController.markArrived);
 router.post('/rides/start', validationRules.startRide, validate, driverController.startRide);
 router.post('/rides/complete', validationRules.completeRide, validate, driverController.completeRide);
+router.post('/rides/request-dropoff-confirm', validationRules.requestDropoffConfirm, validate, driverController.requestDropoffConfirm);
 
 // Payment management
 router.post('/ride/confirm-payment', validationRules.confirmDriverPayment, validate, driverController.confirmPayment);

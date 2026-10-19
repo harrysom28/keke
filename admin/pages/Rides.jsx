@@ -8,6 +8,7 @@ function RidesPage({ onNavigate, showToast }) {
   const [pagination, setPagination] = useState({ page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
+  const [flag, setFlag] = useState('');
   const [searchId, setSearchId] = useState('');
   const [searchDebounced, setSearchDebounced] = useState('');
 
@@ -17,6 +18,7 @@ function RidesPage({ onNavigate, showToast }) {
     setLoading(true);
     const params = new URLSearchParams({ page: pagination.page, limit: 20 });
     if (status) params.set('status', status);
+    if (flag) params.set('flag', flag);
     if (searchDebounced) params.set('search', searchDebounced);
     Api.get('/api/admin/rides?' + params).then((res) => {
       if (res.error) { showToast(res.error, 'error'); setRides([]); return; }
@@ -24,13 +26,14 @@ function RidesPage({ onNavigate, showToast }) {
       setRides(d.rides || []);
       setPagination((p) => ({ ...p, pages: d.pagination?.pages ?? 1 }));
     }).finally(() => setLoading(false));
-  }, [pagination.page, status, searchDebounced]);
+  }, [pagination.page, status, flag, searchDebounced]);
 
   const columns = [
     { key: 'ride_id', label: 'Ride ID', render: (v) => (v || '').slice(-8) },
     { key: 'rider', label: 'Rider', render: (v) => v?.name ?? '—' },
     { key: 'driver', label: 'Driver', render: (v) => v?.name ?? '—' },
     { key: 'status', label: 'Status' },
+    { key: 'flag', label: 'Flag', render: (v) => (v ? v.replace(/_/g, ' ') : '—') },
     { key: 'fare', label: 'Fare', render: (v) => Utils.formatCurrency(v) },
   ];
 
@@ -46,6 +49,12 @@ function RidesPage({ onNavigate, showToast }) {
           <option value="in-progress">In progress</option>
           <option value="completed">Completed</option>
           <option value="cancelled">Cancelled</option>
+        </select>
+        <select value={flag} onChange={(e) => { setFlag(e.target.value); setPagination((p) => ({ ...p, page: 1 })); }} className="px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600" aria-label="Trip ending flag">
+          <option value="">All trip endings</option>
+          <option value="dropoff_far_from_destination">Ended far from destination</option>
+          <option value="dropoff_unverified">Location unverified</option>
+          <option value="dropoff_disputed">Disputed by rider</option>
         </select>
       </div>
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
@@ -182,6 +191,17 @@ function RideDetailPage({ id, onBack, showToast }) {
         <p><strong>Status:</strong> {r.status}</p>
         <p><strong>Fare:</strong> {Utils.formatCurrency(r.fare)}</p>
         <p><strong>Created:</strong> {Utils.formatDate(r.created_at)}</p>
+        {(r.flag || r.dropoff_proximity_status) && (
+          <div className="mt-2 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/40 space-y-1 text-sm" data-testid="dropoff-details">
+            <h3 className="font-medium text-gray-900 dark:text-gray-100">Trip ending</h3>
+            <p><strong>Flag:</strong> {r.flag ? r.flag.replace(/_/g, ' ') : '—'}</p>
+            <p><strong>Proximity status:</strong> {r.dropoff_proximity_status ?? '—'}</p>
+            <p><strong>Distance from destination:</strong> {r.dropoff_distance_from_destination != null ? r.dropoff_distance_from_destination + ' m' : '—'}</p>
+            <p><strong>Position source:</strong> {r.dropoff_distance_source ?? '—'}{r.dropoff_live_accuracy != null ? ' (±' + Math.round(r.dropoff_live_accuracy) + ' m)' : ''}</p>
+            <p><strong>Driver reason:</strong> {r.dropoff_end_reason ? r.dropoff_end_reason.replace(/_/g, ' ') : '—'}</p>
+            <p><strong>Rider response:</strong> {r.dropoff_rider_response ?? '—'}{r.dropoff_rider_responded_at ? ' · ' + Utils.formatDate(r.dropoff_rider_responded_at) : ''}</p>
+          </div>
+        )}
 
         {canAssign && (
           <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-600">

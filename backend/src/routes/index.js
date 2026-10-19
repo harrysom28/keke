@@ -141,6 +141,15 @@ router.post(
   validate,
   rideController.forceCompleteRide
 );
+router.post(
+  '/rides/:rideId/dropoff-confirm',
+  protect,
+  restrictTo('passenger'),
+  validationRules.rideIdParam,
+  validationRules.dropoffConfirm,
+  validate,
+  rideController.confirmDropoff
+);
 router.get('/rides/:rideId', protect, validationRules.rideIdParam, validate, rideController.getRideDetails);
 
 // Driver discovery

@@ -40,6 +40,8 @@ interface Props {
   onTripCompleted?: (snapshot: Record<string, unknown>) => void;
   /** Increment (e.g. from notification deep link) to open the driver chat modal. */
   chatOpenSignal?: number;
+  /** Driver asked to end the trip here / ended it away from the pin: home shows the rider prompt. */
+  onDropoffPrompt?: (kind: string, payload: Record<string, unknown> | null | undefined) => void;
 }
 
 const ActiveRideSheet = ({
@@ -52,6 +54,7 @@ const ActiveRideSheet = ({
   clearMap,
   onTripCompleted,
   chatOpenSignal = 0,
+  onDropoffPrompt,
 }: Props) => {
   const dispatch = useDispatch();
   const { pusherReady } = useContext(AppContext);
@@ -281,6 +284,9 @@ const ActiveRideSheet = ({
   const handleTripResolvedRef = useRef(handleTripResolved);
   handleTripResolvedRef.current = handleTripResolved;
 
+  const onDropoffPromptRef = useRef(onDropoffPrompt);
+  onDropoffPromptRef.current = onDropoffPrompt;
+
   // Subscribe to trip resolution events (force-complete / flagged / completed)
   useEffect(() => {
     if (!pusherReady) return;
@@ -314,6 +320,17 @@ const ActiveRideSheet = ({
       onTripCompleted
     );
 
+    const cleanupDropoffRequest = pusherManager.subscribe(
+      channel,
+      "dropoff_confirm_request",
+      (payload: any) => onDropoffPromptRef.current?.("dropoff_confirm_request", { ...payload, rideId: payload?.rideId ?? activeRideId })
+    );
+    const cleanupDropoffReview = pusherManager.subscribe(
+      channel,
+      "dropoff_review",
+      (payload: any) => onDropoffPromptRef.current?.("dropoff_review", { ...payload, rideId: payload?.rideId ?? activeRideId })
+    );
+
     const cleanupApproaching = pusherManager.subscribe(
       channel,
       "ride:approaching_destination",
@@ -339,6 +356,12 @@ const ActiveRideSheet = ({
       }
       try {
         cleanupApproaching();
+      } catch {
+        // ignore
+      }
+      try {
+        cleanupDropoffRequest();
+        cleanupDropoffReview();
       } catch {
         // ignore
       }

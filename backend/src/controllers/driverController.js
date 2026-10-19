@@ -13,11 +13,25 @@ import Ride from '../models/Ride.js';
 import Payment from '../models/Payment.js';
 import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import VehicleType from '../models/VehicleType.js';
-import { AppError, NotFoundError, ValidationError, ConflictError, AuthorizationError } from '../utils/errors.js';
+import { AppError, NotFoundError, ValidationError, ConflictError, AuthorizationError, RateLimitError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { calculateDistance } from '../utils/geolocation.js';
-import { learnFromRide } from '../services/placeIntelligence.js';
+import {
+  dropoffErrorNumbers,
+  proximityFieldsForCompletion,
+  measureLegacyDropoff,
+  usesCurrentDropoffFlow,
+  DROPOFF_FLAG_UNVERIFIED,
+} from '../utils/dropoffProximity.js';
+import {
+  finalizeDriverCompletion,
+  measureDriverDropoff,
+  notifyRiderDropoffReview,
+  emitTripEvent,
+  formatDistanceForCopy,
+} from '../services/rideCompletionService.js';
+import { getSettings } from '../services/settingsService.js';
 import { getFileUrl, uploadToCloudinary, uploadStreamToCloudinary } from '../services/fileUploadService.js';
 import { cache } from '../config/redis.js';
 import { logRideLifecycle, mapRideStatusForClientApi } from '../utils/rideStatus.js';
@@ -2623,7 +2637,7 @@ export const startRide = asyncHandler(async (req, res) => {
  */
 export const completeRide = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { rideId, paymentStatus } = req.body;
+  const { rideId, paymentStatus, location, reason, dropoff_flow: dropoffFlow } = req.body;
 
   const driver = await Driver.findOne({ user: userId });
   if (!driver) {
@@ -2644,251 +2658,181 @@ export const completeRide = asyncHandler(async (req, res) => {
     throw new ValidationError('Ride is not in progress');
   }
 
-  // ── Dropoff proximity check ──────────────────────────────────────────────
-  const driverDoc = await Driver.findById(ride.driver).select('currentLocation').lean();
-  const driverCoords = driverDoc?.currentLocation?.coordinates; // [lng, lat]
-  const dropoffCoords =
-    ride.dropoffLocation?.coordinates ||
-    (ride.dropoffLocation?.long && ride.dropoffLocation?.lat
-      ? [parseFloat(ride.dropoffLocation.long), parseFloat(ride.dropoffLocation.lat)]
-      : null);
+  let completedRide;
 
-  let dropoffProximityStatus = 'unverifiable';
-  let dropoffDistanceMeters = null;
-
-  if (driverCoords && dropoffCoords) {
-    const lastUpdated = driverDoc?.currentLocation?.lastUpdated;
-    const isStale = lastUpdated && (Date.now() - new Date(lastUpdated).getTime()) > 5 * 60 * 1000;
-
-    if (isStale) {
-      dropoffProximityStatus = 'unverifiable';
-    } else {
-      const toRad = (deg) => (deg * Math.PI) / 180;
-      const R = 6371000;
-      const lat1 = toRad(driverCoords[1]);
-      const lat2 = toRad(dropoffCoords[1]);
-      const dLat = toRad(dropoffCoords[1] - driverCoords[1]);
-      const dLng = toRad(dropoffCoords[0] - driverCoords[0]);
-      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-      dropoffDistanceMeters = Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-
-      const CONFIRMED = 200;
-      const PROBABLE = 500;
-      const BLOCKED = 1000;
-
-      if (dropoffDistanceMeters <= CONFIRMED) {
-        dropoffProximityStatus = 'confirmed';
-      } else if (dropoffDistanceMeters <= PROBABLE) {
-        dropoffProximityStatus = 'probable';
-      } else if (dropoffDistanceMeters <= BLOCKED) {
-        dropoffProximityStatus = 'unlikely';
-        ride.flag = 'dropoff_far_from_destination';
-      } else {
-        const distanceKm = (dropoffDistanceMeters / 1000).toFixed(1);
-        throw new ValidationError(
-          `You are ${distanceKm}km from the destination. Please get closer before ending the trip.`
-        );
-      }
+  if (!usesCurrentDropoffFlow(dropoffFlow)) {
+    // ── Old app builds (no dropoff_flow): the previous rule, unchanged ─────────
+    // They cannot render the reason / ask-rider sheets, so they never get DROPOFF_* codes.
+    const driverDoc = await Driver.findById(ride.driver).select('currentLocation').lean();
+    const legacy = measureLegacyDropoff({ ride, savedLocation: driverDoc?.currentLocation });
+    if (legacy.refused) {
+      const distanceKm = (legacy.distanceMeters / 1000).toFixed(1);
+      throw new ValidationError(
+        `You are ${distanceKm}km from the destination. Please get closer before ending the trip.`
+      );
     }
-  }
-
-  ride.dropoff_proximity_status = dropoffProximityStatus;
-  ride.dropoff_distance_from_destination = dropoffDistanceMeters;
-  // ── End proximity check ──────────────────────────────────────────────────
-
-  ride.status = 'completed';
-  ride.completed_by = 'driver';
-  ride.completion_reason = 'normal';
-  ride.dropOffCompleted = true;
-  ride.completedAt = new Date();
-  const isEscrowWallet =
-    ride.paymentMethod === 'wallet' && ['held', 'charged'].includes(ride.paymentStatus);
-  // Prepaid Paystack card — keep charged until processRidePayment settles + credits driver
-  const isPrepaidCard =
-    ride.paymentMethod === 'card' && ['held', 'charged'].includes(ride.paymentStatus);
-  if (!isEscrowWallet && !isPrepaidCard) {
-    if (ride.paymentMethod === 'cash') {
-      ride.paymentStatus = 'pending';
-    } else {
-      ride.paymentStatus = paymentStatus || 'completed';
-    }
-  }
-
-  ride.statusHistory.push({
-    status: 'completed',
-    timestamp: new Date(),
-    note: 'Ride completed',
-  });
-
-  await ride.save();
-  await ride.populate('rider', 'name phone profileImage rating');
-  await ride.populate('vehicleType');
-
-  // Make driver available again for the next trip
-  const { restoreDriverAvailabilityAfterTrip } = await import('../services/driverAvailabilityService.js');
-  await restoreDriverAvailabilityAfterTrip(driver);
-
-  // Cancel any automation timers for this ride
-  if (global.automationTimers && global.automationTimers.has(rideId)) {
-    const timers = global.automationTimers.get(rideId);
-    timers.forEach(timer => clearTimeout(timer));
-    global.automationTimers.delete(rideId);
-    logger.info(`🧹 Cancelled automation timers for manually completed ride ${rideId}`);
-  }
-
-  // Process payment first
-  let payment = null;
-  try {
-    const { processRidePayment, sendPaymentReceipt } = await import('../services/paymentService.js');
-    const paymentResult = await processRidePayment(ride);
-    
-    // Send receipt if payment was processed
-    if (paymentResult.success && paymentResult.payment && paymentResult.payment.status === 'completed') {
-      payment = paymentResult.payment;
-      await sendPaymentReceipt(ride, payment);
-    }
-  } catch (error) {
-    logger.error(`Payment processing failed for ride ${rideId}: ${error.message}`);
-    // Don't fail the ride completion if payment processing fails
-  }
-
-  // Send real-time notification to rider (after payment processing)
-  const { getSocketService } = await import('../services/socketService.js');
-  const socketService = getSocketService();
-  if (socketService) {
-    await socketService.emitRideCompleted(ride);
-    await socketService.emitRideStatusUpdate(ride, 'completed', driver);
-    try {
-      const payload = { rideId: ride._id.toString(), completedBy: 'driver', fare: ride.fare?.totalFare ?? 0 };
-      socketService.io?.to(`user:${ride.rider._id.toString()}`).emit('trip:completed', payload);
-      socketService.io?.to(`driver:${driver._id.toString()}`).emit('trip:completed', payload);
-      socketService.io?.to(`driver:${userId.toString()}`).emit('trip:completed', payload);
-      const { getPusherService } = await import('../services/pusherService.js');
-      const ps = getPusherService();
-      ps?.pusher?.trigger(`private.ride.${ride._id.toString()}`, 'trip:completed', payload);
-    } catch (e) {
-      logger.debug(`trip:completed emit skipped: ${e.message}`);
-    }
-  }
-
-  try {
-    const { sendToUser } = await import('../services/notificationService.js');
-    const fareAmount = Math.round(Number(ride?.fare?.totalFare || payment?.amount || 0));
-    const driverEarnings = Math.round(
-      Number(ride?.fare?.driverNetAmount ?? ride?.fare?.totalFare ?? 0)
-    );
-    const isCashRide = String(ride.paymentMethod || '').toLowerCase() === 'cash';
-
-    await sendToUser(ride.rider._id, 'rider', {
-      title: 'Ride completed',
-      message: isCashRide
-        ? `Please pay ₦${fareAmount.toLocaleString()} cash to your driver. Thanks for riding with Keke!`
-        : `₦${fareAmount.toLocaleString()} has been deducted from your wallet. Thanks for riding with Keke!`,
-      type: 'alert',
-      priority: 'high',
-      screen: 'home',
-      ride_id: ride._id,
-      action_type: 'navigate',
-      action_payload: { screen: 'RideDetails', rideId: ride._id.toString() },
-      event_key: 'ride_completed',
-      data: { subType: 'ride_completed', rideId: ride._id.toString() },
-    });
-
-    if (isCashRide) {
-      // Cash is collected in person — it does not affect the withdrawable wallet.
-      await sendToUser(userId, 'driver', {
-        title: `Collect ₦${fareAmount.toLocaleString()} cash`,
-        message: `Collect ₦${fareAmount.toLocaleString()} cash from the passenger for this trip.`,
-        type: 'alert',
-        priority: 'high',
-        screen: 'home',
-        ride_id: ride._id,
-        action_type: 'navigate',
-        action_payload: { screen: 'DriverHome', rideId: ride._id.toString() },
-        event_key: 'cash_collection',
-        data: {
-          subType: 'cash_collection',
-          rideId: ride._id.toString(),
-          amountNaira: String(fareAmount),
+    ({ ride: completedRide } = await finalizeDriverCompletion(ride, driver, {
+      paymentStatus,
+      completedBy: 'driver',
+      proximity: {
+        fields: {
+          dropoff_proximity_status: legacy.status,
+          dropoff_distance_from_destination: legacy.distanceMeters,
         },
-      });
-    } else {
-      const walletDoc = await DriverWallet.findOne({ driverId: driver._id }).lean();
-      const pendingBal = Math.round(Number(walletDoc?.pendingBalance ?? 0));
-      const availableBal = Math.round(Number(walletDoc?.availableBalance ?? 0));
+        flag: legacy.flag,
+      },
+    }));
+  } else {
+    // ── Dropoff proximity check (server decides; see utils/dropoffProximity.js) ──
+    const { measure } = await measureDriverDropoff(ride, ride.driver, location);
 
-      await sendToUser(userId, 'driver', {
-        title: `₦${driverEarnings.toLocaleString()} earned from completed trip`,
-        message: `Driver wallet — Pending: ₦${pendingBal.toLocaleString()} · Available: ₦${availableBal.toLocaleString()}.`,
-        type: 'alert',
-        priority: 'high',
-        screen: 'wallet',
-        ride_id: ride._id,
-        action_type: 'navigate',
-        action_payload: { screen: 'wallet', rideId: ride._id.toString() },
-        event_key: 'fare_received',
-        data: {
-          subType: 'fare_received',
-          rideId: ride._id.toString(),
-          amountNaira: String(driverEarnings),
-          pendingBalance: String(pendingBal),
-          availableBalance: String(availableBal),
-        },
+    if (measure.tier === 'rider') {
+      return res.status(409).json({
+        status: 'fail',
+        code: 'DROPOFF_TOO_FAR',
+        message: `You are ${formatDistanceForCopy(measure.distanceMeters)} from the destination. Ask the rider to confirm to end the trip here.`,
+        ...dropoffErrorNumbers(measure),
+        data: dropoffErrorNumbers(measure),
       });
     }
-  } catch (err) {
-    logger.error(`Ride completion notification failed: ${err.message}`);
+
+    if (measure.tier === 'reason' && !reason) {
+      return res.status(409).json({
+        status: 'fail',
+        code: 'DROPOFF_REASON_REQUIRED',
+        message: `You are ${formatDistanceForCopy(measure.distanceMeters)} from the destination. Tell us why you are ending the trip here.`,
+        ...dropoffErrorNumbers(measure),
+        data: dropoffErrorNumbers(measure),
+      });
+    }
+
+    const proximity = proximityFieldsForCompletion(measure, { reason: measure.tier === 'reason' ? reason : null });
+    // ── End proximity check ──────────────────────────────────────────────────
+
+    ({ ride: completedRide } = await finalizeDriverCompletion(ride, driver, {
+      paymentStatus,
+      completedBy: 'driver',
+      proximity,
+    }));
+
+    if (measure.tier === 'reason') {
+      await notifyRiderDropoffReview(completedRide, measure.distanceMeters);
+    }
   }
 
-  // Request rating/review from rider
-  try {
-    const { requestRiderReview } = await import('../services/reviewService.js');
-    await requestRiderReview(ride);
-  } catch (error) {
-    logger.error(`Review request failed for ride ${rideId}: ${error.message}`);
-    // Don't fail the ride completion if review request fails
-  }
-
-  // Check and award driver challenges (gamified tasks)
-  try {
-    const { checkAndAwardTasks } = await import('../services/driverTaskService.js');
-    await checkAndAwardTasks(driver._id, ride);
-  } catch (error) {
-    logger.error(`Driver task check failed for ride ${rideId}: ${error.message}`);
-  }
-
-  logger.info(`Ride ${rideId} completed by driver ${driver._id}`);
-
-  // Self-learning: teach places from completed ride (fire-and-forget)
-  const pickup = ride.pickupLocation;
-  const drop = ride.dropoffLocation;
-  learnFromRide({
-    _id: ride._id.toString(),
-    origin: {
-      lat: pickup?.coordinates?.[1],
-      lng: pickup?.coordinates?.[0],
-      label: pickup?.name || pickup?.address,
-    },
-    destination: {
-      lat: drop?.coordinates?.[1],
-      lng: drop?.coordinates?.[0],
-      label: drop?.name || drop?.address,
-    },
-  }).catch((err) => logger.warn('[Learn]', err.message));
-
-  const { getSettings } = await import('../services/settingsService.js');
   const s = await getSettings();
 
   res.json({
     status: 'success',
     message: 'Ride completed successfully',
     data: {
-      ride: formatRideForDriver(ride),
+      ride: formatRideForDriver(completedRide),
       fareBreakdown: {
-        baseFare: ride.fare?.totalFare ?? 0,
+        baseFare: completedRide.fare?.totalFare ?? 0,
         serviceCharge: s?.fees?.riderServiceCharge ?? 100,
-        total: (ride.fare?.totalFare ?? 0) + (s?.fees?.riderServiceCharge ?? 100),
+        total: (completedRide.fare?.totalFare ?? 0) + (s?.fees?.riderServiceCharge ?? 100),
       },
+    },
+  });
+});
+
+/**
+ * Driver asks the rider to confirm ending the trip here - POST /api/driver/rides/request-dropoff-confirm
+ * Only valid after the server itself measures the driver as outside the free radius
+ * (Tier 2 or Tier 3), so it cannot be used to skip the proximity rules.
+ */
+export const requestDropoffConfirm = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const { rideId, location } = req.body;
+
+  const driver = await Driver.findOne({ user: userId });
+  if (!driver) throw new NotFoundError('Driver profile');
+
+  const ride = await Ride.findById(rideId).populate('rider', 'name phone profileImage rating');
+  if (!ride) throw new NotFoundError('Ride');
+
+  if (ride.driver?.toString() !== driver._id.toString()) {
+    throw new ValidationError('You are not assigned to this ride');
+  }
+  if (ride.status !== 'in-progress') {
+    throw new ValidationError('Ride is not in progress');
+  }
+
+  // One request per 60 s per ride
+  const lastRequestMs = ride.dropoff_confirm_requested_at
+    ? new Date(ride.dropoff_confirm_requested_at).getTime()
+    : null;
+  if (lastRequestMs && Date.now() - lastRequestMs < 60 * 1000) {
+    throw new RateLimitError('You already asked the rider. Please wait a moment before asking again.');
+  }
+
+  const { measure } = await measureDriverDropoff(ride, ride.driver, location);
+  if (measure.tier === 'free' || measure.tier === 'unverifiable') {
+    throw new ConflictError(
+      measure.tier === 'free'
+        ? 'You are close enough to the destination to end the trip yourself.'
+        : 'Your location could not be verified. You can end the trip without rider confirmation.',
+      { code: 'DROPOFF_CONFIRM_NOT_NEEDED' }
+    );
+  }
+
+  const now = new Date();
+  const proximity = proximityFieldsForCompletion(measure);
+  // Record what the server measured now so the later confirmation completes against it.
+  const set = {
+    dropoff_confirm_requested_at: now,
+    dropoff_distance_from_destination: measure.distanceMeters,
+    dropoff_distance_source: measure.source,
+    dropoff_live_accuracy: proximity.fields.dropoff_live_accuracy,
+  };
+  if (measure.unverified) set.flag = DROPOFF_FLAG_UNVERIFIED;
+  await Ride.updateOne({ _id: ride._id, status: 'in-progress' }, { $set: set });
+
+  const distance = formatDistanceForCopy(measure.distanceMeters);
+  const message = "Your driver says you've arrived. End the trip here?";
+  const payload = {
+    subType: 'dropoff_confirm_request',
+    rideId: ride._id.toString(),
+    distanceMeters: measure.distanceMeters,
+    expiresAt: new Date(
+      now.getTime() + Number((await getSettings())?.dropoff?.riderConfirmWindowSeconds ?? 120) * 1000
+    ).toISOString(),
+    message,
+  };
+
+  await emitTripEvent(ride, 'dropoff_confirm_request', payload, { rider: true, driver: false });
+
+  try {
+    const { sendToUser } = await import('../services/notificationService.js');
+    await sendToUser(ride.rider._id, 'rider', {
+      title: 'Have you arrived?',
+      message: `${message} (Driver is about ${distance} from the destination)`,
+      type: 'alert',
+      priority: 'high',
+      screen: 'ride',
+      ride_id: ride._id,
+      action_type: 'navigate',
+      action_payload: { screen: 'ActiveRide', rideId: ride._id.toString() },
+      event_key: 'dropoff_confirm_request',
+      data: {
+        subType: 'dropoff_confirm_request',
+        rideId: ride._id.toString(),
+        distanceMeters: String(measure.distanceMeters),
+        expiresAt: payload.expiresAt,
+      },
+    });
+  } catch (err) {
+    logger.warn(`dropoff_confirm_request push failed for ride ${rideId}: ${err.message}`);
+  }
+
+  res.json({
+    status: 'success',
+    message: 'Rider asked to confirm',
+    data: {
+      rideId: ride._id.toString(),
+      requestedAt: now.toISOString(),
+      expiresAt: payload.expiresAt,
+      distance_meters: measure.distanceMeters,
     },
   });
 });

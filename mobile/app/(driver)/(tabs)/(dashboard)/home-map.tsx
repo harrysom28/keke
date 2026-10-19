@@ -251,6 +251,9 @@ export default function HomeScreen() {
       s.App.pendingOpenChatRideId ?? null
   );
   const [chatOpenKick, setChatOpenKick] = useState(0);
+  // Bumped by ride-channel events so the End Trip sheets in NewRide can react.
+  const [tripCompletedKick, setTripCompletedKick] = useState(0);
+  const [dropoffDeclinedKick, setDropoffDeclinedKick] = useState(0);
   const routeFittedRef = useRef(false);
 
   useEffect(() => {
@@ -660,6 +663,8 @@ export default function HomeScreen() {
     visible: isFocused && !!activeDriverRideChannel,
     onEvent: (event) => {
       const name = (event as { eventName?: string }).eventName;
+      if (name === "trip:completed") setTripCompletedKick((k) => k + 1);
+      if (name === "dropoff_confirm_declined") setDropoffDeclinedKick((k) => k + 1);
       if (
         name &&
         ["trip:flagged", "trip:completed", "trip:force_completed", "ride.completed"].includes(
@@ -692,6 +697,9 @@ export default function HomeScreen() {
           getActiveRide={getActiveRide}
           routeEta={routeEta}
           routeDistance={routeDistance}
+          driverLocation={hasValidLocation ? location : null}
+          tripCompletedSignal={tripCompletedKick}
+          dropoffDeclinedSignal={dropoffDeclinedKick}
           chatOpenSignal={chatOpenKick}
           onOfferResolved={() =>
             dispatch(setAppData({ driverPendingRideOffer: false }))

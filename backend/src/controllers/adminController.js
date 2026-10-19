@@ -22,6 +22,7 @@ import RideAuditLog from '../models/RideAuditLog.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
 import { getOrCreateWallet } from '../services/walletService.js';
 import { creditRiderBalance, adjustRiderBalance, getRiderBalance } from '../services/riderBalanceService.js';
+import { validateDropoffUpdate } from '../services/settingsService.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import PaystackUnmatchedPayment from '../models/PaystackUnmatchedPayment.js';
 import { generateTokenPair, generateAccessToken } from '../utils/jwt.js';
@@ -456,6 +457,7 @@ export const getSettings = asyncHandler(async (req, res) => {
     maxDriverPayoutsPerDay: 3,
   };
   const defaultArrival = { maxRadiusMeters: 150 };
+  const defaultDropoff = { freeRadiusMeters: 500, confirmRadiusMeters: 3000, liveFixMaxAgeSeconds: 30, riderConfirmWindowSeconds: 120 };
   const defaultWallet = {
     minTopupAmount: 500,
     minWithdrawAmount: 1000,
@@ -468,6 +470,7 @@ export const getSettings = asyncHandler(async (req, res) => {
       fees: doc.fees ? { ...defaultFees, ...doc.fees.toObject?.() || doc.fees } : defaultFees,
       cancellation: doc.cancellation ? { ...defaultCancellation, ...doc.cancellation.toObject?.() || doc.cancellation } : defaultCancellation,
       arrival: doc.arrival ? { ...defaultArrival, ...doc.arrival.toObject?.() || doc.arrival } : defaultArrival,
+      dropoff: doc.dropoff ? { ...defaultDropoff, ...doc.dropoff.toObject?.() || doc.dropoff } : defaultDropoff,
       wallet: doc.wallet ? { ...defaultWallet, ...doc.wallet.toObject?.() || doc.wallet } : defaultWallet,
       feesLastUpdatedAt: doc.feesLastUpdatedAt || null,
       alerts: doc.alerts || {
@@ -526,7 +529,7 @@ export const updatePaymentMethodSettingsHandler = asyncHandler(async (req, res) 
  * Update admin settings - PATCH /api/admin/settings
  */
 export const updateSettings = asyncHandler(async (req, res) => {
-  const { alerts, referral, topup, dvaPreferredBank, driverTasks, driverChallengeDefs, pricing, fees, cancellation, arrival, wallet } = req.body;
+  const { alerts, referral, topup, dvaPreferredBank, driverTasks, driverChallengeDefs, pricing, fees, cancellation, arrival, dropoff, wallet } = req.body;
   let doc = await AdminSettings.findOne({ key: 'default' });
   if (!doc) {
     doc = await AdminSettings.create({ key: 'default' });
@@ -652,6 +655,14 @@ export const updateSettings = asyncHandler(async (req, res) => {
     }
     doc.markModified('arrival');
   }
+  if (dropoff && typeof dropoff === 'object') {
+    // Rejects (400) instead of silently ignoring: a bad radius here decides whether drivers can end trips.
+    const current = doc.dropoff?.toObject?.() || doc.dropoff || {};
+    const checked = validateDropoffUpdate(dropoff, current);
+    if (checked.error) throw new ValidationError(checked.error);
+    doc.dropoff = checked.value;
+    doc.markModified('dropoff');
+  }
   if (wallet && typeof wallet === 'object') {
     if (!doc.wallet) doc.wallet = {};
     if (wallet.minTopupAmount !== undefined) {
@@ -670,7 +681,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
   }
   await doc.save();
   await invalidateAdminSettingsCache();
-  if (fees || cancellation || arrival || wallet) {
+  if (fees || cancellation || arrival || dropoff || wallet) {
     const { invalidateCache } = await import('../services/settingsService.js');
     invalidateCache();
   }
@@ -688,6 +699,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
       fees: doc.fees,
       cancellation: doc.cancellation,
       arrival: doc.arrival,
+      dropoff: doc.dropoff,
       wallet: doc.wallet,
       feesLastUpdatedAt: doc.feesLastUpdatedAt,
     },
@@ -1901,7 +1913,7 @@ export const getDriverRides = asyncHandler(async (req, res) => {
  * List rides - GET /api/admin/rides
  */
 export const listRides = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, status, dateFrom, dateTo, search, arrival_flagged } = req.query;
+  const { page = 1, limit = 20, status, dateFrom, dateTo, search, arrival_flagged, flag } = req.query;
   const skip = (page - 1) * limit;
 
   const filter = {};
@@ -1919,6 +1931,15 @@ export const listRides = asyncHandler(async (req, res) => {
   // Optional: surface flagged arrivals in admin dashboard filtering
   if (arrival_flagged === 'true' || arrival_flagged === true) {
     filter.arrival_flagged = true;
+  }
+
+  // Optional: filter by ride.flag (only the trip-ending flags are exposed here)
+  const DROPOFF_FILTER_FLAGS = ['dropoff_far_from_destination', 'dropoff_unverified', 'dropoff_disputed'];
+  if (flag) {
+    if (!DROPOFF_FILTER_FLAGS.includes(String(flag))) {
+      throw new ValidationError('Unknown flag filter');
+    }
+    filter.flag = String(flag);
   }
 
   let ridesQuery = Ride.find(filter)
@@ -3638,6 +3659,16 @@ const formatRideResponse = (ride) => {
     created_at: ride.createdAt,
     completed_at: ride.completedAt,
     cancelled_at: ride.cancellation?.cancelledAt || null,
+    flag: ride.flag ?? null,
+    completed_by: ride.completed_by ?? null,
+    dropoff_proximity_status: ride.dropoff_proximity_status ?? null,
+    dropoff_distance_from_destination: ride.dropoff_distance_from_destination ?? null,
+    dropoff_distance_source: ride.dropoff_distance_source ?? null,
+    dropoff_live_accuracy: ride.dropoff_live_accuracy ?? null,
+    dropoff_end_reason: ride.dropoff_end_reason ?? null,
+    dropoff_rider_response: ride.dropoff_rider_response ?? null,
+    dropoff_rider_responded_at: ride.dropoff_rider_responded_at ?? null,
+    dropoff_confirm_requested_at: ride.dropoff_confirm_requested_at ?? null,
   };
 };
 

@@ -19,6 +19,7 @@ import {
   DRIVER_MARK_PICKUP_ARRIVED,
   DRIVER_PAY_CHANGE,
   DRIVER_REJECT_RIDE,
+  DRIVER_REQUEST_DROPOFF_CONFIRM,
   DRIVER_START_RIDE,
 } from "@/constants";
 import React, {
@@ -37,7 +38,15 @@ import RequestChangeModal from "./new-ride/payChangeSheet";
 import { TDriverActiveRide } from "@/types";
 import axios from "axios";
 import { showMessage } from "react-native-flash-message";
-import { getErrorMessage } from "@/utils/errorHandler";
+import * as Location from "expo-location";
+import { getApiErrorCode, getErrorMessage } from "@/utils/errorHandler";
+import { haversineMeters } from "@/utils/haversine";
+import {
+  DropoffReasonSheet,
+  DropoffTooFarSheet,
+  formatDropoffDistance,
+  type DropoffReasonKey,
+} from "@/components/ride-in-transit/DropoffSheets";
 import tw from "@/lib/tailwind";
 import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -83,6 +92,17 @@ interface Props {
   /** ETA/distance from live route (driver → pickup or → dropoff). */
   routeEta?: string;
   routeDistance?: string;
+  /** Driver's live position from the shared location source (useCurrentLocation). */
+  driverLocation?: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number | null;
+    speed?: number | null;
+  } | null;
+  /** Increments when the server announces the trip ended (`trip:completed`). */
+  tripCompletedSignal?: number;
+  /** Increments when the rider answers "Not yet" to a dropoff confirm request. */
+  dropoffDeclinedSignal?: number;
   /** Increment to open the chat modal (notification deep link). */
   chatOpenSignal?: number;
   /** Clear “new offer” tab badge after accept/reject. */
@@ -108,6 +128,9 @@ const NewRide = ({
   getActiveRide,
   routeEta = "",
   routeDistance = "",
+  driverLocation = null,
+  tripCompletedSignal = 0,
+  dropoffDeclinedSignal = 0,
   chatOpenSignal = 0,
   onOfferResolved,
   onDeclineOffer,
@@ -232,22 +255,6 @@ const NewRide = ({
   const arrivalTimeLabel = routeEta || data?.arrival_time || "";
   const arrivalDistLabel = routeDistance || data?.arrival_distance || "";
 
-  /**
-   * Best-effort distance-to-dropoff in meters, parsed from the live route distance string
-   * (e.g. "2.5 km", "850 m"). Only meaningful while the trip is underway because that's
-   * when `routeDistance` represents driver → dropoff.
-   */
-  const distanceToDropoff = useMemo<number | null>(() => {
-    const raw = String(routeDistance || "").trim();
-    if (!raw) return null;
-    const num = parseFloat(raw);
-    if (!Number.isFinite(num)) return null;
-    const lower = raw.toLowerCase();
-    if (lower.includes("km")) return Math.round(num * 1000);
-    if (lower.includes("m")) return Math.round(num);
-    return null;
-  }, [routeDistance]);
-
   const liveRideState = getRideStateFromData({
     ...(data as any),
     routeEta,
@@ -263,6 +270,45 @@ const NewRide = ({
 
   const inTripProgress =
     liveRideState === "trip_started" || liveRideState === "near_destination";
+
+  // Destination as plain numbers (server sends strings or GeoJSON depending on the endpoint).
+  const destinationLatLng = useMemo(() => {
+    const dest = (data as any)?.dropoffLocation || (data as any)?.destination;
+    const lat = parseFloat(String(dest?.coordinates?.[1] ?? dest?.lat ?? dest?.latitude ?? ""));
+    const lng = parseFloat(String(dest?.coordinates?.[0] ?? dest?.long ?? dest?.lng ?? dest?.longitude ?? ""));
+    return Number.isFinite(lat) && Number.isFinite(lng) ? { latitude: lat, longitude: lng } : null;
+  }, [data]);
+
+  // Straight-line distance, information only. The server alone decides whether the trip may end.
+  const straightLineMeters = useMemo<number | null>(() => {
+    if (!inTripProgress || !destinationLatLng || !driverLocation) return null;
+    if (!driverLocation.latitude && !driverLocation.longitude) return null;
+    return haversineMeters(
+      { latitude: driverLocation.latitude, longitude: driverLocation.longitude },
+      destinationLatLng
+    );
+  }, [inTripProgress, destinationLatLng, driverLocation?.latitude, driverLocation?.longitude]);
+
+  // Arrival nudge: within 300 m, or standing still (< 1 m/s) for 30 s within 500 m.
+  const [stationaryNudge, setStationaryNudge] = useState(false);
+  const driverSpeed = driverLocation?.speed;
+  const standingStillNear =
+    straightLineMeters != null &&
+    straightLineMeters <= 500 &&
+    typeof driverSpeed === "number" &&
+    driverSpeed >= 0 &&
+    driverSpeed < 1;
+  useEffect(() => {
+    if (!standingStillNear) {
+      setStationaryNudge(false);
+      return;
+    }
+    const t = setTimeout(() => setStationaryNudge(true), 30000);
+    return () => clearTimeout(t);
+  }, [standingStillNear]);
+  const nudgeEndTrip =
+    inTripProgress &&
+    ((straightLineMeters != null && straightLineMeters <= 300) || stationaryNudge);
 
   const openNavigation = async () => {
     const toPickup = liveRideState === "heading_to_pickup";
@@ -425,38 +471,146 @@ const NewRide = ({
       .catch(handleRideApiError)
       .finally(() => setLoading((prev) => ({ ...prev, start: false })));
   };
-  const CompleteRide = () => {
+  // ── Ending the trip ─────────────────────────────────────────────────────────
+  // The server decides if the trip may end here. We only report where the driver is.
+  type DropoffPrompt =
+    | { kind: "reason"; distance: number | null }
+    | { kind: "too_far"; distance: number | null; waiting: boolean };
+  const [dropoffPrompt, setDropoffPrompt] = useState<DropoffPrompt | null>(null);
+  const [dropoffBusy, setDropoffBusy] = useState(false);
+  const waitingBaselineRef = useRef(0);
+
+  /** Fresh GPS fix (5 s cap) → last known fix if recent → nothing (server falls back to saved location). */
+  const getEndTripFix = async () => {
+    const toPayload = (pos: Location.LocationObject) => ({
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracy: pos.coords.accuracy ?? undefined,
+      capturedAt: Date.now(),
+      // expo-location reports `mocked` on the location object (Android); tolerate it on coords too.
+      mocked: pos.mocked ?? (pos.coords as { mocked?: boolean }).mocked ?? false,
+    });
+    try {
+      const fresh = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+      if (fresh) return toPayload(fresh);
+    } catch {
+      // fall through to last known
+    }
+    try {
+      const last = await Location.getLastKnownPositionAsync({ maxAge: 30000 });
+      if (last) return { ...toPayload(last), capturedAt: last.timestamp };
+    } catch {
+      // no location available
+    }
+    return undefined;
+  };
+
+  const finishTripUi = (message?: string) => {
+    setDropoffPrompt(null);
+    onTripCompleted?.({
+      rideId,
+      cost: String(fareDisplay ?? ""),
+      paymentType: payment_type,
+      passengerName,
+    });
+    handleBack();
+    if (message) showMessage({ type: "success", message });
+    getActiveRide();
+  };
+
+  const CompleteRide = (reason?: DropoffReasonKey) => {
     if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, complete: true }));
-    axios
-      .post(DRIVER_COMPLETE_RIDE, { rideId }, apiConfig)
+    if (reason) setDropoffBusy(true);
+    getEndTripFix()
+      .then((location) =>
+        axios.post(
+          DRIVER_COMPLETE_RIDE,
+          {
+            rideId,
+            // Tells the server this build can show the reason / ask-rider sheets.
+            dropoff_flow: 2,
+            ...(location ? { location } : {}),
+            ...(reason ? { reason } : {}),
+          },
+          apiConfig
+        )
+      )
       .then(({ data }) => {
         // Hand off to the layout-level Trip Completed / Confirm Payment modal,
         // which survives this sheet being closed when the ride goes terminal.
-        onTripCompleted?.({
-          rideId,
-          cost: String(fareDisplay ?? ""),
-          paymentType: payment_type,
-          passengerName,
-        });
-        handleBack();
-        showMessage({ type: "success", message: data?.message });
-        getActiveRide();
+        finishTripUi(data?.message);
       })
       .catch((err: any) => {
-        const msg: string =
-          err?.response?.data?.message ||
-          err?.response?.data?.error ||
-          err?.message ||
-          "";
-        if (/from the destination/i.test(msg)) {
-          Alert.alert("Too far from destination", msg, [{ text: "OK" }]);
+        const code = getApiErrorCode(err);
+        const body = err?.response?.data;
+        const distance =
+          typeof body?.distance_meters === "number" ? body.distance_meters : null;
+        if (err?.response?.status === 409 && code === "DROPOFF_REASON_REQUIRED") {
+          setDropoffPrompt({ kind: "reason", distance });
+          return;
+        }
+        if (err?.response?.status === 409 && code === "DROPOFF_TOO_FAR") {
+          setDropoffPrompt({ kind: "too_far", distance, waiting: false });
           return;
         }
         handleRideApiError(err);
       })
-      .finally(() => setLoading((prev) => ({ ...prev, complete: false })));
+      .finally(() => {
+        setLoading((prev) => ({ ...prev, complete: false }));
+        setDropoffBusy(false);
+      });
   };
+
+  const AskRiderToConfirm = async () => {
+    if (!guardRideId()) return;
+    setDropoffBusy(true);
+    try {
+      const location = await getEndTripFix();
+      await axios.post(
+        DRIVER_REQUEST_DROPOFF_CONFIRM,
+        { rideId, ...(location ? { location } : {}) },
+        apiConfig
+      );
+      waitingBaselineRef.current = tripCompletedSignal;
+      setDropoffPrompt((p) => (p?.kind === "too_far" ? { ...p, waiting: true } : p));
+    } catch (err: any) {
+      const code = getApiErrorCode(err);
+      if (err?.response?.status === 429) {
+        // Already asked within the last minute: keep waiting for the same request.
+        waitingBaselineRef.current = tripCompletedSignal;
+        setDropoffPrompt((p) => (p?.kind === "too_far" ? { ...p, waiting: true } : p));
+      } else if (code === "DROPOFF_CONFIRM_NOT_NEEDED") {
+        // Server now measures us close enough: just end the trip.
+        setDropoffPrompt(null);
+        CompleteRide();
+      } else {
+        handleRideApiError(err);
+      }
+    } finally {
+      setDropoffBusy(false);
+    }
+  };
+
+  // Rider confirmed from their phone: the server ended the trip and announced it.
+  useEffect(() => {
+    if (dropoffPrompt?.kind !== "too_far" || !dropoffPrompt.waiting) return;
+    if (tripCompletedSignal > waitingBaselineRef.current) {
+      finishTripUi();
+    }
+  }, [tripCompletedSignal]);
+
+  // Rider said "Not yet".
+  const lastDeclinedRef = useRef(dropoffDeclinedSignal);
+  useEffect(() => {
+    if (dropoffDeclinedSignal === lastDeclinedRef.current) return;
+    lastDeclinedRef.current = dropoffDeclinedSignal;
+    setDropoffPrompt((p) => (p?.kind === "too_far" ? { ...p, waiting: false } : p));
+    showMessage({ type: "info", message: "Your rider says not yet." });
+  }, [dropoffDeclinedSignal]);
   const PayChange = (amount: string) => {
     if (!guardRideId()) return;
     setLoading((prev) => ({ ...prev, change: true }));
@@ -509,6 +663,21 @@ const NewRide = ({
         handlePay={(amount) => PayChange(amount)}
         data={data}
         loading={loading.change}
+      />
+      <DropoffReasonSheet
+        visible={dropoffPrompt?.kind === "reason"}
+        distanceMeters={dropoffPrompt?.distance ?? null}
+        busy={dropoffBusy}
+        onPick={(reason) => CompleteRide(reason)}
+        onClose={() => setDropoffPrompt(null)}
+      />
+      <DropoffTooFarSheet
+        visible={dropoffPrompt?.kind === "too_far"}
+        distanceMeters={dropoffPrompt?.distance ?? null}
+        waiting={dropoffPrompt?.kind === "too_far" && dropoffPrompt.waiting}
+        busy={dropoffBusy}
+        onAskRider={AskRiderToConfirm}
+        onClose={() => setDropoffPrompt(null)}
       />
       <View
         onLayout={onBodyLayout}
@@ -682,43 +851,26 @@ const NewRide = ({
         >
           {accepted ? (
             <>
-              {(() => {
-                const inTrip =
-                  liveRideState === "trip_started" || liveRideState === "near_destination";
-                const isTooFarFromDropoff =
-                  inTrip && typeof distanceToDropoff === "number" && distanceToDropoff > 1000;
-                return isTooFarFromDropoff ? (
-                  <Text
-                    style={{
-                      color: "#EF4444",
-                      fontSize: 12,
-                      textAlign: "center",
-                      marginBottom: 8,
-                    }}
-                  >
-                    {`${(distanceToDropoff! / 1000).toFixed(1)}km from destination — get closer to end trip`}
-                  </Text>
-                ) : null;
-              })()}
+              {straightLineMeters != null ? (
+                <Text
+                  style={{
+                    color: "#6B7280",
+                    fontSize: 12,
+                    textAlign: "center",
+                    marginBottom: 8,
+                  }}
+                >
+                  {`${formatDropoffDistance(straightLineMeters)} from destination`}
+                </Text>
+              ) : null}
               <DriverActionButtons
                 compact
                 state={liveRideState}
+                highlightComplete={nudgeEndTrip}
                 onOpenNavigation={openNavigation}
                 onMarkArrived={MarkPickupArrived}
                 onStartTrip={StartRide}
                 onCompleteTrip={() => {
-                  const inTrip =
-                    liveRideState === "trip_started" || liveRideState === "near_destination";
-                  const isTooFarFromDropoff =
-                    inTrip && typeof distanceToDropoff === "number" && distanceToDropoff > 1000;
-                  if (isTooFarFromDropoff) {
-                    Alert.alert(
-                      "Too far from destination",
-                      `You are ${(distanceToDropoff! / 1000).toFixed(1)}km away. Get closer before ending the trip.`,
-                      [{ text: "OK" }]
-                    );
-                    return;
-                  }
                   Alert.alert("Complete Trip", "Have you arrived at the destination?", [
                     { text: "Not yet", style: "cancel" },
                     {

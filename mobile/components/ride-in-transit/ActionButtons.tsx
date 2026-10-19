@@ -91,6 +91,7 @@ export function DriverActionButtons({
   onCancel,
   loading,
   compact = false,
+  highlightComplete = false,
 }: {
   state: RideState;
   onOpenNavigation: () => void;
@@ -103,6 +104,8 @@ export function DriverActionButtons({
   loading?: { arrived?: boolean; start?: boolean; complete?: boolean };
   /** Drop outer padding when rendered inside a sheet footer. */
   compact?: boolean;
+  /** Driver looks to have arrived: emphasise the End Trip button. Never disables anything. */
+  highlightComplete?: boolean;
 }) {
   const primary = useMemo(() => {
     if (state === "heading_to_pickup") return { label: "Open Navigation", onPress: onOpenNavigation };
@@ -120,11 +123,15 @@ export function DriverActionButtons({
     return { label: "Cancel", onPress: onCancel, busy: false };
   }, [state, onMarkArrived, onOpenNavigation, onCancel, loading?.arrived]);
 
+  const nudge =
+    highlightComplete && (state === "trip_started" || state === "near_destination");
+
   return (
     <View style={[styles.wrap, compact && styles.wrapCompact]}>
+      {nudge ? <Text style={styles.nudgeText}>Arrived? Tap to end trip</Text> : null}
       <TouchableOpacity
         onPress={primary.onPress}
-        style={styles.primaryBtn}
+        style={[styles.primaryBtn, nudge && styles.primaryBtnNudge]}
         activeOpacity={0.9}
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
@@ -208,6 +215,19 @@ const styles = StyleSheet.create({
     minHeight: 48,
     justifyContent: "center",
     marginBottom: 10,
+  },
+  primaryBtnNudge: {
+    borderWidth: 3,
+    borderColor: "#BBF7D0",
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  nudgeText: {
+    textAlign: "center",
+    fontSize: 13,
+    color: BRAND_GREEN,
+    fontFamily: "RobotoMedium",
   },
   primaryRow: {
     flexDirection: "row",
