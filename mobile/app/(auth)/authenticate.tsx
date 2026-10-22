@@ -1,5 +1,6 @@
 import { ActivityIndicator, Text, TouchableOpacity } from "react-native";
 import { AuthState, updateRefreshToken, updateToken, updateUser } from "@/store/AuthSlice";
+import { rememberInviteFromAuth } from "@/utils/inviteCache";
 import React, { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -116,6 +117,7 @@ const Authenticate = () => {
         if (data?.data?.user) {
           dispatch(updateUser({ profile: data.data.user }));
         }
+        await rememberInviteFromAuth(data);
         if (registration?.type === "2") {
           router.navigate({
             pathname: "/driverinfo",

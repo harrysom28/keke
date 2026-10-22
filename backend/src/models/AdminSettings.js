@@ -22,6 +22,7 @@ const adminSettingsSchema = new mongoose.Schema(
       cashAmount: { type: Number, default: 500 },
       freeRideAmount: { type: Number, default: 1000 },
       description: { type: String, default: 'Invite friends! When they complete signup and their first ride, you both get a reward.' },
+      updatedAt: { type: Date, default: null },
     },
     topup: {
       bankName: { type: String, default: null },

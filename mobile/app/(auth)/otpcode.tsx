@@ -18,6 +18,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 
 import { AuthState, updateRegistration, updateToken, updateRefreshToken, updateUser } from "@/store/AuthSlice";
+import { rememberInviteFromAuth } from "@/utils/inviteCache";
 import { OtpInput } from "react-native-otp-entry";
 import apiClient from "@/utils/apiClient";
 import { getUniqueId } from "react-native-device-info";
@@ -132,6 +133,7 @@ const OtpCode = () => {
         if (data?.data?.user) {
           dispatch(updateUser({ profile: data.data.user }));
         }
+        await rememberInviteFromAuth(data);
         if (data?.data?.needs_onboarding) {
           const role = data?.data?.user?.role;
           if (role === "driver") {

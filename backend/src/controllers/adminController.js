@@ -422,6 +422,7 @@ export const getSettings = asyncHandler(async (req, res) => {
     cashAmount: 500,
     freeRideAmount: 1000,
     description: "Invite friends! When they complete signup and their first ride, you both get a reward.",
+    updatedAt: null,
   };
   const defaultDriverTasks = {
     first_ride_today: 200,
@@ -563,6 +564,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
     if (referral.cashAmount != null) doc.referral.cashAmount = Math.max(0, parseFloat(referral.cashAmount) || 0);
     if (referral.freeRideAmount != null) doc.referral.freeRideAmount = Math.max(0, parseFloat(referral.freeRideAmount) || 0);
     if (referral.description != null) doc.referral.description = String(referral.description).trim() || doc.referral.description;
+    doc.referral.updatedAt = new Date();
     doc.markModified('referral');
   }
   if (topup) {

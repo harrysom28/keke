@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { generateUniqueReferralCode } from '../utils/referralCode.js';
 
 const userSchema = new mongoose.Schema(
   {
@@ -368,20 +369,10 @@ userSchema.pre('save', function (next) {
   next();
 });
 
-// Generate referral code before saving
-userSchema.pre('save', async function (next) {
-  if (!this.referralCode && this.role === 'passenger') {
-    const randomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const existingUser = await mongoose.model('User').findOne({ referralCode: randomCode });
-    
-    if (!existingUser) {
-      this.referralCode = randomCode;
-    } else {
-      // Regenerate if collision (unlikely but handle it)
-      this.referralCode = Math.random().toString(36).substring(2, 10).toUpperCase();
-    }
-  }
-  next();
+// Passengers get a code on create. Collisions retry inside generateUniqueReferralCode.
+userSchema.pre('save', async function () {
+  if (this.referralCode || this.role !== 'passenger') return;
+  this.referralCode = await generateUniqueReferralCode();
 });
 
 // Every rider gets exactly one wallet at creation (rider wallet service is idempotent and race-safe).

@@ -8,6 +8,11 @@ import { NotFoundError, ValidationError, ConflictError, AuthenticationError } fr
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { normalizePhone, phoneVariants } from '../utils/phone.js';
+import AdminSettings from '../models/AdminSettings.js';
+import {
+  assignReferralCodeIfMissing,
+  referralRewardFromSettings,
+} from '../utils/referralCode.js';
 
 /**
  * Update profile - PATCH /api/user/profile/update-details
@@ -263,23 +268,26 @@ function buildReferralUrl(referralCode) {
 export const getReferralCode = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
-  const user = await User.findById(userId);
+  let user = await User.findById(userId);
   if (!user) {
     throw new NotFoundError('User');
   }
 
-  // Generate referral code if not exists
-  if (!user.referralCode && user.role === 'passenger') {
-    const randomCode = Math.random().toString(36).substring(2, 10).toUpperCase();
-    user.referralCode = randomCode;
-    await user.save();
+  if (!user.referralCode) {
+    user = await assignReferralCodeIfMissing(userId);
+    if (!user) {
+      throw new NotFoundError('User');
+    }
   }
+
+  const settings = await AdminSettings.findOne({ key: 'default' }).lean();
 
   res.json({
     status: 'success',
     data: {
       referral_code: user.referralCode || null,
       referral_url: buildReferralUrl(user.referralCode),
+      ...referralRewardFromSettings(settings),
     },
   });
 });

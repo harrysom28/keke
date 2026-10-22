@@ -14,6 +14,7 @@ import { updateToken } from "@/store/AuthSlice";
 import { useDispatch } from "react-redux";
 import { useState } from "react";
 import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
+import { rememberInviteFromAuth } from "@/utils/inviteCache";
 
 const GoogleAuthButton = () => {
   const [loading, setLoading] = useState(false);
@@ -45,6 +46,7 @@ const GoogleAuthButton = () => {
         .then(async ({ data }) => {
           console.log(data);
           dispatch(updateToken(data?.authorisation?.token));
+          await rememberInviteFromAuth(data);
 
           if (data?.message === "register") {
             router.navigate({

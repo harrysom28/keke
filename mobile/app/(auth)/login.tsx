@@ -24,6 +24,7 @@ import { useDispatch } from "react-redux";
 import { updateRefreshToken, updateToken, updateUser } from "@/store/AuthSlice";
 import { validators } from "@/utils/formValidators";
 import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
+import { rememberInviteFromAuth } from "@/utils/inviteCache";
 
 const LOGIN_MODES = ["Phone OTP", "Email & Password"] as const;
 type LoginMode = (typeof LOGIN_MODES)[number];
@@ -67,6 +68,7 @@ const Login = () => {
     if (data?.data?.user) {
       dispatch(updateUser({ profile: data.data.user }));
     }
+    await rememberInviteFromAuth(data);
     const role = data?.data?.user?.role;
     const purpose = role === "driver" ? "driver" : "rider";
     if (!data?.data?.needs_onboarding) {
