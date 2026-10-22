@@ -10,7 +10,7 @@ import {
   dispatchRide,
   notifyNoDriverFound,
 } from './driverNotificationService.js';
-import { RIDER_MATCH_SEARCH_RADIUS_KM } from '../utils/driverSearchRadius.js';
+import { getSearchRadiusKm } from '../utils/driverSearchRadius.js';
 
 /**
  * @param {string|import('mongoose').Types.ObjectId} rideId
@@ -75,7 +75,7 @@ export async function startRideSearchAfterCardPayment(rideId) {
   if (matchedDrivers.length === 0) {
     matchedDrivers = await rideMatchingService.findAndMatchDrivers(
       ride,
-      RIDER_MATCH_SEARCH_RADIUS_KM,
+      await getSearchRadiusKm({ phase: 'dispatch', attempts: 0 }),
       5
     );
   }

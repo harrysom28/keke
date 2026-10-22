@@ -22,7 +22,7 @@ import RideAuditLog from '../models/RideAuditLog.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
 import { getOrCreateWallet } from '../services/walletService.js';
 import { creditRiderBalance, adjustRiderBalance, getRiderBalance } from '../services/riderBalanceService.js';
-import { validateDropoffUpdate } from '../services/settingsService.js';
+import { validateDropoffUpdate, validateDispatchUpdate } from '../services/settingsService.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import PaystackUnmatchedPayment from '../models/PaystackUnmatchedPayment.js';
 import { generateTokenPair, generateAccessToken } from '../utils/jwt.js';
@@ -459,6 +459,14 @@ export const getSettings = asyncHandler(async (req, res) => {
   };
   const defaultArrival = { maxRadiusMeters: 150 };
   const defaultDropoff = { freeRadiusMeters: 500, confirmRadiusMeters: 3000, liveFixMaxAgeSeconds: 30, riderConfirmWindowSeconds: 120 };
+  const defaultDispatch = {
+    previewRadiusKm: 10,
+    round1RadiusKm: 10,
+    round2RadiusKm: 12,
+    round3RadiusKm: 15,
+    assignRadiusKm: 10,
+    locationFreshnessSeconds: 300,
+  };
   const defaultWallet = {
     minTopupAmount: 500,
     minWithdrawAmount: 1000,
@@ -472,6 +480,7 @@ export const getSettings = asyncHandler(async (req, res) => {
       cancellation: doc.cancellation ? { ...defaultCancellation, ...doc.cancellation.toObject?.() || doc.cancellation } : defaultCancellation,
       arrival: doc.arrival ? { ...defaultArrival, ...doc.arrival.toObject?.() || doc.arrival } : defaultArrival,
       dropoff: doc.dropoff ? { ...defaultDropoff, ...doc.dropoff.toObject?.() || doc.dropoff } : defaultDropoff,
+      dispatch: doc.dispatch ? { ...defaultDispatch, ...doc.dispatch.toObject?.() || doc.dispatch } : defaultDispatch,
       wallet: doc.wallet ? { ...defaultWallet, ...doc.wallet.toObject?.() || doc.wallet } : defaultWallet,
       feesLastUpdatedAt: doc.feesLastUpdatedAt || null,
       alerts: doc.alerts || {
@@ -530,7 +539,7 @@ export const updatePaymentMethodSettingsHandler = asyncHandler(async (req, res) 
  * Update admin settings - PATCH /api/admin/settings
  */
 export const updateSettings = asyncHandler(async (req, res) => {
-  const { alerts, referral, topup, dvaPreferredBank, driverTasks, driverChallengeDefs, pricing, fees, cancellation, arrival, dropoff, wallet } = req.body;
+  const { alerts, referral, topup, dvaPreferredBank, driverTasks, driverChallengeDefs, pricing, fees, cancellation, arrival, dropoff, dispatch, wallet } = req.body;
   let doc = await AdminSettings.findOne({ key: 'default' });
   if (!doc) {
     doc = await AdminSettings.create({ key: 'default' });
@@ -664,6 +673,13 @@ export const updateSettings = asyncHandler(async (req, res) => {
     doc.dropoff = checked.value;
     doc.markModified('dropoff');
   }
+  if (dispatch && typeof dispatch === 'object') {
+    const current = doc.dispatch?.toObject?.() || doc.dispatch || {};
+    const checked = validateDispatchUpdate(dispatch, current);
+    if (checked.error) throw new ValidationError(checked.error);
+    doc.dispatch = checked.value;
+    doc.markModified('dispatch');
+  }
   if (wallet && typeof wallet === 'object') {
     if (!doc.wallet) doc.wallet = {};
     if (wallet.minTopupAmount !== undefined) {
@@ -682,7 +698,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
   }
   await doc.save();
   await invalidateAdminSettingsCache();
-  if (fees || cancellation || arrival || dropoff || wallet) {
+  if (fees || cancellation || arrival || dropoff || dispatch || wallet) {
     const { invalidateCache } = await import('../services/settingsService.js');
     invalidateCache();
   }
@@ -701,6 +717,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
       cancellation: doc.cancellation,
       arrival: doc.arrival,
       dropoff: doc.dropoff,
+      dispatch: doc.dispatch,
       wallet: doc.wallet,
       feesLastUpdatedAt: doc.feesLastUpdatedAt,
     },

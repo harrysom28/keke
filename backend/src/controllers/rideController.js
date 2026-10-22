@@ -41,8 +41,7 @@ import { resolvePromoCodeForRide, riderFareAfterDiscount } from '../services/pro
 import SupportTicket from '../models/SupportTicket.js';
 import { logRideAudit } from '../services/rideAuditLogService.js';
 import {
-  RIDER_MATCH_SEARCH_RADIUS_KM,
-  RIDER_PREVIEW_SEARCH_RADIUS_KM,
+  getSearchRadiusKm,
   resolveDispatchSearchRadiusKm,
 } from '../utils/driverSearchRadius.js';
 
@@ -383,7 +382,7 @@ export async function createRequestedRide(req, res) {
     } else {
       matchedDrivers = await rideMatchingService.findAndMatchDrivers(
         ride,
-        RIDER_MATCH_SEARCH_RADIUS_KM,
+        await getSearchRadiusKm({ phase: 'dispatch', attempts: 0 }),
         5
       );
     }
@@ -425,7 +424,7 @@ export async function createRequestedRide(req, res) {
       ? 'Ride created. Complete card payment to find a driver.'
       : 'Ride requested successfully',
     data: {
-      ride: formatRideResponse(ride),
+      ride: await formatRideResponse(ride),
       payment_required: isCardPayment,
       surge_pricing: {
         multiplier: surgePricing.multiplier,
@@ -602,7 +601,7 @@ export const getActiveRide = asyncHandler(async (req, res) => {
   res.json({
     status: 'success',
     data: {
-      ride: formatRideResponse(ride),
+      ride: await formatRideResponse(ride),
     },
   });
 });
@@ -655,11 +654,11 @@ export const findNearbyDrivers = asyncHandler(async (req, res) => {
     throw new ValidationError('Invalid location coordinates');
   }
 
-  // Find nearby available drivers (keke-appropriate preview radius)
+  // Find nearby available drivers (admin-configurable preview radius)
   const nearbyDrivers = await Driver.findNearbyAvailable(
     latitude,
     longitude,
-    RIDER_PREVIEW_SEARCH_RADIUS_KM
+    await getSearchRadiusKm({ phase: 'preview' })
   );
 
   logger.info(`Found ${nearbyDrivers.length} nearby available drivers at (${latitude}, ${longitude})`);
@@ -1052,7 +1051,7 @@ export const cancelRide = asyncHandler(async (req, res) => {
     status: 'success',
     message: 'Ride cancelled successfully',
     data: {
-      ride: formatRideResponse(ride),
+      ride: await formatRideResponse(ride),
     },
   });
 });
@@ -1210,7 +1209,7 @@ export const getRideHistory = asyncHandler(async (req, res) => {
   res.json({
     status: 'success',
     data: {
-      rides: rides.map(ride => formatRideResponse(ride)),
+      rides: await Promise.all(rides.map((ride) => formatRideResponse(ride))),
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -1316,7 +1315,7 @@ export const getRideDetails = asyncHandler(async (req, res) => {
 /**
  * Format ride response for mobile app compatibility
  */
-const formatRideResponse = (ride) => {
+const formatRideResponse = async (ride) => {
   const internalStatus = ride.status;
   const clientStatus = mapRideStatusForClientApi(internalStatus);
   return {
@@ -1377,7 +1376,7 @@ const formatRideResponse = (ride) => {
       ? ride.notifiedDriverIds.length
       : 0,
     /** Geosearch radius (km) for this ride's current dispatch round. */
-    search_radius_km: resolveDispatchSearchRadiusKm(ride),
+    search_radius_km: await resolveDispatchSearchRadiusKm(ride),
     scheduled_at: ride.scheduledAt ? ride.scheduledAt.toISOString() : null, // Include scheduled time
     is_scheduled: ride.isScheduled || false, // Include scheduled flag
     created_at: ride.createdAt,
@@ -1553,7 +1552,7 @@ export const assignNewDriver = asyncHandler(async (req, res) => {
     status: 'success',
     message: 'Notified a new driver — waiting for acceptance',
     data: {
-      ride: formatRideResponse(rideDoc),
+      ride: await formatRideResponse(rideDoc),
     },
   });
 });

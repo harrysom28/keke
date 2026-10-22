@@ -94,6 +94,15 @@ const adminSettingsSchema = new mongoose.Schema(
       liveFixMaxAgeSeconds: { type: Number, default: 30 },
       riderConfirmWindowSeconds: { type: Number, default: 120 },
     },
+    // Driver search / dispatch radii. See utils/driverSearchRadius.js + settingsService.
+    dispatch: {
+      previewRadiusKm: { type: Number, default: 10 },
+      round1RadiusKm: { type: Number, default: 10 },
+      round2RadiusKm: { type: Number, default: 12 },
+      round3RadiusKm: { type: Number, default: 15 },
+      assignRadiusKm: { type: Number, default: 10 },
+      locationFreshnessSeconds: { type: Number, default: 300 },
+    },
     wallet: {
       minTopupAmount: { type: Number, default: 500 },
       minWithdrawAmount: { type: Number, default: 1000 },
