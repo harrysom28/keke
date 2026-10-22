@@ -246,6 +246,12 @@ class StaleTripService {
       }
       // ── End stuck pre-pickup cleanup ──────────────────────────────────
 
+      try {
+        await nudgeDriversWithStaleGps();
+      } catch (err) {
+        logger.warn(`GPS nudge failed: ${err.message}`);
+      }
+
     } catch (err) {
       logger.error(`Stale trip tick failed: ${err.message}`);
     } finally {
@@ -379,6 +385,83 @@ async function autoCancelStuckPrePickupRide(ride) {
   });
 
   logger.info(`Auto-cancelled stuck pre-pickup ride ${rideId} (was ${previousStatus})`);
+}
+
+/**
+ * One push when an online driver's real GPS fix is about to fall out of
+ * matching (or just did), and not again for an hour. Push only — no SMS.
+ *
+ * Window: lastRealFixAt older than (freshness - 30s) and newer than
+ * (freshness + 5 min). Freshness is settings.dispatch.locationFreshnessSeconds.
+ */
+export async function nudgeDriversWithStaleGps(nowMs = Date.now()) {
+  const {
+    GPS_NUDGE_LEAD_SECONDS,
+    GPS_NUDGE_TAIL_SECONDS,
+    GPS_NUDGE_REPEAT_MS,
+    GPS_NUDGE_TITLE,
+    GPS_NUDGE_BODY,
+  } = await import('../utils/driverGpsFix.js');
+  const { getLocationMaxAgeMs } = await import('../utils/driverSearchRadius.js');
+
+  const freshnessMs = await getLocationMaxAgeMs();
+  const freshnessSec = Math.round(freshnessMs / 1000);
+  const olderThan = new Date(nowMs - (freshnessSec - GPS_NUDGE_LEAD_SECONDS) * 1000);
+  const newerThan = new Date(nowMs - (freshnessSec + GPS_NUDGE_TAIL_SECONDS) * 1000);
+  const nudgedSince = new Date(nowMs - GPS_NUDGE_REPEAT_MS);
+
+  // Inverted or empty window (freshness too small to lead by 30s, or the
+  // bounds crossed). Nothing to send.
+  if (olderThan.getTime() <= newerThan.getTime()) {
+    return { sent: 0 };
+  }
+
+  const candidates = await Driver.find({
+    isOnline: true,
+    'currentLocation.lastRealFixAt': { $lt: olderThan, $gt: newerThan },
+    $or: [{ lastGpsNudgeAt: null }, { lastGpsNudgeAt: { $lt: nudgedSince } }],
+  })
+    .select('_id user')
+    .lean();
+
+  if (candidates.length === 0) return { sent: 0 };
+
+  const { sendToUser } = await import('./notificationService.js');
+  let sent = 0;
+
+  for (const driver of candidates) {
+    // Claim the hour slot before sending so a second tick cannot double-push.
+    const claimed = await Driver.findOneAndUpdate(
+      {
+        _id: driver._id,
+        isOnline: true,
+        'currentLocation.lastRealFixAt': { $lt: olderThan, $gt: newerThan },
+        $or: [{ lastGpsNudgeAt: null }, { lastGpsNudgeAt: { $lt: nudgedSince } }],
+      },
+      { $set: { lastGpsNudgeAt: new Date(nowMs) } }
+    );
+    if (!claimed || !driver.user) continue;
+
+    try {
+      const notification = await sendToUser(driver.user, 'driver', {
+        title: GPS_NUDGE_TITLE,
+        message: GPS_NUDGE_BODY,
+        type: 'push',
+        priority: 'high',
+        screen: 'home',
+        event_key: 'gps_stale_nudge',
+        data: { subType: 'gps_stale_nudge' },
+      });
+      if (notification) sent += 1;
+    } catch (err) {
+      logger.warn(`GPS nudge push failed for driver ${driver._id}: ${err.message}`);
+    }
+  }
+
+  if (sent > 0) {
+    logger.info(`GPS nudge sent to ${sent} driver(s)`);
+  }
+  return { sent };
 }
 
 const staleTripService = new StaleTripService();

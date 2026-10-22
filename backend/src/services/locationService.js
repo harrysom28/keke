@@ -8,6 +8,8 @@ import mongoose from 'mongoose';
 import { getRedisClient } from '../config/redis.js';
 import Driver from '../models/Driver.js';
 import logger from '../utils/logger.js';
+import { isUsableLatLng } from '../utils/dropoffProximity.js';
+import { parseClientGpsFix } from '../utils/driverGpsFix.js';
 
 const DRIVER_LOCATIONS_KEY = 'driver_locations';
 const DRIVER_LOC_DETAIL_PREFIX = 'driver:loc:';
@@ -55,9 +57,11 @@ export async function updateDriverLocation(driverId, longitude, latitude, addres
 /**
  * Persist last known location to MongoDB (non-blocking for the HTTP path).
  */
-export function persistDriverLocationMongo(driverId, longitude, latitude, address = null) {
+export function persistDriverLocationMongo(driverId, longitude, latitude, address = null, fixMeta = null) {
   const lng = Number(longitude);
   const lat = Number(latitude);
+  // Never write the [0, 0] placeholder back into the 2dsphere index.
+  if (!isUsableLatLng(lat, lng)) return Promise.resolve(null);
   const $set = {
     'currentLocation.type': 'Point',
     'currentLocation.coordinates': [lng, lat],
@@ -65,6 +69,17 @@ export function persistDriverLocationMongo(driverId, longitude, latitude, addres
   };
   if (address != null && String(address).trim() !== '') {
     $set['currentLocation.address'] = address;
+  }
+  // lastRealFixAt moves only when the client sent a valid capturedAt.
+  // A heartbeat that only refreshes the stored point leaves it alone.
+  const fix = parseClientGpsFix({
+    lat,
+    lng,
+    accuracy: fixMeta?.accuracy,
+    capturedAt: fixMeta?.capturedAt,
+  });
+  if (fix) {
+    $set['currentLocation.lastRealFixAt'] = fix.capturedAt;
   }
   return Driver.findByIdAndUpdate(driverId, { $set }, { new: false }).exec();
 }
