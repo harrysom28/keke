@@ -30,11 +30,15 @@ class RideMatchingService {
       const pickupLng = ride.pickupLocation.coordinates[0];
       const radiusKm = await resolveDispatchSearchRadiusKm(ride);
 
-      // Find nearby available drivers using geospatial query
+      const rideVehicleTypeId = getVehicleTypeId(ride.vehicleType);
+
+      // Find nearby available drivers using geospatial query (vehicle type in the
+      // geo filter so .limit(20) is type-correct). Post-filter below is a safety net.
       const nearbyDrivers = await Driver.findNearbyAvailable(
         pickupLat,
         pickupLng,
-        radiusKm
+        radiusKm,
+        rideVehicleTypeId
       );
 
       if (nearbyDrivers.length === 0) {
@@ -42,18 +46,15 @@ class RideMatchingService {
         return [];
       }
 
-      const rideVehicleTypeId = getVehicleTypeId(ride.vehicleType);
       const excludeSet = new Set(excludeDriverIds.map(String));
 
-      // Filter by vehicle type and skip already-notified drivers
+      // Safety-net vehicle-type filter (should be a no-op when the geo query filtered)
+      // plus skip already-notified drivers.
       const matchingDrivers = nearbyDrivers.filter((driver) => {
         if (excludeSet.has(driver._id.toString())) return false;
+        if (!rideVehicleTypeId) return true;
         const driverVehicleTypeId = getVehicleTypeId(driver.vehicleDetails?.vehicleType);
-        return (
-          rideVehicleTypeId &&
-          driverVehicleTypeId &&
-          driverVehicleTypeId === rideVehicleTypeId
-        );
+        return driverVehicleTypeId && driverVehicleTypeId === rideVehicleTypeId;
       });
 
       if (matchingDrivers.length === 0) {
@@ -165,18 +166,20 @@ class RideMatchingService {
 
       logger.info(`Finding alternative driver for ride ${ride._id} at (${pickupLat}, ${pickupLng}), excluding driver: ${excludedDriverId}`);
 
-      // Find nearby available drivers (excluding the one who cancelled)
+      // Get ride vehicle type ID for comparison
+      const rideVehicleTypeId = getVehicleTypeId(ride.vehicleType);
+      logger.info(`Ride vehicle type ID: ${rideVehicleTypeId}`);
+
+      // Find nearby available drivers (excluding the one who cancelled).
+      // Pass vehicle type into the geo query so .limit(20) is type-correct.
       const nearbyDrivers = await Driver.findNearbyAvailable(
         pickupLat,
         pickupLng,
-        await getSearchRadiusKm({ phase: 'assign' })
+        await getSearchRadiusKm({ phase: 'assign' }),
+        rideVehicleTypeId
       );
 
       logger.info(`Found ${nearbyDrivers.length} nearby available drivers for alternative search`);
-
-      // Get ride vehicle type ID for comparison
-      const rideVehicleTypeId = ride.vehicleType?._id?.toString() || ride.vehicleType?.toString();
-      logger.info(`Ride vehicle type ID: ${rideVehicleTypeId}`);
 
       const excludeSet = new Set();
       if (excludedDriverId) {

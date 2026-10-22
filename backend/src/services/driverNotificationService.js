@@ -10,12 +10,50 @@ import { processCancellation } from './escrowWalletService.js';
 import { MATCHING_STATUSES } from '../utils/rideStatus.js';
 import rideMatchingService from './rideMatchingService.js';
 
-const OFFER_WINDOW_MS = 60_000;
-const DEFAULT_MAX_OFFERS = 6;
+// Overridable in verify scripts (e.g. OFFER_WINDOW_MS=200) so timeout paths can be tested quickly.
+export const OFFER_WINDOW_MS = Number(process.env.OFFER_WINDOW_MS) || 60_000;
+// Raised from 6 → 10 so a busy first ring still reaches enough of the right vehicle type.
+// Next step: pull from admin settings once we see how 10 performs in production.
+export const DEFAULT_MAX_OFFERS = 10;
 /** Stop dispatching after this many rounds regardless of available drivers. */
 const MAX_DISPATCH_ATTEMPTS = 3;
 /** Hard deadline: cancel the ride if it has been searching this long. */
 const RIDE_MAX_AGE_MS = 10 * 60 * 1_000; // 10 minutes
+
+/**
+ * Expire pending offers for a ride and defensively restore those drivers to the
+ * matching pool if they have no active trip (covers stuck isAvailable=false).
+ */
+async function expireOffersAndRestoreDrivers(rideId) {
+  const pending = await RideOffer.find({
+    ride_id: rideId,
+    status: 'pending',
+  })
+    .select('driver_id')
+    .lean();
+
+  if (pending.length === 0) return;
+
+  await RideOffer.updateMany(
+    { ride_id: rideId, status: 'pending' },
+    { $set: { status: 'expired', expired_at: new Date() } }
+  ).catch(() => {});
+
+  const { restoreDriverAvailabilityAfterTrip } = await import('./driverAvailabilityService.js');
+  for (const offer of pending) {
+    const driverId = offer.driver_id;
+    if (!driverId) continue;
+    try {
+      const active = await Ride.findActiveRideForDriver(driverId);
+      if (active) continue;
+      await restoreDriverAvailabilityAfterTrip(driverId);
+    } catch (err) {
+      logger.warn(
+        `expireOffersAndRestoreDrivers: restore failed for driver ${driverId}: ${err.message}`
+      );
+    }
+  }
+}
 
 function buildRidePayload(ride, offerId, expiresAt) {
   return {
@@ -175,11 +213,8 @@ export async function sendNoDriverFoundOnce(rideId) {
   });
   await updated.save();
 
-  // Expire any pending offers for hygiene.
-  await RideOffer.updateMany(
-    { ride_id: updated._id, status: 'pending' },
-    { $set: { status: 'expired', expired_at: new Date() } }
-  ).catch(() => {});
+  // Expire pending offers and restore any drivers left unavailable without an active trip.
+  await expireOffersAndRestoreDrivers(updated._id);
 
   await notifyNoDriverFound(updated);
 }
@@ -302,13 +337,21 @@ export async function dispatchRide(ride, matchedDrivers, options = {}) {
   ).catch((err) => logger.warn(`notifiedDriverIds update failed for ride ${ride._id}: ${err.message}`));
 
   // After the offer window, either retry with fresh drivers or terminate.
+  // Always expire this round's pending offers and restore offered drivers who
+  // have no active trip, so a timed-out round cannot leave isAvailable=false.
   setTimeout(() => {
     (async () => {
       try {
         const r = await Ride.findById(ride._id)
           .select('status driver noDriverNotified attempts createdAt notifiedDriverIds isScheduled')
           .lean();
-        if (!r || r.driver || r.status === 'accepted' || r.noDriverNotified) return;
+        if (!r || r.driver || r.status === 'accepted' || r.noDriverNotified) {
+          // Ride was accepted (or already terminal) — still expire leftover pending offers.
+          await expireOffersAndRestoreDrivers(ride._id);
+          return;
+        }
+
+        await expireOffersAndRestoreDrivers(ride._id);
 
         const rideAge = Date.now() - new Date(r.createdAt).getTime();
         const tooManyAttempts = r.attempts >= MAX_DISPATCH_ATTEMPTS;
