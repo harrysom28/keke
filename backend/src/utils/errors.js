@@ -325,7 +325,12 @@ export const asyncHandler = (fn) => {
 };
 
 /**
- * Catch unhandled promise rejections
+ * Catch unhandled promise rejections.
+ *
+ * Log-and-continue only. NOTE: this is not the only listener on the process —
+ * winston (rejectionHandlers/exceptionHandlers) and Sentry register their own. Winston
+ * exits with code 1 unless `exitOnError: false` is set on the logger (see utils/logger.js);
+ * scripts/verifyPusherOutage.js guards against that regression.
  */
 export const handleUnhandledRejection = () => {
   process.on('unhandledRejection', (reason, _promise) => {

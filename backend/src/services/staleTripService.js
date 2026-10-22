@@ -4,6 +4,7 @@ import UserWalletTransaction from '../models/UserWalletTransaction.js';
 import logger from '../utils/logger.js';
 import { getSocketService } from './socketService.js';
 import { logRideAudit } from './rideAuditLogService.js';
+import { safeTrigger } from './pusherService.js';
 
 const STALE_MINUTES = 8;
 const TICK_MS = 5 * 60 * 1000;
@@ -41,14 +42,9 @@ async function emitTripEventToRiderAndDriver(ride, event, payload) {
     }
   }
 
-  try {
-    const { getPusherService } = await import('./pusherService.js');
-    const ps = getPusherService();
-    if (ps?.pusher && ride?._id) {
-      ps.pusher.trigger(`private.ride.${ride._id.toString()}`, event, payload);
-    }
-  } catch (err) {
-    logger.warn(`Pusher ${event} emit failed: ${err.message}`);
+  if (ride?._id) {
+    // Fire-and-forget on purpose (a Pusher outage must not slow the sweep); safeTrigger never rejects.
+    void safeTrigger(`private.ride.${ride._id.toString()}`, event, payload);
   }
 }
 

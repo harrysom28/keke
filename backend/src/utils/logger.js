@@ -34,6 +34,13 @@ const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: logFormat,
   defaultMeta: { service: 'ride-hailing-api' },
+  // CRITICAL: winston's default is exitOnError=true. With exceptionHandlers /
+  // rejectionHandlers configured below, winston registers its OWN process listeners
+  // for uncaughtException / unhandledRejection and calls process.exit(1) once the log
+  // line is flushed — regardless of the handlers in utils/errors.js that are written
+  // to keep the server alive. That is how one un-awaited third-party rejection
+  // (Pusher 403) crash-looped the container. Winston must only LOG these events.
+  exitOnError: false,
   transports: [
     // Write all logs to combined.log
     new winston.transports.File({

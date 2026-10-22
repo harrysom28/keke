@@ -31,6 +31,101 @@ try {
   logger.warn('Pusher initialization failed:', error.message);
 }
 
+// ── safeTrigger ─────────────────────────────────────────────────────────────
+// pusher.trigger() returns a promise. Pusher answers 403 once the daily message
+// quota is used up (and 5xx/timeouts during their outages). A call site that does
+// not await/.catch that promise turns the outage into an unhandledRejection, so
+// EVERY trigger in the codebase goes through safeTrigger() instead.
+
+const TRIGGER_LOG_INTERVAL_MS = parseInt(process.env.PUSHER_FAILURE_LOG_INTERVAL_MS || '60000', 10);
+const TRIGGER_TIMEOUT_MS = parseInt(process.env.PUSHER_TRIGGER_TIMEOUT_MS || '3000', 10);
+const MAX_TRACKED_ERROR_TYPES = 50;
+// error type -> { lastLoggedAt, suppressed }
+const triggerFailureLog = new Map();
+
+function classifyTriggerError(err) {
+  const status = err?.status ?? err?.statusCode ?? err?.response?.status;
+  if (status) return `http-${status}`;
+  if (err?.code) return `code-${err.code}`;
+  return `name-${err?.name || 'Error'}`;
+}
+
+/**
+ * Warn about a failed trigger, at most once per interval per error type.
+ * The first line after a quiet period says how many were swallowed in between.
+ */
+function logTriggerFailure(err, channel, event) {
+  try {
+    const type = classifyTriggerError(err);
+    const now = Date.now();
+    let entry = triggerFailureLog.get(type);
+    if (!entry) {
+      if (triggerFailureLog.size >= MAX_TRACKED_ERROR_TYPES) triggerFailureLog.clear();
+      entry = { lastLoggedAt: 0, suppressed: 0 };
+      triggerFailureLog.set(type, entry);
+    }
+    if (entry.lastLoggedAt && now - entry.lastLoggedAt < TRIGGER_LOG_INTERVAL_MS) {
+      entry.suppressed += 1;
+      return;
+    }
+    const suppressed = entry.suppressed;
+    entry.lastLoggedAt = now;
+    entry.suppressed = 0;
+    logger.warn(
+      `Pusher trigger failed (${type}) on ${channel} / ${event}: ${err?.message || String(err)}` +
+        (suppressed > 0 ? ` — ${suppressed} similar failure(s) suppressed in the last interval` : '')
+    );
+  } catch (_) {
+    /* logging must never throw */
+  }
+}
+
+/** Test hook: forget rate-limit state. */
+export function _resetTriggerFailureLog() {
+  triggerFailureLog.clear();
+}
+
+/**
+ * Fire a Pusher event without ever throwing or rejecting.
+ *
+ * - Pusher not configured: no-op, resolves false.
+ * - Pusher rejects (403 quota, 5xx, network) or throws synchronously: logged at
+ *   `warn` (rate limited, see logTriggerFailure), resolves false.
+ * - Pusher hangs: gives up after PUSHER_TRIGGER_TIMEOUT_MS so an awaiting request
+ *   handler is not held hostage by a third party. Resolves false.
+ *
+ * @returns {Promise<boolean>} true if Pusher accepted the event. NEVER rejects.
+ */
+export function safeTrigger(channel, event, payload) {
+  if (!pusher) return Promise.resolve(false);
+
+  let timer = null;
+  try {
+    const call = Promise.resolve(pusher.trigger(channel, event, payload)).then(
+      () => true,
+      (err) => {
+        logTriggerFailure(err, channel, event);
+        return false;
+      }
+    );
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        logTriggerFailure({ name: 'TimeoutError', code: 'PUSHER_TIMEOUT', message: `no response after ${TRIGGER_TIMEOUT_MS}ms` }, channel, event);
+        resolve(false);
+      }, TRIGGER_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    return Promise.race([call, timeout]).then((ok) => {
+      clearTimeout(timer);
+      return ok;
+    });
+  } catch (err) {
+    if (timer) clearTimeout(timer);
+    logTriggerFailure(err, channel, event);
+    return Promise.resolve(false);
+  }
+}
+
 /**
  * Pusher service for emitting real-time events to mobile app
  */
@@ -59,7 +154,7 @@ class PusherService {
       };
 
       // Emit to ride-specific channel (mobile app expects private.ride.{rideId})
-      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'driver.location', locationData);
+      safeTrigger(`private.ride.${ride._id.toString()}`, 'driver.location', locationData);
       logger.debug(`Pusher: Driver location update emitted for ride ${ride._id}`);
     } catch (error) {
       logger.error(`Failed to emit driver location via Pusher: ${error.message}`);
@@ -97,17 +192,17 @@ class PusherService {
       };
 
       // Emit to ride channel (mobile app expects private.ride.{rideId})
-      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride.status', statusData);
+      safeTrigger(`private.ride.${ride._id.toString()}`, 'ride.status', statusData);
 
       // Rider mobile listens on private-user-{userId} (hyphen form); keep dot variants for older clients.
       if (ride.rider) {
         const riderId = ride.rider._id?.toString?.() || ride.rider.toString();
-        this.pusher.trigger(`private-user-${riderId}`, 'ride.status', statusData);
-        this.pusher.trigger(`private.user.${riderId}`, 'ride.status', statusData);
-        this.pusher.trigger(`private.user-${riderId}`, 'ride.status', statusData);
+        safeTrigger(`private-user-${riderId}`, 'ride.status', statusData);
+        safeTrigger(`private.user.${riderId}`, 'ride.status', statusData);
+        safeTrigger(`private.user-${riderId}`, 'ride.status', statusData);
       }
       if (driver) {
-        this.pusher.trigger(`private.driver-${driver._id.toString()}`, 'ride.status', statusData);
+        safeTrigger(`private.driver-${driver._id.toString()}`, 'ride.status', statusData);
       }
 
       logger.debug(`Pusher: Ride status update emitted: ${status} for ride ${ride._id}`);
@@ -151,10 +246,10 @@ class PusherService {
         timestamp: new Date().toISOString(),
       };
 
-      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride_accepted', payload);
-      this.pusher.trigger(`private-user-${riderId}`, 'ride_accepted', payload);
-      this.pusher.trigger(`private.user.${riderId}`, 'ride_accepted', payload);
-      this.pusher.trigger(`private.user-${riderId}`, 'ride_accepted', payload);
+      safeTrigger(`private.ride.${ride._id.toString()}`, 'ride_accepted', payload);
+      safeTrigger(`private-user-${riderId}`, 'ride_accepted', payload);
+      safeTrigger(`private.user.${riderId}`, 'ride_accepted', payload);
+      safeTrigger(`private.user-${riderId}`, 'ride_accepted', payload);
       logger.debug(`Pusher: ride_accepted emitted for ride ${ride._id}`);
     } catch (error) {
       logger.error(`Failed to emit ride_accepted via Pusher: ${error.message}`);
@@ -187,15 +282,15 @@ class PusherService {
         timestamp: new Date().toISOString(),
       };
 
-      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride.status', payload);
-      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride_cancelled', payload);
-      this.pusher.trigger(`private-user-${riderId}`, 'ride.status', payload);
-      this.pusher.trigger(`private-user-${riderId}`, 'ride_cancelled', payload);
-      this.pusher.trigger(`private.user.${riderId}`, 'ride.status', payload);
-      this.pusher.trigger(`private.user-${riderId}`, 'ride_cancelled', payload);
+      safeTrigger(`private.ride.${ride._id.toString()}`, 'ride.status', payload);
+      safeTrigger(`private.ride.${ride._id.toString()}`, 'ride_cancelled', payload);
+      safeTrigger(`private-user-${riderId}`, 'ride.status', payload);
+      safeTrigger(`private-user-${riderId}`, 'ride_cancelled', payload);
+      safeTrigger(`private.user.${riderId}`, 'ride.status', payload);
+      safeTrigger(`private.user-${riderId}`, 'ride_cancelled', payload);
       // Legacy channel the rider app still listens on
-      this.pusher.trigger('private.driver_cancelled', 'driver_cancelled', payload);
-      this.pusher.trigger(`private-user-${riderId}`, 'driver_cancelled', payload);
+      safeTrigger('private.driver_cancelled', 'driver_cancelled', payload);
+      safeTrigger(`private-user-${riderId}`, 'driver_cancelled', payload);
       logger.debug(`Pusher: ride_cancelled emitted for ride ${ride._id} (${internalStatus})`);
     } catch (error) {
       logger.error(`Failed to emit ride_cancelled via Pusher: ${error.message}`);
@@ -222,12 +317,12 @@ class PusherService {
 
       // Emit to user channel (for trip completed modal) - mobile app expects private.completed_ride
       if (ride.rider) {
-        this.pusher.trigger(`private.completed_ride`, 'completed_ride', completedData);
-        this.pusher.trigger(`private.user-${ride.rider._id.toString()}`, 'completed_ride', completedData);
+        safeTrigger(`private.completed_ride`, 'completed_ride', completedData);
+        safeTrigger(`private.user-${ride.rider._id.toString()}`, 'completed_ride', completedData);
       }
       
       // Emit to ride channel
-      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride.completed', completedData);
+      safeTrigger(`private.ride.${ride._id.toString()}`, 'ride.completed', completedData);
 
       logger.info(`Pusher: Ride completed event emitted for ride ${ride._id}`);
     } catch (error) {
@@ -255,8 +350,8 @@ class PusherService {
 
       // Emit to user channel (for payment receipt modal) - mobile app expects private.payment
       if (ride.rider) {
-        this.pusher.trigger(`private.payment`, 'payment', receiptData);
-        this.pusher.trigger(`private.user-${ride.rider._id.toString()}`, 'payment', receiptData);
+        safeTrigger(`private.payment`, 'payment', receiptData);
+        safeTrigger(`private.user-${ride.rider._id.toString()}`, 'payment', receiptData);
       }
 
       logger.info(`Pusher: Payment receipt event emitted for ride ${ride._id}`);
@@ -282,15 +377,15 @@ class PusherService {
       };
 
       // Emit to user channel - mobile app expects private.started
-      this.pusher.trigger(`private.started`, 'started', startedData);
+      safeTrigger(`private.started`, 'started', startedData);
       
       // Also emit to user-specific channel
       if (ride.rider) {
-        this.pusher.trigger(`private.user-${ride.rider._id.toString()}`, 'started', startedData);
+        safeTrigger(`private.user-${ride.rider._id.toString()}`, 'started', startedData);
       }
       
       // Emit to ride channel
-      this.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride.started', startedData);
+      safeTrigger(`private.ride.${ride._id.toString()}`, 'ride.started', startedData);
 
       logger.info(`Pusher: Ride started event emitted for ride ${ride._id}`);
     } catch (error) {
@@ -307,7 +402,7 @@ class PusherService {
     }
 
     try {
-      this.pusher.trigger(`private-user-${userId.toString()}`, 'notification', payload);
+      safeTrigger(`private-user-${userId.toString()}`, 'notification', payload);
       logger.debug(`Pusher: Notification emitted for user ${userId}`);
       return true;
     } catch (error) {
@@ -342,7 +437,7 @@ class PusherService {
           ? Number(heading)
           : null;
 
-      this.pusher.trigger(`private-user-${riderId}`, 'driver-location-update', {
+      safeTrigger(`private-user-${riderId}`, 'driver-location-update', {
         lat,
         lng,
         heading: h,

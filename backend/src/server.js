@@ -7,6 +7,13 @@ if (process.env.SENTRY_DSN && process.env.NODE_ENV !== 'test') {
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV || 'development',
     tracesSampleRate: 0.1,
+    // Pin Sentry to "report, never exit". These are Sentry's defaults today; pinning
+    // them means a Sentry upgrade/config change ('strict' mode calls process.exit(1))
+    // can never turn a third-party outage into a crash.
+    integrations: [
+      Sentry.onUnhandledRejectionIntegration({ mode: 'warn' }),
+      Sentry.onUncaughtExceptionIntegration({ exitEvenIfOtherHandlersAreRegistered: false }),
+    ],
   });
 }
 

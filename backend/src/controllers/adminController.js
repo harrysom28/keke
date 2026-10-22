@@ -32,6 +32,7 @@ import { logAdminAction } from '../services/auditLogService.js';
 import { AuthenticationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
+import { safeTrigger } from '../services/pusherService.js';
 import { invalidateAdminSettingsCache } from '../utils/adminSettingsCache.js';
 import {
   getPaymentMethodSettings,
@@ -2090,12 +2091,10 @@ export const adminForceCompleteRide = asyncHandler(async (req, res) => {
     logger.warn(`Admin force-complete socket emits failed for ride ${rideId}: ${err.message}`);
   }
   try {
-    const { getPusherService } = await import('../services/pusherService.js');
-    const ps = getPusherService();
-    if (ps?.pusher && ride?._id) {
+    if (ride?._id) {
       const payload = { rideId: ride._id.toString(), completedBy: 'admin', reason: reason || 'admin_resolved' };
-      await ps.pusher.trigger(`private.ride.${ride._id.toString()}`, 'trip:completed', payload);
-      await ps.pusher.trigger(`private.ride.${ride._id.toString()}`, 'ride.completed', payload);
+      await safeTrigger(`private.ride.${ride._id.toString()}`, 'trip:completed', payload);
+      await safeTrigger(`private.ride.${ride._id.toString()}`, 'ride.completed', payload);
     }
   } catch (err) {
     logger.warn(`Admin force-complete pusher emit failed for ride ${rideId}: ${err.message}`);

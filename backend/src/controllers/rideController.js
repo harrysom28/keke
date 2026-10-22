@@ -19,6 +19,7 @@ import {
 } from '../services/driverNotificationService.js';
 import { mapRideStatusForClientApi, getLifecycleStatus, logRideLifecycle } from '../utils/rideStatus.js';
 import { getSocketService } from '../services/socketService.js';
+import { safeTrigger } from '../services/pusherService.js';
 import { calculateFareBreakdown as calculateFareBreakdownFromSettings, getSettings } from '../services/settingsService.js';
 import { finalizeDriverCompletion, emitTripEvent, formatDistanceForCopy } from '../services/rideCompletionService.js';
 import { proximityFieldsForCompletion, DROPOFF_FLAG_FAR, DROPOFF_FLAG_DISPUTED } from '../utils/dropoffProximity.js';
@@ -973,14 +974,11 @@ export const cancelRide = asyncHandler(async (req, res) => {
         timestamp: new Date().toISOString(),
       };
 
-      const { getPusherService } = await import('../services/pusherService.js');
-      const pusherService = getPusherService();
-
       for (const offer of pendingOffers) {
         const driverId = offer.driver_id?.toString?.() || String(offer.driver_id || '');
         if (!driverId) continue;
         try {
-          pusherService?.pusher?.trigger(
+          void safeTrigger(
             `private-driver-${driverId}`,
             'ride_cancelled',
             revokePayload
@@ -1633,14 +1631,8 @@ async function emitTripEventToRiderAndDriver(ride, event, payload) {
     }
   }
 
-  try {
-    const { getPusherService } = await import('../services/pusherService.js');
-    const ps = getPusherService();
-    if (ps?.pusher && ride?._id) {
-      ps.pusher.trigger(`private.ride.${ride._id.toString()}`, event, payload);
-    }
-  } catch (err) {
-    logger.warn(`Pusher ${event} emit failed: ${err.message}`);
+  if (ride?._id) {
+    void safeTrigger(`private.ride.${ride._id.toString()}`, event, payload);
   }
 }
 
