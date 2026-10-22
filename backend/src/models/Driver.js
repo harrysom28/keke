@@ -232,6 +232,8 @@ const driverSchema = new mongoose.Schema(
 // Indexes
 driverSchema.index({ user: 1 }, { unique: true });
 driverSchema.index({ 'currentLocation': '2dsphere' });
+// Equality on vehicle type + $near on currentLocation (findNearbyAvailable when vehicleTypeId is set).
+driverSchema.index({ 'vehicleDetails.vehicleType': 1, currentLocation: '2dsphere' });
 driverSchema.index({ isOnline: 1, isAvailable: 1 });
 driverSchema.index({ documentsVerified: 1 });
 driverSchema.index({ verificationStatus: 1 });
@@ -276,8 +278,18 @@ driverSchema.methods.addEarnings = async function (amount) {
   await this.save();
 };
 
-// Method to update earnings
-driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, maxDistanceKm = 15) {
+/**
+ * Nearby approved/online/available drivers within maxDistanceKm of (lat, lng).
+ * When vehicleTypeId is set, the geo query itself filters by vehicle type so
+ * the .limit(20) returns 20 of the right type — not 20 of any type that a
+ * later post-filter then discards.
+ */
+driverSchema.statics.findNearbyAvailable = async function (
+  latitude,
+  longitude,
+  maxDistanceKm = 15,
+  vehicleTypeId = null
+) {
   const logger = (await import('../utils/logger.js')).default;
   // Only drivers with a fresh heartbeat are matchable. The Online toggle itself
   // stays on until they go offline (see driverSearchRadius.js).
@@ -285,7 +297,7 @@ driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, 
   const locationFreshSince = new Date(Date.now() - (await getLocationMaxAgeMs()));
 
   try {
-    const drivers = await this.find({
+    const filter = {
       isOnline: true,
       isAvailable: true,
       documentsVerified: true,
@@ -302,7 +314,13 @@ driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, 
           $maxDistance: maxDistanceKm * 1000,
         },
       },
-    })
+    };
+
+    if (vehicleTypeId) {
+      filter['vehicleDetails.vehicleType'] = new mongoose.Types.ObjectId(vehicleTypeId);
+    }
+
+    const drivers = await this.find(filter)
       .populate('user', 'name email phone profileImage rating')
       .populate('vehicleDetails.vehicleType')
       // No explicit sort: $near already orders nearest-first, which is what
@@ -313,7 +331,8 @@ driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, 
       .limit(20);
 
     logger.info(
-      `Geospatial query found ${drivers.length} fresh drivers within ${maxDistanceKm}km`
+      `Geospatial query found ${drivers.length} fresh drivers within ${maxDistanceKm}km` +
+        (vehicleTypeId ? ` (vehicleType=${vehicleTypeId})` : '')
     );
     return drivers;
   } catch (error) {

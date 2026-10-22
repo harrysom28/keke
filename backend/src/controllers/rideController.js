@@ -654,11 +654,14 @@ export const findNearbyDrivers = asyncHandler(async (req, res) => {
     throw new ValidationError('Invalid location coordinates');
   }
 
-  // Find nearby available drivers (admin-configurable preview radius)
+  // Find nearby available drivers (admin-configurable preview radius).
+  // When the rider selected a vehicle type, filter inside the geo query so
+  // the .limit(20) returns 20 of that type rather than 20 of any type.
   const nearbyDrivers = await Driver.findNearbyAvailable(
     latitude,
     longitude,
-    await getSearchRadiusKm({ phase: 'preview' })
+    await getSearchRadiusKm({ phase: 'preview' }),
+    vehicleTypeId || null
   );
 
   logger.info(`Found ${nearbyDrivers.length} nearby available drivers at (${latitude}, ${longitude})`);
@@ -923,7 +926,9 @@ export const cancelRide = asyncHandler(async (req, res) => {
   // Rider cancel previously left is_available=false so the app stayed on "On a trip" until manual toggle.
   if (
     ride.driver &&
-    ['accepted', 'driver_en_route', 'arrived', 'in-progress'].includes(previousRideStatus)
+    ['accepted', 'driver_en_route', 'arrived', 'in-progress', 'searching', 'requested'].includes(
+      previousRideStatus
+    )
   ) {
     try {
       const driverId = ride.driver._id ?? ride.driver;
@@ -973,6 +978,10 @@ export const cancelRide = asyncHandler(async (req, res) => {
         timestamp: new Date().toISOString(),
       };
 
+      const { restoreDriverAvailabilityAfterTrip } = await import(
+        '../services/driverAvailabilityService.js'
+      );
+
       for (const offer of pendingOffers) {
         const driverId = offer.driver_id?.toString?.() || String(offer.driver_id || '');
         if (!driverId) continue;
@@ -986,6 +995,15 @@ export const cancelRide = asyncHandler(async (req, res) => {
         } catch (notifyErr) {
           logger.warn(
             `Failed to notify driver ${driverId} of cancelled offer for ride ${rideId}: ${notifyErr.message}`
+          );
+        }
+        // Defensive: offered drivers should already be available, but never leave them stuck.
+        try {
+          const active = await Ride.findActiveRideForDriver(driverId);
+          if (!active) await restoreDriverAvailabilityAfterTrip(driverId);
+        } catch (availErr) {
+          logger.warn(
+            `Failed to restore offered driver ${driverId} after cancel of ride ${rideId}: ${availErr.message}`
           );
         }
       }
