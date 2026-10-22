@@ -275,14 +275,12 @@ export const errorHandler = async (err, req, res, next) => {
  * Send error response in development
  */
 const sendErrorDev = (err, res) => {
-  const body = {
+  res.status(err.statusCode).json({
     status: err.status,
     error: err,
     message: err.message,
     stack: err.stack,
-  };
-  if (err.code) body.code = err.code;
-  res.status(err.statusCode).json(body);
+  });
 };
 
 /**

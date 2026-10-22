@@ -59,14 +59,6 @@ import {
   isScheduledRideOverdue,
 } from '../utils/scheduledRide.js';
 import { getLocationMaxAgeMs } from '../utils/driverSearchRadius.js';
-import {
-  LOCATION_REQUIRED_CODE,
-  LOCATION_REQUIRED_MESSAGE,
-  isZeroOrMissingCoordinates,
-  readGoOnlineBody,
-  realFixFreshnessClause,
-  realFixIsFresh,
-} from '../utils/driverGpsFix.js';
 import { safeTrigger } from '../services/pusherService.js';
 
 /**
@@ -692,7 +684,7 @@ export const updateDriverProfile = asyncHandler(async (req, res) => {
  */
 export const updateLocation = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { latitude, longitude, address, heading, accuracy, capturedAt } = req.body;
+  const { latitude, longitude, address, heading } = req.body;
 
   if (!latitude || !longitude) {
     throw new ValidationError('Latitude and longitude are required');
@@ -709,19 +701,9 @@ export const updateLocation = asyncHandler(async (req, res) => {
     if (driver) {
       const { updateDriverLocation, persistDriverLocationMongo } = await import('../services/locationService.js');
       await updateDriverLocation(driver._id, longitude, latitude, address || '');
-      await persistDriverLocationMongo(driver._id, longitude, latitude, address || '', {
-        accuracy,
-        capturedAt,
-      });
-      // Do not driver.save() here. The document in memory still has the previous
-      // currentLocation, and saving it would write that stale point back over
-      // lastRealFixAt. lastActiveAt is a separate field.
+      await persistDriverLocationMongo(driver._id, longitude, latitude, address || '');
       driver.lastActiveAt = new Date();
-      await Driver.updateOne({ _id: driver._id }, { $set: { lastActiveAt: driver.lastActiveAt } });
-      if (driver.currentLocation && Array.isArray(driver.currentLocation.coordinates)) {
-        driver.currentLocation.coordinates = [Number(longitude), Number(latitude)];
-        driver.currentLocation.lastUpdated = new Date();
-      }
+      await driver.save();
 
       const { updateDriverLocationForAcceptedRide } = await import('../services/rideMovementService.js');
       await updateDriverLocationForAcceptedRide(driver._id, { lat: latitude, lng: longitude });
@@ -885,9 +867,7 @@ export const getLocations = asyncHandler(async (req, res) => {
       isAvailable: true,
       documentsVerified: true,
       verificationStatus: 'approved',
-      'currentLocation.coordinates.0': { $ne: 0 },
-      'currentLocation.coordinates.1': { $ne: 0 },
-      ...realFixFreshnessClause(locationFreshSince),
+      'currentLocation.lastUpdated': { $gte: locationFreshSince },
     })
       .limit(MAX_DRIVERS)
       .populate('user', 'name phone profileImage')
@@ -1093,24 +1073,6 @@ export const toggleAvailability = asyncHandler(async (req, res) => {
     throw new ConflictError('Cannot go offline with an active ride');
   }
 
-  // Reject before any in-memory change so a 409 cannot flip isOnline.
-  let goOnlineFix = null;
-  if (goingOnline) {
-    const attempt = readGoOnlineBody(req.body);
-    if (attempt.rejected) {
-      throw new ConflictError(LOCATION_REQUIRED_MESSAGE, { code: LOCATION_REQUIRED_CODE });
-    }
-    goOnlineFix = attempt.fix;
-    if (!goOnlineFix) {
-      const storedOk =
-        !isZeroOrMissingCoordinates(driver.currentLocation?.coordinates) &&
-        realFixIsFresh(driver.currentLocation?.lastRealFixAt);
-      if (!storedOk) {
-        throw new ConflictError(LOCATION_REQUIRED_MESSAGE, { code: LOCATION_REQUIRED_CODE });
-      }
-    }
-  }
-
   const dayRolled = resetDriverDayStatsIfNeeded(driver);
 
   driver.isAvailable = isAvailable === true || isAvailable === 'true';
@@ -1122,16 +1084,15 @@ export const toggleAvailability = asyncHandler(async (req, res) => {
     if (!driver.onlineSessionStartedAt) {
       driver.onlineSessionStartedAt = new Date();
     }
-    // A real client fix is stored with the online flag. Do not refresh
-    // lastUpdated just because the toggle was tapped.
-    if (goOnlineFix) {
-      driver.currentLocation = {
-        type: 'Point',
-        coordinates: [goOnlineFix.lng, goOnlineFix.lat],
-        address: driver.currentLocation?.address ?? null,
-        lastUpdated: new Date(),
-        lastRealFixAt: goOnlineFix.capturedAt,
-      };
+    const coords = driver.currentLocation?.coordinates;
+    if (
+      Array.isArray(coords) &&
+      coords.length === 2 &&
+      Number.isFinite(Number(coords[0])) &&
+      Number.isFinite(Number(coords[1])) &&
+      !(Number(coords[0]) === 0 && Number(coords[1]) === 0)
+    ) {
+      driver.currentLocation.lastUpdated = new Date();
     }
   } else {
     if (driver.onlineSessionStartedAt) {

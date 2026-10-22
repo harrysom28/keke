@@ -83,26 +83,23 @@ const driverSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-    // No defaults. A new driver leaves this unset so the 2dsphere index
-    // does not store a [0, 0] placeholder. lastRealFixAt is written only
-    // when a client sends a valid non-zero fix with capturedAt.
     currentLocation: {
       type: {
         type: String,
         enum: ['Point'],
+        default: 'Point',
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
+        default: [0, 0],
       },
       address: {
         type: String,
-        default: undefined,
+        default: null,
       },
       lastUpdated: {
         type: Date,
-      },
-      lastRealFixAt: {
-        type: Date,
+        default: Date.now,
       },
     },
     isOnline: {
@@ -195,11 +192,6 @@ const driverSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
-    /** Last "location stopped updating" push. At most one per hour. */
-    lastGpsNudgeAt: {
-      type: Date,
-      default: null,
-    },
     /** When current online session started (null if offline / between sessions). */
     onlineSessionStartedAt: {
       type: Date,
@@ -247,40 +239,18 @@ driverSchema.index({ documentsVerified: 1 });
 driverSchema.index({ verificationStatus: 1 });
 driverSchema.index({ 'vehicleDetails.plateNumber': 1 }, { unique: true });
 
-// Drop a half-built currentLocation so a new driver is stored without the
-// field. An explicit [0, 0] is left in place; the one-off migration unsets those.
-driverSchema.pre('validate', function (next) {
-  const coords = this.currentLocation?.coordinates;
-  const valid =
-    Array.isArray(coords) &&
-    coords.length === 2 &&
-    coords.every((n) => typeof n === 'number' && Number.isFinite(n));
-  if (this.currentLocation && !valid) {
-    this.currentLocation = undefined;
-  }
-  next();
-});
-
 // Virtual for driver ID (for compatibility with mobile app)
 driverSchema.virtual('driver_id').get(function () {
   return this._id.toString();
 });
 
-// Method to update location. capturedAt, when valid, is the real-fix time.
-driverSchema.methods.updateLocation = async function (coordinates, address = null, capturedAt = null) {
-  if (!this.currentLocation || !Array.isArray(this.currentLocation.coordinates)) {
-    this.currentLocation = { type: 'Point', coordinates };
-  } else {
-    this.currentLocation.coordinates = coordinates;
-  }
-  this.currentLocation.type = 'Point';
+// Method to update location
+driverSchema.methods.updateLocation = async function (coordinates, address = null) {
+  this.currentLocation.coordinates = coordinates;
   if (address) {
     this.currentLocation.address = address;
   }
   this.currentLocation.lastUpdated = new Date();
-  if (capturedAt) {
-    this.currentLocation.lastRealFixAt = capturedAt instanceof Date ? capturedAt : new Date(capturedAt);
-  }
   await this.save();
 };
 
@@ -321,12 +291,9 @@ driverSchema.statics.findNearbyAvailable = async function (
   vehicleTypeId = null
 ) {
   const logger = (await import('../utils/logger.js')).default;
-  // Only drivers with a fresh real fix are matchable. The Online toggle itself
-  // stays on until they go offline (see driverSearchRadius.js). lastRealFixAt
-  // is the source of truth once a client fix has landed; until then a driver
-  // saved before that field existed still matches on lastUpdated.
+  // Only drivers with a fresh heartbeat are matchable. The Online toggle itself
+  // stays on until they go offline (see driverSearchRadius.js).
   const { getLocationMaxAgeMs } = await import('../utils/driverSearchRadius.js');
-  const { realFixFreshnessClause } = await import('../utils/driverGpsFix.js');
   const locationFreshSince = new Date(Date.now() - (await getLocationMaxAgeMs()));
 
   try {
@@ -335,9 +302,9 @@ driverSchema.statics.findNearbyAvailable = async function (
       isAvailable: true,
       documentsVerified: true,
       verificationStatus: 'approved',
+      'currentLocation.lastUpdated': { $gte: locationFreshSince },
       'currentLocation.coordinates.0': { $ne: 0 },
       'currentLocation.coordinates.1': { $ne: 0 },
-      ...realFixFreshnessClause(locationFreshSince),
       currentLocation: {
         $near: {
           $geometry: {

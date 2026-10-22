@@ -58,8 +58,7 @@ import tw from "@/lib/tailwind";
 import { useIsFocused } from "@react-navigation/native";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
-import { ensureDriverBackgroundLocationAccess } from "@/utils/locationPermission";
-import * as Location from "expo-location";
+import { ensureForegroundLocationAccess, ensureDriverBackgroundLocationAccess } from "@/utils/locationPermission";
 import { syncDriverLocationToServer } from "@/utils/driverLocationSync";
 import {
   startDriverBackgroundLocation,
@@ -132,7 +131,6 @@ const Home = () => {
   const [changed, setChange] = useState(false);
   const [activity, setActivity] = useState<Partial<TDriverStats & { is_online?: boolean; is_available?: boolean; verification_status?: string; documents_verified?: boolean }>>({});
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
-  const [onlineGateMessage, setOnlineGateMessage] = useState("");
   const { user } = useSelector(AuthState);
   const dispatch = useDispatch();
   const notificationEventMountGuardRef = useRef(false);
@@ -142,16 +140,14 @@ const Home = () => {
   const sessionOnline = activity?.is_online ?? false;
   /** Matches server checks for accepting rides (see scheduleController / driverController). */
   const isAvailableForRides = activity?.is_available ?? false;
-  const availabilityLabel = onlineGateMessage
-    ? onlineGateMessage
-    : isAvailableForRides
-      ? "Online"
-      : sessionOnline
-        ? "On a trip"
-        : "Offline";
+  const availabilityLabel = isAvailableForRides
+    ? "Online"
+    : sessionOnline
+      ? "On a trip"
+      : "Offline";
   const isVerified = activity?.verification_status === "approved" && activity?.documents_verified;
 
-  const { address } = useCurrentLocation({ isFocused, purpose: "driver" });
+  const { location, address } = useCurrentLocation({ isFocused, purpose: "driver" });
   // Location heartbeats: useDriverSession in driver/_layout (background + 30s).
 
   const emergencySheetRef = useRef<BottomSheetMethods>(null);
@@ -245,13 +241,10 @@ const Home = () => {
   }, [normalizeDriverDashboard]);
 
   const patchAvailability = useCallback(
-    (
-      nextAvailable: boolean,
-      locationBody?: { lat: number; lng: number; accuracy: number; capturedAt: number }
-    ) => {
+    (nextAvailable: boolean) => {
       setAvailabilityLoading(true);
-      return apiClient
-        .patch("driver/availability", { isAvailable: nextAvailable, ...locationBody })
+      apiClient
+        .patch("driver/availability", { isAvailable: nextAvailable })
         .then(async ({ data }) => {
           const driver = data?.data?.driver;
           setActivity((prev) => ({
@@ -259,12 +252,10 @@ const Home = () => {
             is_online: driver?.is_online ?? prev?.is_online,
             is_available: driver?.is_available ?? prev?.is_available,
           }));
-          if (nextAvailable && locationBody) {
+          if (nextAvailable && location?.latitude != null && location?.longitude != null) {
             await syncDriverLocationToServer({
-              latitude: locationBody.lat,
-              longitude: locationBody.lng,
-              accuracy: locationBody.accuracy,
-              capturedAt: locationBody.capturedAt,
+              latitude: location.latitude,
+              longitude: location.longitude,
               address: address?.formattedAddress,
             });
             await startDriverBackgroundLocation();
@@ -276,29 +267,19 @@ const Home = () => {
             message: driver?.is_available ? "You're now online" : "You're now offline",
           });
           fetchDriverDashboard();
-          return true;
         })
         .catch((err) => {
           const status = err?.response?.status;
-          const data = err?.response?.data;
-          const message = data?.message;
-          if (status === 409 && data?.code === "LOCATION_REQUIRED") {
-            safeShowMessage({
-              type: "danger",
-              message: message || "Enable location and wait for GPS before going online",
-            });
-            return false;
-          }
+          const message = err?.response?.data?.message;
           const errorMessage =
-            status === 404 && (message?.toLowerCase?.().includes("driver") || !message)
+            status === 404 && (message?.toLowerCase().includes("driver") || !message)
               ? "Driver profile not found. Complete your driver registration first."
               : getErrorMessage(err);
           safeShowMessage({ type: "danger", message: errorMessage });
-          return false;
         })
         .finally(() => setAvailabilityLoading(false));
     },
-    [fetchDriverDashboard, address?.formattedAddress]
+    [fetchDriverDashboard, location?.latitude, location?.longitude, address?.formattedAddress]
   );
 
   useEffect(() => {
@@ -346,85 +327,23 @@ const Home = () => {
       return;
     }
     void (async () => {
-      setAvailabilityLoading(true);
-      setOnlineGateMessage("Getting your GPS…");
-      try {
-        const servicesOn = await Location.hasServicesEnabledAsync();
-        if (!servicesOn) {
-          safeShowMessage({
-            type: "danger",
-            message: "Turn on Location in your phone settings and try again",
-          });
-          return;
-        }
-
-        let perm = await Location.getForegroundPermissionsAsync();
-        if (perm.status !== Location.PermissionStatus.GRANTED) {
-          perm = await Location.requestForegroundPermissionsAsync();
-        }
-        if (perm.status !== Location.PermissionStatus.GRANTED) {
-          safeShowMessage({
-            type: "danger",
-            message: "Enable location to go online",
-          });
-          return;
-        }
-
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let fix: Location.LocationObject;
-        try {
-          fix = await Promise.race([
-            Location.getCurrentPositionAsync({
-              accuracy: Location.Accuracy.BestForNavigation,
-            }),
-            new Promise<Location.LocationObject>((_, reject) => {
-              timer = setTimeout(() => reject(new Error("timeout")), 15_000);
-            }),
-          ]);
-        } catch {
-          safeShowMessage({
-            type: "danger",
-            message:
-              "GPS not available. Grant 'Allow all the time' and try again from outside",
-          });
-          return;
-        } finally {
-          if (timer) clearTimeout(timer);
-        }
-
-        const lat = fix.coords.latitude;
-        const lng = fix.coords.longitude;
-        if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) {
-          safeShowMessage({
-            type: "danger",
-            message:
-              "GPS not available. Grant 'Allow all the time' and try again from outside",
-          });
-          return;
-        }
-
-        const online = await patchAvailability(true, {
-          lat,
-          lng,
-          accuracy: fix.coords.accuracy ?? 0,
-          capturedAt: fix.timestamp,
-        });
-        if (!online) return;
-
-        const bg = await ensureDriverBackgroundLocationAccess({
-          showRationale: true,
-        });
-        if (!bg.granted) {
-          safeShowMessage({
-            type: "info",
-            message:
-              "You're online. For trip requests when the app is closed, enable Allow all the time / Always in Settings (drivers only).",
-          });
-        }
-      } finally {
-        setOnlineGateMessage("");
-        setAvailabilityLoading(false);
+      const access = await ensureForegroundLocationAccess("driver", {
+        showRationale: true,
+      });
+      if (!access.granted) {
+        return;
       }
+      const bg = await ensureDriverBackgroundLocationAccess({
+        showRationale: true,
+      });
+      if (!bg.granted) {
+        safeShowMessage({
+          type: "info",
+          message:
+            "You're online. For trip requests when the app is closed, enable Allow all the time / Always in Settings (drivers only).",
+        });
+      }
+      patchAvailability(true);
     })();
   };
 
@@ -979,9 +898,6 @@ const Home = () => {
           </View>
           <View style={tw`items-end`}>
             <View style={tw`flex-row items-center gap-x-2`}>
-              {onlineGateMessage ? (
-                <ActivityIndicator size="small" color={tw.color("bg-base-green") ?? "#3C8F7C"} />
-              ) : null}
               <Text
                 style={tw.style(
                   `text-[14px]`,

@@ -23,10 +23,7 @@ export async function ensureDriverLocationTaskRegistered(): Promise<boolean> {
 
         const locations = (
           data as {
-            locations?: {
-              timestamp?: number;
-              coords: { latitude: number; longitude: number; accuracy?: number | null };
-            }[];
+            locations?: { coords: { latitude: number; longitude: number } }[];
           }
         )?.locations;
         const latest = locations?.[locations.length - 1];
@@ -48,12 +45,7 @@ export async function ensureDriverLocationTaskRegistered(): Promise<boolean> {
           const { syncDriverLocationToServer } = await import(
             "@/utils/driverLocationSync"
           );
-          await syncDriverLocationToServer({
-            latitude,
-            longitude,
-            accuracy: latest?.coords?.accuracy,
-            capturedAt: latest?.timestamp,
-          });
+          await syncDriverLocationToServer({ latitude, longitude });
         } catch (e) {
           console.warn("[driver-bg-location] sync failed:", e);
         }

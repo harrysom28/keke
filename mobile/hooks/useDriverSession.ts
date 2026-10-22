@@ -12,13 +12,7 @@ import {
 const ONLINE_POLL_MS = 45_000;
 const HEARTBEAT_MS = 30_000;
 
-type Coords = {
-  latitude: number;
-  longitude: number;
-  address?: string;
-  accuracy?: number | null;
-  capturedAt?: number | null;
-};
+type Coords = { latitude: number; longitude: number; address?: string };
 
 /**
  * Driver-area session: keeps online status + location heartbeats alive while the
@@ -65,12 +59,7 @@ export function useDriverSession() {
       ) {
         return lastCoordsRef.current;
       }
-      const coords: Coords = {
-        latitude: lat,
-        longitude: lng,
-        accuracy: pos.coords.accuracy,
-        capturedAt: pos.timestamp,
-      };
+      const coords: Coords = { latitude: lat, longitude: lng };
       lastCoordsRef.current = coords;
       return coords;
     } catch {

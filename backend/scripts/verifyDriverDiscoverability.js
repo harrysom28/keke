@@ -147,7 +147,6 @@ const makeDriver = async ({ vehicleTypeId, kmNorth, available = true }) => {
       type: 'Point',
       coordinates: [p.lng, p.lat],
       lastUpdated: new Date(),
-      lastRealFixAt: new Date(),
     },
     lastActiveAt: new Date(),
   });
