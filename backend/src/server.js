@@ -740,6 +740,10 @@ async function gracefulShutdown(signal) {
       clearInterval(svc._onlineTimeInterval);
       svc._onlineTimeInterval = null;
     }
+    if (svc?._onlineTimePusherInterval) {
+      clearInterval(svc._onlineTimePusherInterval);
+      svc._onlineTimePusherInterval = null;
+    }
   } catch (_) {
     /* ignore */
   }

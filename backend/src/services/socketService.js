@@ -10,44 +10,78 @@ class SocketService {
   constructor(io) {
     this.io = io;
     this._onlineTimeInterval = null;
+    this._onlineTimePusherInterval = null;
   }
 
   /**
-   * Broadcast live online duration to drivers on socket + Pusher (~every 8s).
+   * Broadcast live online duration to drivers.
+   *
+   * Socket.io: every SOCKET_ONLINE_TIME_MS (8s) — same as before. The current
+   * mobile app does not use this path for the dashboard label (it only listens
+   * on Pusher `private-driver-{id}`), but other socket clients may.
+   *
+   * Pusher: every PUSHER_ONLINE_TIME_MS (60s). Cutting this from 8s → 60s is the
+   * bulk of the volume save (~450 → ~60 messages/driver/hour). Without a client
+   * ticker the home-screen label (`driverTimeOnlineFromPusher`) will hold the
+   * last string for up to 60s and then jump; that is the trade-off until an app
+   * release can count up from `onlineSessionStartedAt` locally.
    */
   startOnlineTimeBroadcast() {
     if (this._onlineTimeInterval) {
       clearInterval(this._onlineTimeInterval);
     }
-    const tick = async () => {
+    if (this._onlineTimePusherInterval) {
+      clearInterval(this._onlineTimePusherInterval);
+    }
+
+    const SOCKET_ONLINE_TIME_MS = 8000;
+    const PUSHER_ONLINE_TIME_MS = 60_000;
+
+    const buildPayloads = async () => {
+      const Driver = (await import('../models/Driver.js')).default;
+      const drivers = await Driver.find({ isOnline: true })
+        .select('todayOnlineMs onlineSessionStartedAt user')
+        .populate('user', '_id')
+        .lean();
+      return drivers.map((d) => {
+        let ms = d.todayOnlineMs || 0;
+        if (d.onlineSessionStartedAt) {
+          ms += Date.now() - new Date(d.onlineSessionStartedAt).getTime();
+        }
+        return {
+          id: d._id.toString(),
+          uid: d.user?._id?.toString() || null,
+          payload: { timeOnline: formatOnlineDurationMs(ms) },
+        };
+      });
+    };
+
+    const socketTick = async () => {
       if (!this.io) return;
       try {
-        const Driver = (await import('../models/Driver.js')).default;
-        const drivers = await Driver.find({ isOnline: true })
-          .select('todayOnlineMs onlineSessionStartedAt user')
-          .populate('user', '_id')
-          .lean();
-        for (const d of drivers) {
-          let ms = d.todayOnlineMs || 0;
-          if (d.onlineSessionStartedAt) {
-            ms += Date.now() - new Date(d.onlineSessionStartedAt).getTime();
-          }
-          const timeOnline = formatOnlineDurationMs(ms);
-          const payload = { timeOnline };
-          const id = d._id.toString();
+        for (const { id, uid, payload } of await buildPayloads()) {
           this.io.to(`driver:${id}`).emit('ONLINE_TIME_UPDATE', payload);
-          const uid = d.user?._id?.toString();
-          if (uid) {
-            this.io.to(`user:${uid}`).emit('ONLINE_TIME_UPDATE', payload);
-          }
+          if (uid) this.io.to(`user:${uid}`).emit('ONLINE_TIME_UPDATE', payload);
+        }
+      } catch (err) {
+        logger.warn(`Online time socket broadcast tick failed: ${err.message}`);
+      }
+    };
+
+    const pusherTick = async () => {
+      try {
+        for (const { id, payload } of await buildPayloads()) {
           void safeTrigger(`private-driver-${id}`, 'ONLINE_TIME_UPDATE', payload);
         }
       } catch (err) {
-        logger.warn(`Online time broadcast tick failed: ${err.message}`);
+        logger.warn(`Online time Pusher broadcast tick failed: ${err.message}`);
       }
     };
-    this._onlineTimeInterval = setInterval(tick, 8000);
-    tick();
+
+    this._onlineTimeInterval = setInterval(socketTick, SOCKET_ONLINE_TIME_MS);
+    this._onlineTimePusherInterval = setInterval(pusherTick, PUSHER_ONLINE_TIME_MS);
+    socketTick();
+    pusherTick();
   }
 
   /**

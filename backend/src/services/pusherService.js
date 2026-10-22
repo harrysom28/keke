@@ -194,15 +194,14 @@ class PusherService {
       // Emit to ride channel (mobile app expects private.ride.{rideId})
       safeTrigger(`private.ride.${ride._id.toString()}`, 'ride.status', statusData);
 
-      // Rider mobile listens on private-user-{userId} (hyphen form); keep dot variants for older clients.
+      // Rider mobile listens on private-user-{userId} (hyphen). Also emit private.user.{id}
+      // (dot) for any older client that still uses that form. Do NOT emit private.user-{id}
+      // or private.driver-{id}: nothing in the current apps subscribes to them, and
+      // private.user-{id} cannot even be authorized by pusherController.
       if (ride.rider) {
         const riderId = ride.rider._id?.toString?.() || ride.rider.toString();
         safeTrigger(`private-user-${riderId}`, 'ride.status', statusData);
         safeTrigger(`private.user.${riderId}`, 'ride.status', statusData);
-        safeTrigger(`private.user-${riderId}`, 'ride.status', statusData);
-      }
-      if (driver) {
-        safeTrigger(`private.driver-${driver._id.toString()}`, 'ride.status', statusData);
       }
 
       logger.debug(`Pusher: Ride status update emitted: ${status} for ride ${ride._id}`);
@@ -249,7 +248,6 @@ class PusherService {
       safeTrigger(`private.ride.${ride._id.toString()}`, 'ride_accepted', payload);
       safeTrigger(`private-user-${riderId}`, 'ride_accepted', payload);
       safeTrigger(`private.user.${riderId}`, 'ride_accepted', payload);
-      safeTrigger(`private.user-${riderId}`, 'ride_accepted', payload);
       logger.debug(`Pusher: ride_accepted emitted for ride ${ride._id}`);
     } catch (error) {
       logger.error(`Failed to emit ride_accepted via Pusher: ${error.message}`);
@@ -287,7 +285,6 @@ class PusherService {
       safeTrigger(`private-user-${riderId}`, 'ride.status', payload);
       safeTrigger(`private-user-${riderId}`, 'ride_cancelled', payload);
       safeTrigger(`private.user.${riderId}`, 'ride.status', payload);
-      safeTrigger(`private.user-${riderId}`, 'ride_cancelled', payload);
       // Legacy channel the rider app still listens on
       safeTrigger('private.driver_cancelled', 'driver_cancelled', payload);
       safeTrigger(`private-user-${riderId}`, 'driver_cancelled', payload);
@@ -315,10 +312,9 @@ class PusherService {
         timestamp: new Date().toISOString(),
       };
 
-      // Emit to user channel (for trip completed modal) - mobile app expects private.completed_ride
+      // Mobile listens on the global private.completed_ride (and on private.ride.*).
       if (ride.rider) {
         safeTrigger(`private.completed_ride`, 'completed_ride', completedData);
-        safeTrigger(`private.user-${ride.rider._id.toString()}`, 'completed_ride', completedData);
       }
       
       // Emit to ride channel
@@ -348,10 +344,9 @@ class PusherService {
         timestamp: new Date().toISOString(),
       };
 
-      // Emit to user channel (for payment receipt modal) - mobile app expects private.payment
+      // Mobile listens on the global private.payment.
       if (ride.rider) {
         safeTrigger(`private.payment`, 'payment', receiptData);
-        safeTrigger(`private.user-${ride.rider._id.toString()}`, 'payment', receiptData);
       }
 
       logger.info(`Pusher: Payment receipt event emitted for ride ${ride._id}`);
@@ -376,15 +371,8 @@ class PusherService {
         timestamp: new Date().toISOString(),
       };
 
-      // Emit to user channel - mobile app expects private.started
+      // Mobile listens on the global private.started (and on private.ride.*).
       safeTrigger(`private.started`, 'started', startedData);
-      
-      // Also emit to user-specific channel
-      if (ride.rider) {
-        safeTrigger(`private.user-${ride.rider._id.toString()}`, 'started', startedData);
-      }
-      
-      // Emit to ride channel
       safeTrigger(`private.ride.${ride._id.toString()}`, 'ride.started', startedData);
 
       logger.info(`Pusher: Ride started event emitted for ride ${ride._id}`);

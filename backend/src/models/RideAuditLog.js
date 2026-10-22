@@ -16,7 +16,15 @@ const rideAuditLogSchema = new mongoose.Schema(
       type: String,
       required: true,
       index: true,
-      enum: ['force_complete', 'stale_flag', 'admin_force_complete', 'driver_offline', 'driver_reconnected'],
+      enum: [
+        'force_complete',
+        'stale_flag',
+        'admin_force_complete',
+        'driver_offline',
+        'driver_reconnected',
+        // staleTripService.autoCancelStuckPrePickupRide (driver no-show / stuck pre-pickup)
+        'auto_cancel_no_progress',
+      ],
     },
     initiatedBy: {
       type: mongoose.Schema.Types.ObjectId,

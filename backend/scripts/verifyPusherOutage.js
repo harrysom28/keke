@@ -6,14 +6,17 @@
  *
  * What it proves:
  *   A. safeTrigger(): never rejects, no-op when Pusher is not configured, rate-limited warn logging, bounded time.
- *   B. No bare `.trigger(` call exists in src/ outside safeTrigger (static guard).
+ *   B. Static guards: no bare `.trigger(` outside safeTrigger; no dead `private.user-` / `private.driver-`
+ *      channel emits; ONLINE_TIME_UPDATE uses socket 8s + Pusher 60s.
  *   C. A real Node process with the production logger + utils/errors.js handlers survives an unhandledRejection AND an
  *      uncaughtException (regression guard for winston `exitOnError`, the thing that actually called process.exit(1)).
  *   D. With pusher.trigger mocked to reject with a 403 RequestError (exactly what Pusher returns):
  *      - every PusherService emitter, the stale-trip job (the boot-time tick), and the ride endpoints
  *        (arrived, start, driver location, complete, chat message, cancel) still succeed,
  *      - zero unhandledRejection events fire anywhere,
- *      - the warn log is rate limited.
+ *      - the warn log is rate limited,
+ *      - emitters never target the removed private.user- / private.driver- channels,
+ *      - stale pre-pickup cancel writes RideAuditLog action `auto_cancel_no_progress`.
  *
  * Safety: refuses to run unless the connected database name contains "test" (it empties every collection), refuses
  * FerretDB. The Pusher client is pointed at a dead local port so nothing here can ever reach the real Pusher.
@@ -72,14 +75,20 @@ const Notification = await M('../src/models/Notification.js');
 const SupportTicket = await M('../src/models/SupportTicket.js');
 const DriverWallet = await M('../src/models/DriverWallet.js');
 const Message = await M('../src/models/Message.js');
+const RideAuditLog = await M('../src/models/RideAuditLog.js');
 const driverCtl = await import('../src/controllers/driverController.js');
 const rideCtl = await import('../src/controllers/rideController.js');
 const messageCtl = await import('../src/controllers/messageController.js');
 const pusherMod = await import('../src/services/pusherService.js');
 const { safeTrigger, getPusherService, _resetTriggerFailureLog } = pusherMod;
 const { default: staleTripService } = await import('../src/services/staleTripService.js');
-const { initializeSocketService } = await import('../src/services/socketService.js');
+const { initializeSocketService, getSocketService } = await import('../src/services/socketService.js');
 const PusherLib = (await import('pusher')).default;
+
+/** Dead channel forms nothing in the current mobile apps subscribes to. */
+const isRemovedChannel = (ch) =>
+  typeof ch === 'string' &&
+  (/^private\.user-/.test(ch) || /^private\.driver-/.test(ch));
 
 let passed = 0, failed = 0;
 const check = (c, m) => { if (c) { passed++; console.log('  ok  ', m); } else { failed++; console.log('  FAIL', m); } };
@@ -105,15 +114,17 @@ console.log(`MongoDB ${bi.version} on database ${dbName} (${hello.setName ? 'rep
 for (const m of Object.values(mongoose.models)) await m.deleteMany({});
 await UserWallet.collection.createIndex({ userId: 1 }, { unique: true });
 await UserWalletTransaction.collection.createIndex({ idempotencyKey: 1 }, { unique: true, sparse: true });
-for (const m of [UserWallet, UserWalletTransaction, Payment, User, Ride, Driver, DriverWallet, Notification, SupportTicket, Message]) await m.createCollection().catch(() => {});
+for (const m of [UserWallet, UserWalletTransaction, Payment, User, Ride, Driver, DriverWallet, Notification, SupportTicket, Message, RideAuditLog]) await m.createCollection().catch(() => {});
 
 // ── the mock: exactly what Pusher does once the daily quota is gone ──────────────────────────────────────
 const ps = getPusherService();
 const real403 = () => new PusherLib.RequestError('Unexpected status code 403', 'https://api-mt1.pusher.com/apps/1/events', undefined, 403, 'The account has exceeded its message limit');
 let triggerCalls = 0;
 let triggerMode = 'reject403';
+const triggerChannels = [];
 ps.pusher.trigger = (channel, event) => {
   triggerCalls++;
+  triggerChannels.push(String(channel));
   if (triggerMode === 'reject403') return Promise.reject(real403());
   if (triggerMode === 'reject500') return Promise.reject(Object.assign(new Error('boom'), { status: 500 }));
   if (triggerMode === 'throw') throw new Error('sync boom');
@@ -182,22 +193,38 @@ console.log('\nA. safeTrigger never rejects, and its logging is rate limited');
   check(child.status === 0 && parsed?.v === false && parsed.hasClient === false, `Pusher not configured: safeTrigger and emitters are silent no-ops${child.status === 0 ? '' : ` [${child.stderr?.slice(0, 200)}]`}`);
 }
 
-console.log('\nB. static guard: no bare trigger() call outside safeTrigger');
+console.log('\nB. static guards: safeTrigger-only, no dead channels, ONLINE_TIME intervals');
 {
   const offenders = [];
+  const deadChannelCalls = [];
   const walk = (dir) => {
     for (const f of readdirSync(dir)) {
       const p = path.join(dir, f);
       if (statSync(p).isDirectory()) walk(p);
       else if (p.endsWith('.js')) {
         readFileSync(p, 'utf8').split('\n').forEach((l, i) => {
-          if (/\.trigger\(/.test(l) && !/^\s*(\/\/|\*)/.test(l) && !/withTimeout|'pusher\.trigger/.test(l)) offenders.push(`${path.relative(srcDir, p)}:${i + 1}`);
+          const rel = `${path.relative(srcDir, p)}:${i + 1}`;
+          if (/\.trigger\(/.test(l) && !/^\s*(\/\/|\*)/.test(l) && !/withTimeout|'pusher\.trigger/.test(l)) offenders.push(rel);
+          // Live code that would emit to the removed forms (ignore comments).
+          if (!/^\s*(\/\/|\*)/.test(l) && /safeTrigger\(\s*[`'"]private\.(user|driver)-/.test(l)) {
+            deadChannelCalls.push(rel);
+          }
         });
       }
     }
   };
   walk(srcDir);
   check(offenders.length === 1 && offenders[0].startsWith('services/pusherService.js'), `the only pusher.trigger( in src/ is inside safeTrigger (${offenders.join(', ')})`);
+  eq(deadChannelCalls.length, 0, `no live safeTrigger to private.user- / private.driver- (${deadChannelCalls.join(', ') || 'none'})`);
+
+  const socketSrc = readFileSync(path.join(srcDir, 'services/socketService.js'), 'utf8');
+  check(/SOCKET_ONLINE_TIME_MS\s*=\s*8000/.test(socketSrc), 'ONLINE_TIME socket interval is 8000 ms');
+  check(/PUSHER_ONLINE_TIME_MS\s*=\s*60_000/.test(socketSrc), 'ONLINE_TIME Pusher interval is 60_000 ms');
+  check(/setInterval\(socketTick,\s*SOCKET_ONLINE_TIME_MS\)/.test(socketSrc), 'socket tick uses SOCKET_ONLINE_TIME_MS');
+  check(/setInterval\(pusherTick,\s*PUSHER_ONLINE_TIME_MS\)/.test(socketSrc), 'pusher tick uses PUSHER_ONLINE_TIME_MS');
+
+  const auditSrc = readFileSync(path.join(srcDir, 'models/RideAuditLog.js'), 'utf8');
+  check(/'auto_cancel_no_progress'/.test(auditSrc), 'RideAuditLog enum includes auto_cancel_no_progress');
 }
 
 console.log('\nC. a real process survives unhandledRejection / uncaughtException (winston exitOnError regression guard)');
@@ -220,19 +247,21 @@ console.log('\nC. a real process survives unhandledRejection / uncaughtException
 
 console.log('\nD. Pusher returning 403 for everything: ride flow, stale-trip job, emitters, chat');
 {
-  triggerMode = 'reject403'; _resetTriggerFailureLog(); warns.length = 0; triggerCalls = 0;
+  triggerMode = 'reject403'; _resetTriggerFailureLog(); warns.length = 0; triggerCalls = 0; triggerChannels.length = 0;
   const unhandledBefore = unhandled.length;
 
   // Harness control: a raw un-awaited trigger() really does produce an unhandledRejection here.
   ps.pusher.trigger('control', 'evt', {});
   await sleep(100);
   eq(unhandled.length - unhandledBefore, 1, 'control: a bare pusher.trigger() IS an unhandledRejection in this harness');
-  unhandled.length = 0; triggerCalls = 0;
+  unhandled.length = 0; triggerCalls = 0; triggerChannels.length = 0;
 
   // Realtime layer wired like production (socket service present => Pusher emitters are invoked from controllers).
   const emitted = [];
   const room = (name) => ({ emit: (ev, p) => emitted.push({ name, ev, p }) });
   initializeSocketService({ to: room, emit() {}, sockets: { adapter: { rooms: new Map() } } });
+  const sock = getSocketService();
+  check(!!sock && sock._onlineTimeInterval == null && sock._onlineTimePusherInterval == null, 'socket service ready (online-time timers not started in this harness)');
 
   const PICKUP = [7.5, 6.3]; const DROP = [7.6, 6.4];
   let seq = 0;
@@ -276,6 +305,10 @@ console.log('\nD. Pusher returning 403 for everything: ride flow, stale-trip job
   check(triggerCalls >= 3, `stale job really tried Pusher and got 403 (${triggerCalls} attempts)`);
   eq(staleTripService.isRunning, false, 'stale job finished its tick (not wedged)');
   eq(unhandled.length, 0, 'stale job: zero unhandled rejections');
+  const noShowAudits = await RideAuditLog.find({ ride: stuckAccepted._id, action: 'auto_cancel_no_progress' }).lean();
+  eq(noShowAudits.length, 1, 'stale pre-pickup cancel writes RideAuditLog action auto_cancel_no_progress');
+  const staleFlagAudits = await RideAuditLog.find({ ride: staleInProgress._id, action: 'stale_flag' }).lean();
+  eq(staleFlagAudits.length, 1, 'stale in-progress flag still writes RideAuditLog action stale_flag');
 
   // ---- 2. ride endpoints ----------------------------------------------------------------------------------
   const rider = await mkUser('passenger');
@@ -319,6 +352,7 @@ console.log('\nD. Pusher returning 403 for everything: ride flow, stale-trip job
   // ---- 3. every emitter on PusherService ------------------------------------------------------------------
   const rideDoc = await Ride.findById(ride._id).populate('rider');
   const driverDoc = await Driver.findById(driver._id).populate('user');
+  const channelsBeforeEmitters = triggerChannels.length;
   const emits = [
     () => ps.emitDriverLocationUpdate(rideDoc, driverDoc, 4, 1.2),
     () => ps.emitRideStatusUpdate(rideDoc, 'accepted', driverDoc),
@@ -335,6 +369,19 @@ console.log('\nD. Pusher returning 403 for everything: ride flow, stale-trip job
   eq(threw, 0, `all ${emits.length} PusherService emitters return normally`);
 
   await sleep(500); // let every fire-and-forget (setImmediate chat push, etc.) settle
+  const emitterChannels = triggerChannels.slice(channelsBeforeEmitters);
+  const deadHits = triggerChannels.filter(isRemovedChannel);
+  eq(deadHits.length, 0, `no trigger targeted private.user- / private.driver- (got ${deadHits.slice(0, 5).join(', ') || 'none'})`);
+  check(
+    emitterChannels.some((c) => c === `private-user-${rider._id}`) &&
+      emitterChannels.some((c) => c.startsWith('private.ride.')),
+    'emitters still hit private-user-{id} and private.ride.{id}'
+  );
+  check(
+    emitterChannels.some((c) => c === `private.user.${rider._id}`),
+    'emitters still hit private.user.{id} (dot form kept)'
+  );
+
   eq(unhandled.length, 0, `zero unhandledRejection events across the whole run (${triggerCalls} failed Pusher calls)`);
   const wl = pusherWarns();
   check(wl.length >= 1 && wl.length <= 3, `failures are logged, but only ${wl.length} line(s) for ${triggerCalls} failed calls`);
