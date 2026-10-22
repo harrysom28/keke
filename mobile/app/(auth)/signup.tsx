@@ -30,6 +30,7 @@ import {
 import { getUniqueId } from "react-native-device-info";
 import { queueLocationDisclosureIfNeeded } from "@/utils/locationDisclosure";
 import { requestUserNotificationPermission } from "@/utils/notifications";
+import { rememberInviteFromAuth } from "@/utils/inviteCache";
 
 const SIGNUP_MODES = ["Phone OTP", "Email & Password"] as const;
 type SignupMode = (typeof SIGNUP_MODES)[number];
@@ -84,6 +85,7 @@ const SignUp = () => {
     if (data?.data?.user) {
       dispatch(updateUser({ profile: data.data.user }));
     }
+    await rememberInviteFromAuth(data);
     if (data?.data?.needs_onboarding || role === "driver") {
       router.replace({
         pathname: "/driverinfo",

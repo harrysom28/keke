@@ -1315,7 +1315,7 @@ const formatUserResponse = (user) => {
     topup_bank_name: user.topupBankName,
     wallet_account_number: user.walletAccountNumber || ('KEKE' + user._id.toString().slice(-8).toUpperCase()),
     police_emergency_contact: user.policeEmergencyContact,
-    referral_code: user.referralCode,
+    referral_code: user.referralCode || null,
     driver_id: user.driver?._id?.toString() || null,
   };
 };

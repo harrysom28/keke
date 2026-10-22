@@ -22,7 +22,8 @@ import RideAuditLog from '../models/RideAuditLog.js';
 import { provisionDvaAsync } from '../services/dvaProvisioningService.js';
 import { getOrCreateWallet } from '../services/walletService.js';
 import { creditRiderBalance, adjustRiderBalance, getRiderBalance } from '../services/riderBalanceService.js';
-import { validateDropoffUpdate, validateDispatchUpdate } from '../services/settingsService.js';
+import { validateDropoffUpdate, validateDispatchUpdate, getSettings as readAppSettings } from '../services/settingsService.js';
+import { gpsDotStatus, lastRealFixIso } from '../utils/driverGpsFix.js';
 import WalletFundingTransaction from '../models/WalletFundingTransaction.js';
 import PaystackUnmatchedPayment from '../models/PaystackUnmatchedPayment.js';
 import { generateTokenPair, generateAccessToken } from '../utils/jwt.js';
@@ -421,6 +422,7 @@ export const getSettings = asyncHandler(async (req, res) => {
     cashAmount: 500,
     freeRideAmount: 1000,
     description: "Invite friends! When they complete signup and their first ride, you both get a reward.",
+    updatedAt: null,
   };
   const defaultDriverTasks = {
     first_ride_today: 200,
@@ -562,6 +564,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
     if (referral.cashAmount != null) doc.referral.cashAmount = Math.max(0, parseFloat(referral.cashAmount) || 0);
     if (referral.freeRideAmount != null) doc.referral.freeRideAmount = Math.max(0, parseFloat(referral.freeRideAmount) || 0);
     if (referral.description != null) doc.referral.description = String(referral.description).trim() || doc.referral.description;
+    doc.referral.updatedAt = new Date();
     doc.markModified('referral');
   }
   if (topup) {
@@ -1458,6 +1461,7 @@ export const listDrivers = asyncHandler(async (req, res) => {
   const driverMap = new Map(drivers.map((driver) => [driver.user.toString(), driver]));
   const kycMap = new Map(kycDocs.map((doc) => [doc.userId.toString(), doc]));
   const vehicleMap = new Map(vehicleDocs.map((doc) => [doc.userId.toString(), doc]));
+  const freshnessSeconds = await locationFreshnessSeconds();
 
   const matchedDrivers = users
     .map((user) => formatDriverCandidateResponse({
@@ -1465,7 +1469,7 @@ export const listDrivers = asyncHandler(async (req, res) => {
       driver: driverMap.get(user._id.toString()) || null,
       driverKyc: kycMap.get(user._id.toString()) || null,
       driverVehicle: vehicleMap.get(user._id.toString()) || null,
-    }))
+    }, freshnessSeconds))
     .filter((driver) => {
       if (verificationStatus && driver.verification_status !== verificationStatus) {
         return false;
@@ -1537,6 +1541,7 @@ export const getDriverDetails = asyncHandler(async (req, res) => {
       DriverVehicle.findOne({ userId: user._id }).populate('vehicleType').lean(),
     ]);
 
+    const freshnessSeconds = await locationFreshnessSeconds();
     return res.json({
       status: 'success',
       data: {
@@ -1545,7 +1550,7 @@ export const getDriverDetails = asyncHandler(async (req, res) => {
           driver: null,
           driverKyc,
           driverVehicle,
-        }),
+        }, freshnessSeconds),
         statistics: {
           total_rides: 0,
           completed_rides: 0,
@@ -1574,10 +1579,11 @@ export const getDriverDetails = asyncHandler(async (req, res) => {
     { $group: { _id: null, total: { $sum: '$amount' } } },
   ]);
 
+  const freshnessSeconds = await locationFreshnessSeconds();
   res.json({
     status: 'success',
     data: {
-      driver: formatDriverResponse(driver),
+      driver: formatDriverResponse(driver, freshnessSeconds),
       statistics: {
         total_rides: totalRides,
         completed_rides: completedRides,
@@ -3472,10 +3478,20 @@ const formatUserResponse = (user) => {
   };
 };
 
+async function locationFreshnessSeconds() {
+  try {
+    const s = await readAppSettings();
+    const sec = Number(s?.dispatch?.locationFreshnessSeconds);
+    return Number.isFinite(sec) && sec > 0 ? sec : 300;
+  } catch {
+    return 300;
+  }
+}
+
 /**
  * Format driver response for admin
  */
-const formatDriverResponse = (driver) => {
+const formatDriverResponse = (driver, freshnessSeconds = 300) => {
   return {
     driver_id: driver._id.toString(),
     has_driver_profile: true,
@@ -3498,6 +3514,8 @@ const formatDriverResponse = (driver) => {
     } : null,
     documents_verified: driver.documentsVerified,
     verification_status: driver.verificationStatus,
+    gps_status: gpsDotStatus(driver.currentLocation, freshnessSeconds),
+    last_real_fix_at: lastRealFixIso(driver.currentLocation),
     referred_by_agent_id: driver.referredByAgentId?.toString?.() || driver.referredByAgentId || null,
     is_online: driver.isOnline,
     is_available: driver.isAvailable,
@@ -3507,7 +3525,7 @@ const formatDriverResponse = (driver) => {
   };
 };
 
-const formatDriverCandidateResponse = ({ user, driver, driverKyc, driverVehicle }) => {
+const formatDriverCandidateResponse = ({ user, driver, driverKyc, driverVehicle }, freshnessSeconds = 300) => {
   if (driver) {
     return formatDriverResponse({
       ...driver,
@@ -3520,7 +3538,7 @@ const formatDriverCandidateResponse = ({ user, driver, driverKyc, driverVehicle 
         profileImage: user?.profileImage || driver.user?.profileImage || null,
         isActive: user?.isActive ?? driver.user?.isActive ?? false,
       },
-    });
+    }, freshnessSeconds);
   }
 
   const effectiveStatus = driverKyc?.verificationStatus === 'rejected' || driverVehicle?.verificationStatus === 'rejected'
@@ -3555,6 +3573,8 @@ const formatDriverCandidateResponse = ({ user, driver, driverKyc, driverVehicle 
       : null,
     documents_verified: driverKyc?.verificationStatus === 'verified' && driverVehicle?.verificationStatus === 'verified',
     verification_status: effectiveStatus,
+    gps_status: 'red',
+    last_real_fix_at: null,
     is_online: false,
     is_available: false,
     earnings: null,

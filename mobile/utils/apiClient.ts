@@ -7,6 +7,7 @@ import AppStore from '@/store';
 import { updateRefreshToken, updateToken } from '@/store/AuthSlice';
 import { REFRESH_TOKEN } from '@/constants';
 import { getErrorMessage } from '@/utils/errorHandler';
+import { rememberInviteFromAuth } from '@/utils/inviteCache';
 
 /**
  * Configured Axios instance for API requests
@@ -450,6 +451,7 @@ apiClient.interceptors.response.use(
                 if (newRefreshToken) {
                   AppStore.dispatch(updateRefreshToken(newRefreshToken));
                 }
+                void rememberInviteFromAuth(resp?.data);
                 if (__DEV__) {
                   console.log('✅ Token refreshed successfully');
                 }
