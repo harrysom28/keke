@@ -6,6 +6,7 @@ import logger from '../utils/logger.js';
 import { learnFromRide } from './placeIntelligence.js';
 import { getSettings } from './settingsService.js';
 import { measureDropoff } from '../utils/dropoffProximity.js';
+import { safeTrigger } from './pusherService.js';
 
 /**
  * Shared "driver side" trip completion.
@@ -61,10 +62,8 @@ export async function emitTripEvent(ride, event, payload, { rider = true, driver
       }
     }
 
-    const { getPusherService } = await import('./pusherService.js');
-    const ps = getPusherService();
-    if (ps?.pusher && ride?._id) {
-      await ps.pusher.trigger(`private.ride.${ride._id.toString()}`, event, payload);
+    if (ride?._id) {
+      await safeTrigger(`private.ride.${ride._id.toString()}`, event, payload);
     }
   } catch (err) {
     logger.warn(`Trip event ${event} emit failed: ${err.message}`);
@@ -170,9 +169,7 @@ export async function finalizeDriverCompletion(
       socketService.io?.to(`user:${ride.rider._id.toString()}`).emit('trip:completed', payload);
       socketService.io?.to(`driver:${driver._id.toString()}`).emit('trip:completed', payload);
       socketService.io?.to(`driver:${userId.toString()}`).emit('trip:completed', payload);
-      const { getPusherService } = await import('./pusherService.js');
-      const ps = getPusherService();
-      ps?.pusher?.trigger(`private.ride.${ride._id.toString()}`, 'trip:completed', payload);
+      void safeTrigger(`private.ride.${ride._id.toString()}`, 'trip:completed', payload);
     } catch (e) {
       logger.debug(`trip:completed emit skipped: ${e.message}`);
     }

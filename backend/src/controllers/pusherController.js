@@ -5,6 +5,7 @@ import { NotFoundError, ValidationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { verifyAccessToken } from '../utils/jwt.js';
+import { safeTrigger } from '../services/pusherService.js';
 
 // Initialize Pusher (if configured). Same env vars as pusherService for auth.
 let pusher = null;
@@ -169,11 +170,17 @@ export const testPusher = asyncHandler(async (req, res) => {
   }
   const cluster = (process.env.PUSHER_CLUSTER || process.env.PUSHER_APP_CLUSTER || 'mt1').replace(/^["']|["']$/g, '').trim();
   try {
-    pusher.trigger('test-channel', 'test-event', {
+    const accepted = await safeTrigger('test-channel', 'test-event', {
       message: 'Pusher is working!',
       timestamp: new Date().toISOString(),
       cluster,
     });
+    if (!accepted) {
+      return res.status(502).json({
+        status: 'fail',
+        message: 'Pusher did not accept the event (quota, outage or timeout) — see server warn log',
+      });
+    }
     res.json({
       status: 'success',
       message: 'Event sent to test-channel',

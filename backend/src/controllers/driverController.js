@@ -59,6 +59,7 @@ import {
   isScheduledRideOverdue,
 } from '../utils/scheduledRide.js';
 import { DRIVER_LOCATION_MAX_AGE_MS } from '../utils/driverSearchRadius.js';
+import { safeTrigger } from '../services/pusherService.js';
 
 /**
  * Map multipart field name from mobile / driver create to upload category.
@@ -749,14 +750,12 @@ export const updateLocation = asyncHandler(async (req, res) => {
               await activeRide.save({ validateBeforeSave: false });
 
               const riderId = activeRide.rider?._id ?? activeRide.rider;
-              const { getPusherService } = await import('../services/pusherService.js');
-              const ps = getPusherService();
-              ps?.pusher?.trigger(`private-user-${String(riderId)}`, 'ride:approaching_destination', {
+              void safeTrigger(`private-user-${String(riderId)}`, 'ride:approaching_destination', {
                 rideId: activeRide._id.toString(),
                 distanceMeters,
                 message: "You're almost at your destination!",
               });
-              ps?.pusher?.trigger(`private.ride.${activeRide._id.toString()}`, 'ride:approaching_destination', {
+              void safeTrigger(`private.ride.${activeRide._id.toString()}`, 'ride:approaching_destination', {
                 rideId: activeRide._id.toString(),
                 distanceMeters,
                 message: "You're almost at your destination!",
@@ -2508,16 +2507,14 @@ export const markArrived = asyncHandler(async (req, res) => {
   }
 
   try {
-    const { getPusherService } = await import('../services/pusherService.js');
-    const ps = getPusherService();
     const riderId = ride.rider?._id?.toString?.() ?? ride.rider?.toString?.();
-    if (ps?.pusher && riderId) {
+    if (riderId) {
       const vd = driver.vehicleDetails;
       const vehicleInfo =
         vd?.color && vd?.make
           ? `${vd.color} ${vd.make}`
           : vd?.make || vd?.model || '';
-      await ps.pusher.trigger(`private-user-${riderId}`, 'driver-arrived', {
+      await safeTrigger(`private-user-${riderId}`, 'driver-arrived', {
         rideId: ride._id.toString(),
         driverName,
         vehicleInfo,
@@ -2922,13 +2919,11 @@ export const confirmPayment = asyncHandler(async (req, res) => {
   try {
     const method = String(ride.paymentMethod || '').toLowerCase();
     if (method === 'cash') {
-      const { getPusherService } = await import('../services/pusherService.js');
-      const ps = getPusherService();
       const riderRef = ride.rider;
       const riderId = riderRef?._id?.toString?.() ?? riderRef?.toString?.();
-      if (ps?.pusher && riderId) {
+      if (riderId) {
         const amount = ride.fare?.totalFare ?? 0;
-        await ps.pusher.trigger(`private-user-${riderId}`, 'payment-confirmed', {
+        await safeTrigger(`private-user-${riderId}`, 'payment-confirmed', {
           rideId: ride._id.toString(),
           amount,
           method: 'cash',

@@ -1,6 +1,6 @@
 import logger from '../utils/logger.js';
 import { getSocketService } from './socketService.js';
-import { getPusherService } from './pusherService.js';
+import { safeTrigger } from './pusherService.js';
 import { sendToUser } from './notificationService.js';
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
@@ -101,11 +101,9 @@ async function pushOfferToDriver(driver, ridePayload, rideId) {
         })
       : Promise.resolve(),
 
-    (async () => {
-      const svc = getPusherService();
-      if (!svc?.pusher) return;
-      svc.pusher.trigger(`private-driver-${driverId}`, 'ride-request', ridePayload);
-    })(),
+    // safeTrigger never rejects, so a Pusher outage cannot fail this Promise.allSettled slot
+    // (and resolves false when Pusher is not configured).
+    safeTrigger(`private-driver-${driverId}`, 'ride-request', ridePayload),
 
     (async () => {
       const socket = getSocketService();

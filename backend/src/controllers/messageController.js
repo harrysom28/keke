@@ -6,6 +6,7 @@ import { NotFoundError, ValidationError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { getSocketService } from '../services/socketService.js';
+import { safeTrigger } from '../services/pusherService.js';
 
 /**
  * Get chat messages - GET /api/message/passenger/driver/:rideId
@@ -205,18 +206,14 @@ export const sendMessage = asyncHandler(async (req, res) => {
   // If they hang, it causes client timeouts and "Message not sent" even though it saved.
   setImmediate(async () => {
     try {
-      const { getPusherService } = await import('../services/pusherService.js');
-      const ps = getPusherService();
-      if (ps?.pusher) {
-        await withTimeout(
-          ps.pusher.trigger(`private.ride.${rideId}`, 'new-message', {
-            message: formatMessageResponse(newMessage, receiverId.toString()),
-            ride_id: rideId.toString(),
-          }),
-          2500,
-          'pusher.trigger(new-message)'
-        );
-      }
+      await withTimeout(
+        safeTrigger(`private.ride.${rideId}`, 'new-message', {
+          message: formatMessageResponse(newMessage, receiverId.toString()),
+          ride_id: rideId.toString(),
+        }),
+        2500,
+        'pusher.trigger(new-message)'
+      );
     } catch (err) {
       logger.warn(`Pusher new-message failed: ${err.message}`);
     }

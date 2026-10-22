@@ -1,6 +1,7 @@
 import logger from '../utils/logger.js';
 import { mapRideStatusForClientApi, getLifecycleStatus } from '../utils/rideStatus.js';
 import { formatOnlineDurationMs } from '../utils/driverOnlineTime.js';
+import { safeTrigger } from './pusherService.js';
 
 /**
  * Socket.io service for real-time events
@@ -39,15 +40,7 @@ class SocketService {
           if (uid) {
             this.io.to(`user:${uid}`).emit('ONLINE_TIME_UPDATE', payload);
           }
-          try {
-            const { getPusherService } = await import('./pusherService.js');
-            const ps = getPusherService();
-            if (ps?.pusher) {
-              ps.pusher.trigger(`private-driver-${id}`, 'ONLINE_TIME_UPDATE', payload);
-            }
-          } catch (e) {
-            logger.debug(`Pusher ONLINE_TIME_UPDATE skip: ${e.message}`);
-          }
+          void safeTrigger(`private-driver-${id}`, 'ONLINE_TIME_UPDATE', payload);
         }
       } catch (err) {
         logger.warn(`Online time broadcast tick failed: ${err.message}`);
