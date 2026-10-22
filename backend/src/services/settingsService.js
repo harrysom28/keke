@@ -31,6 +31,15 @@ const DEFAULTS = {
     liveFixMaxAgeSeconds: 30,
     riderConfirmWindowSeconds: 120,
   },
+  // Driver search / dispatch radii (km) and location freshness. See utils/driverSearchRadius.js.
+  dispatch: {
+    previewRadiusKm: 10,
+    round1RadiusKm: 10,
+    round2RadiusKm: 12,
+    round3RadiusKm: 15,
+    assignRadiusKm: 10,
+    locationFreshnessSeconds: 300,
+  },
   wallet: {
     minTopupAmount: 500,
     minWithdrawAmount: 1000,
@@ -51,6 +60,7 @@ export async function getSettings() {
     cancellation: { ...DEFAULTS.cancellation, ...(doc?.cancellation && typeof doc.cancellation === 'object' ? doc.cancellation : {}) },
     arrival: { ...DEFAULTS.arrival, ...(doc?.arrival && typeof doc.arrival === 'object' ? doc.arrival : {}) },
     dropoff: { ...DEFAULTS.dropoff, ...(doc?.dropoff && typeof doc.dropoff === 'object' ? doc.dropoff : {}) },
+    dispatch: { ...DEFAULTS.dispatch, ...(doc?.dispatch && typeof doc.dispatch === 'object' ? doc.dispatch : {}) },
     wallet: { ...DEFAULTS.wallet, ...(doc?.wallet && typeof doc.wallet === 'object' ? doc.wallet : {}) },
   };
   cachedSettings = raw;
@@ -59,6 +69,7 @@ export async function getSettings() {
 }
 
 export const DROPOFF_DEFAULTS = DEFAULTS.dropoff;
+export const DISPATCH_DEFAULTS = DEFAULTS.dispatch;
 
 /** Allowed range for each trip-ending setting (inclusive). */
 export const DROPOFF_LIMITS = {
@@ -66,6 +77,16 @@ export const DROPOFF_LIMITS = {
   confirmRadiusMeters: [1000, 10000],
   liveFixMaxAgeSeconds: [10, 120],
   riderConfirmWindowSeconds: [30, 600],
+};
+
+/** Allowed range for each dispatch setting (inclusive). */
+export const DISPATCH_LIMITS = {
+  previewRadiusKm: [1, 20],
+  round1RadiusKm: [1, 20],
+  round2RadiusKm: [1, 30],
+  round3RadiusKm: [1, 50],
+  assignRadiusKm: [1, 30],
+  locationFreshnessSeconds: [60, 900],
 };
 
 /**
@@ -85,6 +106,26 @@ export function validateDropoffUpdate(input, current = {}) {
   }
   if (!(merged.confirmRadiusMeters > merged.freeRadiusMeters)) {
     return { error: 'dropoff.confirmRadiusMeters must be greater than dropoff.freeRadiusMeters' };
+  }
+  return { value: merged };
+}
+
+/**
+ * Validate an admin update of the `dispatch` group against the stored values.
+ * Every sent field must be a whole number inside its range, and round1 ≤ round2 ≤ round3.
+ */
+export function validateDispatchUpdate(input, current = {}) {
+  const merged = { ...DEFAULTS.dispatch, ...(current || {}) };
+  for (const [key, [min, max]] of Object.entries(DISPATCH_LIMITS)) {
+    if (input?.[key] === undefined) continue;
+    const n = Number(input[key]);
+    if (!Number.isInteger(n) || n < min || n > max) {
+      return { error: `dispatch.${key} must be a whole number between ${min} and ${max}` };
+    }
+    merged[key] = n;
+  }
+  if (!(merged.round1RadiusKm <= merged.round2RadiusKm && merged.round2RadiusKm <= merged.round3RadiusKm)) {
+    return { error: 'dispatch.round1RadiusKm ≤ dispatch.round2RadiusKm ≤ dispatch.round3RadiusKm is required' };
   }
   return { value: merged };
 }

@@ -32,6 +32,7 @@ function ConfigPage({ showToast, defaultTab }) {
   const [cancellation, setCancellation] = useState(null);
   const [arrival, setArrival] = useState(null);
   const [dropoff, setDropoff] = useState(null);
+  const [dispatch, setDispatch] = useState(null);
   const [walletLimits, setWalletLimits] = useState(null);
   const [feesSaving, setFeesSaving] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState(null);
@@ -157,6 +158,7 @@ function ConfigPage({ showToast, defaultTab }) {
           setCancellation(d?.cancellation || null);
           setArrival(d?.arrival || null);
           setDropoff(d?.dropoff || null);
+          setDispatch(d?.dispatch || null);
           setWalletLimits(d?.wallet || null);
         }
       }).catch(() => {}).finally(() => setLoading(false));
@@ -728,7 +730,7 @@ function ConfigPage({ showToast, defaultTab }) {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 max-w-2xl">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">KEKE Admin — Fee Settings</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Escrow fees and cancellation policy. Changes apply to new rides within 5 minutes. Rides already in progress use the values locked at booking.</p>
-          {loading ? <C.Skeleton className="h-64 w-full" /> : (fees || cancellation || arrival || dropoff || walletLimits) ? (
+          {loading ? <C.Skeleton className="h-64 w-full" /> : (fees || cancellation || arrival || dropoff || dispatch || walletLimits) ? (
             <div className="space-y-6">
               <div>
                 <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Fees</h4>
@@ -807,6 +809,42 @@ function ConfigPage({ showToast, defaultTab }) {
                 </div>
               </div>
               <div>
+                <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Dispatch</h4>
+                <p className="text-xs text-gray-500 mb-2">How far the app looks for drivers when a rider opens the map, when a ride is offered, and when an admin reassigns. Changes apply within 5 minutes (settings cache).</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-gray-700 dark:text-gray-300">Preview radius (km)</label>
+                    <p className="text-xs text-gray-500">How far away a rider sees nearby drivers. 1–20 km</p>
+                    <input type="number" min={1} max={20} value={dispatch?.previewRadiusKm ?? 10} onChange={(e) => setDispatch((p) => ({ ...(p || {}), previewRadiusKm: parseInt(e.target.value, 10) || 10 }))} className="w-32 px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-gray-700 dark:text-gray-300">Round 1 radius (km)</label>
+                    <p className="text-xs text-gray-500">First dispatch attempt. 1–20 km</p>
+                    <input type="number" min={1} max={20} value={dispatch?.round1RadiusKm ?? 10} onChange={(e) => setDispatch((p) => ({ ...(p || {}), round1RadiusKm: parseInt(e.target.value, 10) || 10 }))} className="w-32 px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-gray-700 dark:text-gray-300">Round 2 radius (km)</label>
+                    <p className="text-xs text-gray-500">Second attempt (widen if the first missed). 1–30 km</p>
+                    <input type="number" min={1} max={30} value={dispatch?.round2RadiusKm ?? 12} onChange={(e) => setDispatch((p) => ({ ...(p || {}), round2RadiusKm: parseInt(e.target.value, 10) || 12 }))} className="w-32 px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-gray-700 dark:text-gray-300">Round 3 radius (km)</label>
+                    <p className="text-xs text-gray-500">Third attempt (last chance). 1–50 km</p>
+                    <input type="number" min={1} max={50} value={dispatch?.round3RadiusKm ?? 15} onChange={(e) => setDispatch((p) => ({ ...(p || {}), round3RadiusKm: parseInt(e.target.value, 10) || 15 }))} className="w-32 px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-gray-700 dark:text-gray-300">Assign / reassign radius (km)</label>
+                    <p className="text-xs text-gray-500">Admin reassign radius. 1–30 km</p>
+                    <input type="number" min={1} max={30} value={dispatch?.assignRadiusKm ?? 10} onChange={(e) => setDispatch((p) => ({ ...(p || {}), assignRadiusKm: parseInt(e.target.value, 10) || 10 }))} className="w-32 px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-gray-700 dark:text-gray-300">Location freshness (seconds)</label>
+                    <p className="text-xs text-gray-500">How fresh a driver’s location must be to show in matching. 60–900 s</p>
+                    <input type="number" min={60} max={900} value={dispatch?.locationFreshnessSeconds ?? 300} onChange={(e) => setDispatch((p) => ({ ...(p || {}), locationFreshnessSeconds: parseInt(e.target.value, 10) || 300 }))} className="w-32 px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200" />
+                  </div>
+                </div>
+              </div>
+              <div>
                 <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-2">Wallet limits</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="flex flex-col gap-1">
@@ -823,7 +861,7 @@ function ConfigPage({ showToast, defaultTab }) {
                   </div>
                 </div>
               </div>
-              <button type="button" onClick={() => { setFeesSaving(true); Api.patch('/api/admin/settings', { fees, cancellation, arrival, dropoff, wallet: walletLimits }).then((r) => { if (r.error) showToast(r.error, 'error'); else showToast('Fee settings saved. Changes apply to new rides within 5 minutes.'); }).finally(() => setFeesSaving(false)); }} disabled={feesSaving} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">{feesSaving ? 'Saving…' : 'Save changes'}</button>
+              <button type="button" onClick={() => { setFeesSaving(true); Api.patch('/api/admin/settings', { fees, cancellation, arrival, dropoff, dispatch, wallet: walletLimits }).then((r) => { if (r.error) showToast(r.error, 'error'); else showToast('Fee settings saved. Changes apply to new rides within 5 minutes.'); }).finally(() => setFeesSaving(false)); }} disabled={feesSaving} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">{feesSaving ? 'Saving…' : 'Save changes'}</button>
             </div>
           ) : <p className="text-gray-500">Could not load fee settings.</p>}
         </div>

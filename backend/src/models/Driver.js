@@ -1,7 +1,4 @@
 import mongoose from 'mongoose';
-import {
-  DRIVER_LOCATION_MAX_AGE_MS,
-} from '../utils/driverSearchRadius.js';
 
 const driverSchema = new mongoose.Schema(
   {
@@ -284,7 +281,8 @@ driverSchema.statics.findNearbyAvailable = async function (latitude, longitude, 
   const logger = (await import('../utils/logger.js')).default;
   // Only drivers with a fresh heartbeat are matchable. The Online toggle itself
   // stays on until they go offline (see driverSearchRadius.js).
-  const locationFreshSince = new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS);
+  const { getLocationMaxAgeMs } = await import('../utils/driverSearchRadius.js');
+  const locationFreshSince = new Date(Date.now() - (await getLocationMaxAgeMs()));
 
   try {
     const drivers = await this.find({

@@ -1,7 +1,7 @@
 import Driver from '../models/Driver.js';
 import { calculateDistance } from '../utils/geolocation.js';
 import {
-  ASSIGN_NEW_DRIVER_RADIUS_KM,
+  getSearchRadiusKm,
   resolveDispatchSearchRadiusKm,
 } from '../utils/driverSearchRadius.js';
 import logger from '../utils/logger.js';
@@ -28,7 +28,7 @@ class RideMatchingService {
     try {
       const pickupLat = ride.pickupLocation.coordinates[1];
       const pickupLng = ride.pickupLocation.coordinates[0];
-      const radiusKm = resolveDispatchSearchRadiusKm(ride);
+      const radiusKm = await resolveDispatchSearchRadiusKm(ride);
 
       // Find nearby available drivers using geospatial query
       const nearbyDrivers = await Driver.findNearbyAvailable(
@@ -169,7 +169,7 @@ class RideMatchingService {
       const nearbyDrivers = await Driver.findNearbyAvailable(
         pickupLat,
         pickupLng,
-        ASSIGN_NEW_DRIVER_RADIUS_KM
+        await getSearchRadiusKm({ phase: 'assign' })
       );
 
       logger.info(`Found ${nearbyDrivers.length} nearby available drivers for alternative search`);

@@ -58,7 +58,7 @@ import {
   isScheduledRideInDispatchWindow,
   isScheduledRideOverdue,
 } from '../utils/scheduledRide.js';
-import { DRIVER_LOCATION_MAX_AGE_MS } from '../utils/driverSearchRadius.js';
+import { getLocationMaxAgeMs } from '../utils/driverSearchRadius.js';
 import { safeTrigger } from '../services/pusherService.js';
 
 /**
@@ -861,7 +861,7 @@ export const getLocations = asyncHandler(async (req, res) => {
 
   if (type === 'drivers' || !type) {
     const MAX_DRIVERS = 500;
-    const locationFreshSince = new Date(Date.now() - DRIVER_LOCATION_MAX_AGE_MS);
+    const locationFreshSince = new Date(Date.now() - (await getLocationMaxAgeMs()));
     const drivers = await Driver.find({
       isOnline: true,
       isAvailable: true,
