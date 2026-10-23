@@ -1214,8 +1214,11 @@ export const getRideHistory = asyncHandler(async (req, res) => {
   }
 
   const rides = await Ride.find(filter)
-    .populate('driver', 'user vehicleDetails currentLocation')
-    .populate('driver.user', 'name phone profileImage rating')
+    .populate({
+      path: 'driver',
+      select: 'user vehicleDetails currentLocation',
+      populate: { path: 'user', select: 'name phone profileImage rating' },
+    })
     .populate('rider', 'name phone profileImage rating')
     .populate('vehicleType')
     .sort({ createdAt: -1 })

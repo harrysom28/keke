@@ -211,6 +211,13 @@ export interface HomeMapProps {
    * Applied on top of the base padding for the current mapState.
    */
   extraTopPadding?: number;
+  /**
+   * When set, the parent frames the active ride (driver + pickup or dropoff).
+   * Skip the pickup–dropoff autofit so it does not override that camera.
+   */
+  deferRouteFit?: boolean;
+  /** True while the rider is panning or touching the map. */
+  onMapGestureChange?: (active: boolean) => void;
 }
 
 function HomeMapComponent({
@@ -228,6 +235,8 @@ function HomeMapComponent({
   pauseDriverUpdates = false,
   riderActiveRideStatus = null,
   extraTopPadding = 0,
+  deferRouteFit = false,
+  onMapGestureChange,
 }: HomeMapProps) {
   const [engineLocation, setEngineLocation] = useState({
     latitude: 0,
@@ -240,12 +249,35 @@ function HomeMapComponent({
   const driverLiveLocation = useSelector(
     (s) => AppDetailsState(s).ride?.utils?.driverLiveLocation ?? null
   );
-  const riderStatusLower = String(riderActiveRideStatus ?? "").toLowerCase();
+  const riderStatusNorm = String(riderActiveRideStatus ?? "")
+    .toLowerCase()
+    .replace(/-/g, "_");
   const showLiveAssignedDriver =
     !!driverLiveLocation &&
     typeof driverLiveLocation.lat === "number" &&
     typeof driverLiveLocation.lng === "number" &&
-    (riderStatusLower === "accepted" || riderStatusLower === "arrived");
+    (riderStatusNorm === "accepted" ||
+      riderStatusNorm === "driver_en_route" ||
+      riderStatusNorm === "arrived" ||
+      riderStatusNorm === "in_progress" ||
+      riderStatusNorm === "started");
+  const gestureClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markMapGesture = useCallback(() => {
+    if (gestureClearTimerRef.current) clearTimeout(gestureClearTimerRef.current);
+    onMapGestureChange?.(true);
+  }, [onMapGestureChange]);
+  const scheduleMapGestureEnd = useCallback(() => {
+    if (gestureClearTimerRef.current) clearTimeout(gestureClearTimerRef.current);
+    gestureClearTimerRef.current = setTimeout(() => {
+      onMapGestureChange?.(false);
+    }, 600);
+  }, [onMapGestureChange]);
+  useEffect(
+    () => () => {
+      if (gestureClearTimerRef.current) clearTimeout(gestureClearTimerRef.current);
+    },
+    []
+  );
   /** Last `${pickup-dropoff}|${mapState}` we fitted — refit when sheet mode changes padding. */
   const routeFitKeyRef = useRef("");
   const lastDriverUpdateRef = useRef(0);
@@ -392,6 +424,10 @@ function HomeMapComponent({
 
   // When both pickup and dropoff are set, fit map to route and show line
   useEffect(() => {
+    if (deferRouteFit) {
+      routeFitKeyRef.current = "";
+      return;
+    }
     if (!hasPickup || !hasDropoff || !mapRef?.current) {
       if (!hasPickup || !hasDropoff) routeFitKeyRef.current = "";
       return;
@@ -439,6 +475,7 @@ function HomeMapComponent({
     onRouteReady,
     mapState,
     routeKey,
+    deferRouteFit,
   ]);
 
   return (
@@ -461,6 +498,10 @@ function HomeMapComponent({
           zoomEnabled
           pitchEnabled={false}
           rotateEnabled={false}
+          onPanDrag={markMapGesture}
+          onTouchStart={markMapGesture}
+          onTouchEnd={scheduleMapGestureEnd}
+          onTouchCancel={scheduleMapGestureEnd}
           mapPadding={mapPadding}
           legalLabelInsets={legalLabelInsets}
           clusteringEnabled={true}

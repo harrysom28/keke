@@ -32,7 +32,7 @@ export interface IUtils {
   driver_id: string;
   driver: object;
   distanceTime: { cost: string; distance: string; duration: string };
-  /** Live driver GPS for rider map (accepted / arrived); cleared when trip starts */
+  /** Live driver GPS for the rider map while the driver is assigned or the trip is underway. */
   driverLiveLocation?: {
     lat: number;
     lng: number;

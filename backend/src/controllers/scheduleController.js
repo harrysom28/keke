@@ -66,7 +66,14 @@ export const getScheduledBookings = asyncHandler(async (req, res) => {
   }
 
   const scheduledRides = await Ride.find(filter)
-    .populate(role === 'driver' ? 'rider' : 'driver.user', 'name phone profileImage rating')
+    .populate(
+      role === 'driver'
+        ? { path: 'rider', select: 'name phone profileImage rating' }
+        : {
+            path: 'driver',
+            populate: { path: 'user', select: 'name phone profileImage rating' },
+          }
+    )
     .populate('vehicleType')
     .sort({ scheduledAt: 1 }) // Sort by scheduled time
     .skip(skip)
@@ -251,7 +258,14 @@ export const getLatestScheduledBooking = asyncHandler(async (req, res) => {
   }
 
   const latestBooking = await Ride.findOne(filter)
-    .populate(user.role === 'driver' ? 'rider' : 'driver.user', 'name phone profileImage rating')
+    .populate(
+      user.role === 'driver'
+        ? { path: 'rider', select: 'name phone profileImage rating' }
+        : {
+            path: 'driver',
+            populate: { path: 'user', select: 'name phone profileImage rating' },
+          }
+    )
     .populate('vehicleType')
     .sort({ scheduledAt: 1 }) // Get the earliest upcoming booking
     .limit(1);

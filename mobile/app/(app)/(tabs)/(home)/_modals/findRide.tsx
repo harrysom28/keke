@@ -42,6 +42,7 @@ import {
   collectRideCardPayment,
 } from "@/utils/openRideCardPayment";
 import { useKeyboardSheetLayout } from "@/hooks/useKeyboardInset";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -66,9 +67,14 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   // Reactive: a one-shot Dimensions read goes stale across rotation, multi-window
   // and OEM insets, leaving the cap computed against the wrong screen.
   const { height: screenHeight } = useWindowDimensions();
+  const insets = useCombinedSafeInsets();
   // Room the sheet can give its content, mirroring `handleContentLayout`'s cap
-  // minus the sheet chrome (close-button row + vertical padding).
-  const contentMaxHeight = Math.max(240, Math.round(screenHeight * 0.92) - 56);
+  // minus the sheet chrome (close-button row + vertical padding) and the
+  // system nav / gesture inset so the sheet does not sit under the phone bar.
+  const contentMaxHeight = Math.max(
+    240,
+    Math.round(screenHeight * 0.92) - 56 - insets.bottom
+  );
   const [height, setHeight] = useState<number>(Math.round(screenHeight * 0.6));
   const [locationSearchActive, setLocationSearchActive] = useState(false);
   const locationSearchActiveRef = useRef(false);
@@ -541,7 +547,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       default:
         return null;
     }
-  }, [step, handleBack, dispatch, bottomSheetRef, ride, sheetOpen, initialDropoff]);
+  }, [step, handleBack, dispatch, bottomSheetRef, ride, sheetOpen, initialDropoff, contentMaxHeight]);
 
   // Ensure height is always a valid number (pixels)
   const getValidHeight = (): number => {
@@ -574,6 +580,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       sheetOpen
     );
   keyboardPadRef.current = keyboardPad;
+  const sheetHeightAboveNav = Math.max(200, Math.round(sheetHeight - insets.bottom));
 
   // Don't render the BottomSheet at all if there's no valid content
   const content = useMemo(() => RenderView(), [RenderView]);
@@ -602,7 +609,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   );
 
   if (!sheetHeight || sheetHeight <= 0 || isNaN(sheetHeight) || !isFinite(sheetHeight)) {
-    const fallbackHeight = 600;
+    const fallbackHeight = Math.max(200, 600 - insets.bottom);
     return (
       <BottomSheet
         height={fallbackHeight}
@@ -628,8 +635,8 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   }
 
   return (
-    <BottomSheet
-      height={sheetHeight}
+      <BottomSheet
+        height={sheetHeightAboveNav}
       ref={bottomSheetRef}
       animationType="spring"
       backdropMaskColor="#19191900"
