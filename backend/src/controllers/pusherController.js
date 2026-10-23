@@ -99,7 +99,10 @@ export const pusherUserAuth = asyncHandler(async (req, res) => {
       const Ride = (await import('../models/Ride.js')).default;
       const ride = await Ride.findById(channelId)
         .populate('rider')
-        .populate('driver.user');
+        .populate({
+          path: 'driver',
+          populate: { path: 'user' },
+        });
 
       if (!ride) {
         throw new ValidationError('Ride not found');

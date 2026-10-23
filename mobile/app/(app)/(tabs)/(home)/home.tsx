@@ -85,7 +85,7 @@ import { useIsFocused } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import usePusherChannel from "@/hooks/usePusherChannel";
 import { useRoute } from "@/hooks/useRoute";
-import { haversineKm } from "@/utils/haversine";
+import { haversineKm, haversineMeters } from "@/utils/haversine";
 import { useFocusRefresh } from "@/hooks/useFocusRefresh";
 import { invalidateRecentPlacesCache } from "@/utils/recentPlacesCache";
 import { invalidateWalletCache } from "@/utils/walletCache";
@@ -147,6 +147,52 @@ function isTerminalScheduleListStatus(statusNorm: string): boolean {
 // 0.012-0.015 shows good balance of detail and area coverage (like screenshot)
 // Slightly wider home zoom for a calmer default view
 const mapDelta = { latitudeDelta: 0.012, longitudeDelta: 0.012 };
+/** Span × 2.5 leaves 30% of the viewport as padding on each edge (within 15–30%). */
+const ACTIVE_PICKUP_FRAME = new Set(["accepted", "driver_en_route", "arrived"]);
+const ACTIVE_DROPOFF_FRAME = new Set(["in_progress", "started"]);
+
+function activeRideCameraTarget(status: string): "pickup" | "dropoff" | null {
+  const normalized = normalizeBookingListStatus(status);
+  if (ACTIVE_PICKUP_FRAME.has(normalized)) return "pickup";
+  if (ACTIVE_DROPOFF_FRAME.has(normalized)) return "dropoff";
+  return null;
+}
+
+function fitMapToPair(
+  map: { animateToRegion?: (region: object, duration?: number) => void } | null | undefined,
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number }
+): boolean {
+  if (!map?.animateToRegion) return false;
+  if (
+    !Number.isFinite(a.latitude) ||
+    !Number.isFinite(a.longitude) ||
+    !Number.isFinite(b.latitude) ||
+    !Number.isFinite(b.longitude) ||
+    (Math.abs(a.latitude) < 0.01 && Math.abs(a.longitude) < 0.01) ||
+    (Math.abs(b.latitude) < 0.01 && Math.abs(b.longitude) < 0.01)
+  ) {
+    return false;
+  }
+  const distanceKm = haversineKm(a, b);
+  if (distanceKm <= MAX_FIT_DISTANCE_KM) {
+    map.animateToRegion(
+      {
+        latitude: (a.latitude + b.latitude) / 2,
+        longitude: (a.longitude + b.longitude) / 2,
+        latitudeDelta: Math.max(Math.abs(a.latitude - b.latitude) * 2.5, 0.015),
+        longitudeDelta: Math.max(Math.abs(a.longitude - b.longitude) * 2.5, 0.015),
+      },
+      600
+    );
+  } else {
+    map.animateToRegion(
+      { latitude: a.latitude, longitude: a.longitude, ...mapDelta },
+      400
+    );
+  }
+  return true;
+}
 
 interface ILocation {
   name: string;
@@ -597,24 +643,105 @@ export default function HomeScreen() {
   }, [pendingOpenChatRideId, temp?.ride_id, ride?.data?.waiting, dispatch]);
 
   const riderActiveRideStatusForMap = String(
-    temp?.status ?? (ride?.data?.waiting as any)?.status ?? ""
+    (temp as any)?.internal_status ??
+      temp?.status ??
+      (ride?.data?.waiting as any)?.internal_status ??
+      (ride?.data?.waiting as any)?.status ??
+      ""
   );
+  const driverLiveForMap =
+    (
+      reduxRide?.utils as {
+        driverLiveLocation?: { lat?: number; lng?: number } | null;
+      }
+    )?.driverLiveLocation ?? null;
+  const driverLiveLat = Number(driverLiveForMap?.lat);
+  const driverLiveLng = Number(driverLiveForMap?.lng);
+  const driverLiveOk =
+    Number.isFinite(driverLiveLat) &&
+    Number.isFinite(driverLiveLng) &&
+    !(Math.abs(driverLiveLat) < 0.01 && Math.abs(driverLiveLng) < 0.01);
+  const activeCameraTarget = activeRideCameraTarget(riderActiveRideStatusForMap);
+  const homeMapState: "idle" | "searching" | "route" | "active" =
+    ride.screen === "WAITING" ||
+    (temp?.ride_id ??
+      (ride?.data?.waiting as any)?._id ??
+      (ride?.data?.waiting as any)?.ride_id)
+      ? "active"
+      : hasPickupAndDest && routeCoords.length > 0
+        ? "route"
+        : isBooking
+          ? "searching"
+          : "idle";
+  const deferRouteFit =
+    homeMapState === "active" && activeCameraTarget != null && driverLiveOk;
+  const mapGestureActiveRef = useRef(false);
+  const lastActiveCameraFitRef = useRef<{
+    at: number;
+    lat: number;
+    lng: number;
+    target: string;
+  } | null>(null);
 
   useEffect(() => {
-    const st = String(
-      temp?.status ?? (ride?.data?.waiting as any)?.status ?? ""
-    ).toLowerCase();
-    if (
-      st === "in-progress" ||
-      st === "in_progress" ||
-      st === "started" ||
-      st === "completed" ||
-      st === "cancelled" ||
-      st === "rejected"
-    ) {
+    if (!deferRouteFit || !activeCameraTarget) {
+      lastActiveCameraFitRef.current = null;
+      return;
+    }
+    const point = activeCameraTarget === "pickup" ? maps.origin : maps.destination;
+    const frameKey = `${activeCameraTarget}:${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}`;
+    const tick = () => {
+      if (mapGestureActiveRef.current) return;
+      const prev = lastActiveCameraFitRef.current;
+      const now = Date.now();
+      const movedM = prev
+        ? haversineMeters(
+            { latitude: prev.lat, longitude: prev.lng },
+            { latitude: driverLiveLat, longitude: driverLiveLng }
+          )
+        : Infinity;
+      const elapsed = prev ? now - prev.at : Infinity;
+      const frameChanged = prev != null && prev.target !== frameKey;
+      if (prev && !frameChanged && elapsed < 10_000 && movedM < 100) return;
+      const fitted = fitMapToPair(
+        mapRef.current as { animateToRegion?: (region: object, duration?: number) => void } | null,
+        { latitude: driverLiveLat, longitude: driverLiveLng },
+        point
+      );
+      if (!fitted) return;
+      lastActiveCameraFitRef.current = {
+        at: Date.now(),
+        lat: driverLiveLat,
+        lng: driverLiveLng,
+        target: frameKey,
+      };
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [
+    deferRouteFit,
+    activeCameraTarget,
+    driverLiveLat,
+    driverLiveLng,
+    maps.origin.latitude,
+    maps.origin.longitude,
+    maps.destination.latitude,
+    maps.destination.longitude,
+  ]);
+
+  useEffect(() => {
+    const st = normalizeBookingListStatus(
+      (temp as any)?.internal_status ??
+        temp?.status ??
+        (ride?.data?.waiting as any)?.internal_status ??
+        (ride?.data?.waiting as any)?.status ??
+        ""
+    );
+    if (st === "completed" || st === "cancelled" || st === "canceled" || st === "rejected") {
       dispatch(setRideUtils({ driverLiveLocation: null }));
     }
-  }, [temp?.status, ride?.data?.waiting, dispatch]);
+  }, [temp?.status, (temp as any)?.internal_status, ride?.data?.waiting, dispatch]);
 
   // Milestone offer countdown: show one toast per session when rider is close or can claim.
   // Re-uses a 5-minute cached response so repeated home focuses don't re-hit the endpoint.
@@ -1646,7 +1773,7 @@ export default function HomeScreen() {
     ) {
       setMaps({ origin: newOrigin, destination: newDest });
 
-      if (mapRef.current && hasValidDestination) {
+      if (mapRef.current && hasValidDestination && !deferRouteFit) {
         const noWorldView = Math.abs(destLat) >= 0.01 && Math.abs(destLong) >= 0.01;
         if (noWorldView) {
           const distanceKm = haversineKm(newOrigin, newDest);
@@ -1702,6 +1829,7 @@ export default function HomeScreen() {
     ride?.screen,
     temp?.status,
     temp?.ride_id,
+    deferRouteFit,
     openPostRideSummary,
     clearRideState,
   ]);
@@ -2731,15 +2859,11 @@ export default function HomeScreen() {
                 }
               : undefined
           }
-          mapState={
-            ride.screen === "WAITING" || (temp?.ride_id ?? (ride?.data?.waiting as any)?._id ?? (ride?.data?.waiting as any)?.ride_id)
-              ? "active"
-              : hasPickupAndDest && routeCoords.length > 0
-                ? "route"
-                : isBooking
-                  ? "searching"
-                  : "idle"
-          }
+          mapState={homeMapState}
+          deferRouteFit={deferRouteFit}
+          onMapGestureChange={(active) => {
+            mapGestureActiveRef.current = active;
+          }}
           pickup={
             maps.origin.latitude !== 0 && maps.origin.longitude !== 0
               ? maps.origin
@@ -2762,27 +2886,12 @@ export default function HomeScreen() {
             showPickupRouteEta && routeArriveBy ? `Arrive by ${routeArriveBy}` : null
           }
           onRouteReady={(_coords) => {
-            if (!mapRef.current) return;
-            const o = maps.origin;
-            const d = maps.destination;
-            if (
-              !o.latitude || !d.latitude ||
-              Math.abs(o.latitude) < 0.01 || Math.abs(d.latitude) < 0.01
-            ) return;
-            const distanceKm = haversineKm(o, d);
-            if (distanceKm <= MAX_FIT_DISTANCE_KM) {
-              mapRef.current?.animateToRegion({
-                latitude: (o.latitude + d.latitude) / 2,
-                longitude: (o.longitude + d.longitude) / 2,
-                latitudeDelta: Math.max(Math.abs(o.latitude - d.latitude) * 2.5, 0.015),
-                longitudeDelta: Math.max(Math.abs(o.longitude - d.longitude) * 2.5, 0.015),
-              }, 600);
-            } else {
-              (mapRef.current as any).animateToRegion?.(
-                { latitude: o.latitude, longitude: o.longitude, ...mapDelta },
-                400
-              );
-            }
+            if (deferRouteFit) return;
+            fitMapToPair(
+              mapRef.current as { animateToRegion?: (region: object, duration?: number) => void } | null,
+              maps.origin,
+              maps.destination
+            );
           }}
         />
 

@@ -1831,7 +1831,10 @@ export const acceptRide = asyncHandler(async (req, res) => {
   await driver.save();
 
   await driver.populate('user', 'name phone profileImage rating');
-  await ride.populate('driver.user', 'name phone profileImage rating');
+  await ride.populate({
+    path: 'driver',
+    populate: { path: 'user', select: 'name phone profileImage rating' },
+  });
 
   // Send real-time notification to rider via Socket.io
   const { getSocketService } = await import('../services/socketService.js');

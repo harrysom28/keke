@@ -11,7 +11,10 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import Ride from '../src/models/Ride.js';
 import Driver from '../src/models/Driver.js';
+import User from '../src/models/User.js';
 import logger from '../src/utils/logger.js';
+
+void User;
 
 dotenv.config();
 
@@ -119,7 +122,10 @@ const manuallyAcceptRide = async () => {
         // Populate for socket emission
         try {
           await ride.populate('rider', 'name phone');
-          await ride.populate('driver.user', 'name phone');
+          await ride.populate({
+            path: 'driver',
+            populate: { path: 'user', select: 'name phone' },
+          });
         } catch (err) {
           // Continue without populate
         }

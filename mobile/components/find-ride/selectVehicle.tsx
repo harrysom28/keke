@@ -114,6 +114,14 @@ function priceAfterPromo(original: number, quote: PromoQuote | null) {
 
 const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) => {
   const insets = useCombinedSafeInsets();
+  const [listViewportHeight, setListViewportHeight] = useState(0);
+  const [listContentHeight, setListContentHeight] = useState(0);
+  const [selectHeaderHeight, setSelectHeaderHeight] = useState(48);
+  const [selectActionHeight, setSelectActionHeight] = useState(0);
+  const listScrollEnabled = listContentHeight > listViewportHeight + 1;
+  const listMaxHeight = maxContentHeight
+    ? Math.max(120, maxContentHeight - selectHeaderHeight - selectActionHeight)
+    : undefined;
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
@@ -148,6 +156,10 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
     payableSelectedFare > 0 &&
     walletAvailableBalance < payableSelectedFare;
   const selectedIsWallet = isWalletPaymentMethod(mapUiPaymentToApi(selectedPayment));
+
+  useEffect(() => {
+    if (!selectedVehicle) setSelectActionHeight(0);
+  }, [selectedVehicle]);
 
   useEffect(() => {
     setSelectedPayment((prev) =>
@@ -629,7 +641,13 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
       ]}
     >
       {/* Header */}
-      <View style={styles.header}>
+      <View
+        style={styles.header}
+        onLayout={(event) => {
+          const next = event.nativeEvent.layout.height;
+          setSelectHeaderHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+        }}
+      >
         <Text style={styles.headerTitle}>Select Vehicle</Text>
         <Text style={styles.headerSubtitle}>
           Choose your preferred ride type
@@ -637,7 +655,7 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
       </View>
 
       <FlatList
-        style={styles.container}
+        style={[styles.container, listMaxHeight ? { maxHeight: listMaxHeight } : null]}
         contentContainerStyle={styles.scrollContent}
         data={vehicles}
         renderItem={renderVehicleItem}
@@ -646,10 +664,18 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
         maxToRenderPerBatch={4}
         windowSize={3}
         initialNumToRender={3}
-        showsVerticalScrollIndicator={true}
-        nestedScrollEnabled={true}
+        showsVerticalScrollIndicator={listScrollEnabled}
+        scrollEnabled={listScrollEnabled}
+        nestedScrollEnabled={listScrollEnabled}
+        onLayout={(event) => {
+          const next = event.nativeEvent.layout.height;
+          setListViewportHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+        }}
+        onContentSizeChange={(_, next) => {
+          setListContentHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+        }}
         ListFooterComponent={(
-          <>
+          <View style={{ paddingBottom: insets.bottom }}>
       {/* Payment Selection - Only show when vehicle is selected */}
       {selectedVehicle && (
         <>
@@ -750,14 +776,20 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
           />
         );
       })()}
-          </>
+          </View>
         )}
       >
       </FlatList>
 
       {/* Pinned footer: stays outside the list so it can never scroll out of view. */}
       {selectedVehicle && (
-        <View style={[styles.requestButtonWrapper, requestButtonPaddingStyle]}>
+        <View
+          style={[styles.requestButtonWrapper, requestButtonPaddingStyle]}
+          onLayout={(event) => {
+            const next = event.nativeEvent.layout.height;
+            setSelectActionHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+          }}
+        >
           <TouchableOpacity
             style={[
               styles.requestButton,

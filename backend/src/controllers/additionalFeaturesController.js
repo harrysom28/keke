@@ -214,7 +214,10 @@ export const sendEmergencyMessage = asyncHandler(async (req, res) => {
   let rideInfo = null;
   if (rideId) {
     const ride = await Ride.findById(rideId)
-      .populate('driver.user', 'name phone')
+      .populate({
+        path: 'driver',
+        populate: { path: 'user', select: 'name phone' },
+      })
       .populate('rider', 'name phone');
     
     if (ride) {
@@ -865,7 +868,10 @@ export const getReBookings = asyncHandler(async (req, res) => {
     rider: userId,
     status: 'completed',
   })
-    .populate('driver.user', 'name phone profileImage rating')
+    .populate({
+      path: 'driver',
+      populate: { path: 'user', select: 'name phone profileImage rating' },
+    })
     .populate('vehicleType')
     .sort({ completedAt: -1, createdAt: -1 })
     .skip(skip)
@@ -1051,7 +1057,10 @@ export const createReview = asyncHandler(async (req, res) => {
   }
 
   await reviewDoc.populate('rider', 'name phone profileImage');
-  await reviewDoc.populate('driver.user', 'name phone profileImage');
+  await reviewDoc.populate({
+    path: 'driver',
+    populate: { path: 'user', select: 'name phone profileImage' },
+  });
 
   logger.info(`Review created for ride ${rideId} by ${isRider ? 'rider' : 'driver'}`);
 
