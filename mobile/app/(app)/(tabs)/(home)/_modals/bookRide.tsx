@@ -35,6 +35,7 @@ import tw from "@/lib/tailwind";
 import { useDispatch, useSelector } from "react-redux";
 import { useFocusEffect } from "expo-router";
 import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
+import { useSheetHeight } from "@/hooks/useSheetHeight";
 import { heightAboveKeyboard, useKeyboardSheetLayout } from "@/hooks/useKeyboardInset";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 import CustomPlacesAutocomplete from "@/components/CustomPlacesAutocomplete";
@@ -142,7 +143,7 @@ const BookRideSheet = ({
   sheetOpen = false,
   onSheetClose,
 }: Props) => {
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: screenHeight } = useWindowDimensions();
   const insets = useCombinedSafeInsets();
   const dispatch = useDispatch();
   const { apiConfig } = useContext(AppContext);
@@ -198,9 +199,7 @@ const BookRideSheet = ({
     );
   }, [publicConfig.paymentMethods, enabledPaymentMethods]);
 
-  // Keep this sheet tall, but avoid forcing a near-fullscreen height on smaller content.
-  const screenHeight = Dimensions.get('window').height;
-  const validHeight = Math.min(Math.max(screenHeight * 0.85, 550), screenHeight * 0.95);
+  const [measuredContent, setMeasuredContent] = useState<number | null>(null);
   const [locationSearchField, setLocationSearchField] = useState<"pickup" | "dropoff" | null>(null);
   const searchBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleCleanupDoneRef = useRef(true);
@@ -209,11 +208,12 @@ const BookRideSheet = ({
     if (sheetOpen) scheduleCleanupDoneRef.current = false;
   }, [sheetOpen]);
   const searchPinned = locationSearchField != null;
-  const searchBaseHeight = searchPinned
-    ? Math.max(280, Math.round(screenHeight * 0.92))
-    : validHeight;
+  const { height: scheduleSheetHeight, footerReserve } = useSheetHeight({
+    measuredContent: searchPinned ? null : measuredContent,
+    cap: 0.9,
+  });
   const { height: sheetHeight, paddingBottom: keyboardPad } =
-    useKeyboardSheetLayout(searchBaseHeight, sheetOpen);
+    useKeyboardSheetLayout(scheduleSheetHeight, sheetOpen);
   const resultsMaxHeight = searchPinned
     ? Math.max(160, heightAboveKeyboard(screenHeight, keyboardPad) - 160)
     : 280;
@@ -825,9 +825,12 @@ const BookRideSheet = ({
           <View
             style={{
               flex: 1,
-              minHeight: Math.min(
-                sheetHeight - 48 - keyboardPad,
-                screenHeight * 0.9
+              minHeight: Math.max(
+                0,
+                Math.min(
+                  sheetHeight - (insets.top + 16) - keyboardPad,
+                  screenHeight * 0.9
+                ) - footerReserve
               ),
             }}
           >
@@ -855,6 +858,14 @@ const BookRideSheet = ({
 
           <ScrollView
             style={{ flex: 1 }}
+            onContentSizeChange={(_, contentHeight) => {
+              if (!contentHeight || contentHeight <= 0) return;
+              // Header row + sheet vertical padding + button row, plus the footer reserve.
+              const next = Math.round(contentHeight + 48 + 32 + 54 + footerReserve);
+              setMeasuredContent((prev) =>
+                prev != null && Math.abs(prev - next) <= 8 ? prev : next
+              );
+            }}
             contentContainerStyle={{
               paddingBottom: searchPinned
                 ? 12
@@ -1331,7 +1342,7 @@ const BookRideSheet = ({
               tw`px-0 bg-white`,
               {
                 paddingTop: 6,
-                paddingBottom: sheetFooterBottomPadding(insets.bottom),
+                paddingBottom: footerReserve,
                 borderTopWidth: 1,
                 borderTopColor: '#F0F0F0',
               },
