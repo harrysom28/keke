@@ -37,6 +37,11 @@ interface Props {
    * scrolls instead of pushing the pinned action button past the sheet's edge.
    */
   maxContentHeight?: number;
+  /**
+   * Bottom padding for the sticky Request Ride footer. Clears the gesture pill
+   * even when the OS reports a zero bottom inset.
+   */
+  footerReserve?: number;
 }
 
 interface VehicleWithPricing extends TVehicle {
@@ -114,12 +119,14 @@ function priceAfterPromo(original: number, quote: PromoQuote | null) {
 
 const REQUEST_RIDE_BUTTON_HEIGHT = 44;
 
-const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) => {
+const SelectVehicleViewComponent = ({ action, back, maxContentHeight, footerReserve }: Props) => {
   const insets = useCombinedSafeInsets();
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const [listContentHeight, setListContentHeight] = useState(0);
-  const listScrollEnabled = listContentHeight > listViewportHeight + 1;
-  const stickyFooterHeight = 10 + REQUEST_RIDE_BUTTON_HEIGHT + sheetFooterBottomPadding(insets.bottom);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const footerPad = footerReserve ?? sheetFooterBottomPadding(insets.bottom);
+  const listOverflows = listContentHeight > listViewportHeight + 1;
+  const stickyFooterHeight = 10 + REQUEST_RIDE_BUTTON_HEIGHT + footerPad;
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
@@ -612,9 +619,17 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
   );
 
   const requestButtonPaddingStyle = useMemo(
-    () => ({ paddingBottom: sheetFooterBottomPadding(insets.bottom) }),
-    [insets.bottom]
+    () => ({ paddingBottom: footerPad }),
+    [footerPad]
   );
+  const footerBlock = selectedVehicle ? stickyFooterHeight : 0;
+  const naturalHeight = headerHeight + listContentHeight + footerBlock;
+  const contentCapped =
+    typeof maxContentHeight === "number" &&
+    maxContentHeight > 0 &&
+    listContentHeight > 0 &&
+    naturalHeight > maxContentHeight + 1;
+  const listScrollEnabled = contentCapped || listOverflows;
 
   // Keep this return after all hooks to preserve stable hook order across renders.
   if (shouldShowLoadingState) {
@@ -631,11 +646,21 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
       style={[
         styles.wrapper,
         { width: '100%' },
-        maxContentHeight ? { height: maxContentHeight, maxHeight: maxContentHeight } : null,
+        contentCapped
+          ? { height: maxContentHeight, maxHeight: maxContentHeight }
+          : maxContentHeight
+            ? { maxHeight: maxContentHeight }
+            : null,
       ]}
     >
       {/* Header */}
-      <View style={styles.header}>
+      <View
+        style={styles.header}
+        onLayout={(event) => {
+          const next = event.nativeEvent.layout.height;
+          setHeaderHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+        }}
+      >
         <Text style={styles.headerTitle}>Select Vehicle</Text>
         <Text style={styles.headerSubtitle}>
           Choose your preferred ride type
@@ -643,7 +668,10 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
       </View>
 
       <FlatList
-        style={[styles.container, maxContentHeight ? { flex: 1, minHeight: 0 } : null]}
+        style={[
+          styles.container,
+          contentCapped ? { flex: 1, minHeight: 0 } : { flexGrow: 0 },
+        ]}
         contentContainerStyle={styles.scrollContent}
         data={vehicles}
         renderItem={renderVehicleItem}

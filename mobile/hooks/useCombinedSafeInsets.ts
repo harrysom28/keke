@@ -8,7 +8,7 @@ import {
  * Some Android OEMs + edge-to-edge windows report `bottom: 0` while the system
  * nav bar (3-button or gesture) still sits over the bottom of the screen.
  */
-const ANDROID_NAV_FALLBACK_PX = 48;
+const ANDROID_NAV_FALLBACK_PX = 72;
 
 /**
  * Live safe-area insets with fallback to initial window metrics (helps inside

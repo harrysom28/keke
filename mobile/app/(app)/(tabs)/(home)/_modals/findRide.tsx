@@ -43,6 +43,7 @@ import {
 } from "@/utils/openRideCardPayment";
 import { useKeyboardSheetLayout } from "@/hooks/useKeyboardInset";
 import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
+import { useSheetHeight } from "@/hooks/useSheetHeight";
 
 interface Props {
   bottomSheetRef: React.RefObject<BottomSheetMethods>;
@@ -70,19 +71,23 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   // and OEM insets, leaving the cap computed against the wrong screen.
   const { height: screenHeight } = useWindowDimensions();
   const insets = useCombinedSafeInsets();
-  // Room the sheet can give its content, mirroring `handleContentLayout`'s cap
-  // minus the sheet chrome (close-button row + vertical padding) and the
-  // system nav / gesture inset so the sheet does not sit under the phone bar.
-  const contentMaxHeight = Math.max(
-    240,
-    Math.round(screenHeight * 0.92) - 56 - insets.bottom
-  );
   const [height, setHeight] = useState<number>(Math.round(screenHeight * 0.6));
+  const [measuredContent, setMeasuredContent] = useState<number | null>(null);
   const [locationSearchActive, setLocationSearchActive] = useState(false);
   const locationSearchActiveRef = useRef(false);
   const keyboardPadRef = useRef(0);
   locationSearchActiveRef.current = locationSearchActive;
   const [step, setStep] = useState<number>(1);
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  // Step 2 stays within 75% of the visible area (map stays above) and shrinks
+  // to the measured vehicle list when that is shorter than the cap.
+  const vehicleSheetCap = useSheetHeight({ cap: 0.75 });
+  const vehicleSheet = useSheetHeight({
+    measuredContent: step === 2 ? measuredContent : null,
+    cap: 0.75,
+  });
+  const contentMaxHeight = Math.max(240, vehicleSheetCap.height - 48);
   const contentHeightRef = useRef(0);
   const criteriaSignatureRef = useRef("");
   const rideData = ride?.data as any;
@@ -97,7 +102,15 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     const measured = event?.nativeEvent?.layout?.height;
     if (!measured || measured <= 50) return;
 
-    const capped = Math.max(200, Math.min(Math.round(measured + 48), Math.round(screenHeight * 0.92)));
+    const next = Math.round(measured + 48);
+    if (stepRef.current === 2) {
+      setMeasuredContent((prev) =>
+        prev != null && Math.abs(prev - next) <= 8 ? prev : next
+      );
+      return;
+    }
+
+    const capped = Math.max(200, Math.min(next, Math.round(screenHeight * 0.92)));
     if (Math.abs(capped - contentHeightRef.current) > 8) {
       contentHeightRef.current = capped;
       setHeight(capped);
@@ -117,6 +130,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   const handleSheetClosed = useCallback(() => {
     Keyboard.dismiss();
     contentHeightRef.current = 0;
+    setMeasuredContent(null);
     setHeight(Math.round(screenHeight * 0.6));
     setStep(1);
     setLocationSearchActive(false);
@@ -155,8 +169,10 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
 
   useEffect(() => {
     contentHeightRef.current = 0;
-    // Vehicle step needs the full cap so the sticky Request Ride button is on screen.
-    setHeight(step === 2 ? Math.round(screenHeight * 0.92) : Math.round(screenHeight * 0.6));
+    setMeasuredContent(null);
+    if (step !== 2) {
+      setHeight(Math.round(screenHeight * 0.6));
+    }
     setLocationSearchActive(false);
   }, [step, ride.status, screenHeight]);
 
@@ -475,6 +491,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         return (
           <SelectVehicleView
             maxContentHeight={contentMaxHeight}
+            footerReserve={vehicleSheet.footerReserve}
             action={(vehicle: TVehicle, paymentMethod: string, promoCode?: string) => {
               // Extract pricing data
               const vehicleWithPricing = vehicle as any;
@@ -554,7 +571,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       default:
         return null;
     }
-  }, [step, handleBack, dispatch, bottomSheetRef, ride, sheetOpen, initialDropoff, contentMaxHeight]);
+  }, [step, handleBack, dispatch, bottomSheetRef, ride, sheetOpen, initialDropoff, contentMaxHeight, vehicleSheet.footerReserve]);
 
   // Ensure height is always a valid number (pixels)
   const getValidHeight = (): number => {
@@ -578,7 +595,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     return Math.round(heightValue);
   };
 
-  const baseHeight = getValidHeight();
+  const baseHeight = step === 2 ? vehicleSheet.height : getValidHeight();
   // Resizes only once the keyboard reports real coverage; otherwise this returns
   // `baseHeight` and no padding, so the sheet keeps its measured content height.
   const { height: sheetHeight, paddingBottom: keyboardPad } =
@@ -587,8 +604,8 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       sheetOpen
     );
   keyboardPadRef.current = keyboardPad;
-  // Step 2 already reserves the nav inset inside contentMaxHeight and the sticky
-  // footer. Subtracting it again shortens a bottom-anchored sheet and clips the button.
+  // Step 2's height already excludes the safe area. Other steps still sit on a
+  // raw screen fraction, so they keep the bottom inset subtracted.
   const sheetHeightAboveNav = Math.max(
     200,
     Math.round(step === 2 ? sheetHeight : sheetHeight - insets.bottom)
