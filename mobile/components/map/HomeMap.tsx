@@ -262,14 +262,19 @@ function HomeMapComponent({
       riderStatusNorm === "in_progress" ||
       riderStatusNorm === "started");
   const gestureClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userPanningRef = useRef(false);
+  const [gestureEpoch, setGestureEpoch] = useState(0);
   const markMapGesture = useCallback(() => {
     if (gestureClearTimerRef.current) clearTimeout(gestureClearTimerRef.current);
+    userPanningRef.current = true;
     onMapGestureChange?.(true);
   }, [onMapGestureChange]);
   const scheduleMapGestureEnd = useCallback(() => {
     if (gestureClearTimerRef.current) clearTimeout(gestureClearTimerRef.current);
     gestureClearTimerRef.current = setTimeout(() => {
+      userPanningRef.current = false;
       onMapGestureChange?.(false);
+      setGestureEpoch((n) => n + 1);
     }, 600);
   }, [onMapGestureChange]);
   useEffect(
@@ -428,6 +433,7 @@ function HomeMapComponent({
       routeFitKeyRef.current = "";
       return;
     }
+    if (userPanningRef.current) return;
     if (!hasPickup || !hasDropoff || !mapRef?.current) {
       if (!hasPickup || !hasDropoff) routeFitKeyRef.current = "";
       return;
@@ -476,6 +482,7 @@ function HomeMapComponent({
     mapState,
     routeKey,
     deferRouteFit,
+    gestureEpoch,
   ]);
 
   return (

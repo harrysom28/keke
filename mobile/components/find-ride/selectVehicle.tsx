@@ -112,16 +112,14 @@ function priceAfterPromo(original: number, quote: PromoQuote | null) {
   return Math.max(0, Math.round(amount - Number(quote.discount_amount || 0)));
 }
 
+const REQUEST_RIDE_BUTTON_HEIGHT = 44;
+
 const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) => {
   const insets = useCombinedSafeInsets();
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const [listContentHeight, setListContentHeight] = useState(0);
-  const [selectHeaderHeight, setSelectHeaderHeight] = useState(48);
-  const [selectActionHeight, setSelectActionHeight] = useState(0);
   const listScrollEnabled = listContentHeight > listViewportHeight + 1;
-  const listMaxHeight = maxContentHeight
-    ? Math.max(120, maxContentHeight - selectHeaderHeight - selectActionHeight)
-    : undefined;
+  const stickyFooterHeight = 10 + REQUEST_RIDE_BUTTON_HEIGHT + sheetFooterBottomPadding(insets.bottom);
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
@@ -156,10 +154,6 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
     payableSelectedFare > 0 &&
     walletAvailableBalance < payableSelectedFare;
   const selectedIsWallet = isWalletPaymentMethod(mapUiPaymentToApi(selectedPayment));
-
-  useEffect(() => {
-    if (!selectedVehicle) setSelectActionHeight(0);
-  }, [selectedVehicle]);
 
   useEffect(() => {
     setSelectedPayment((prev) =>
@@ -637,17 +631,11 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
       style={[
         styles.wrapper,
         { width: '100%' },
-        maxContentHeight ? { maxHeight: maxContentHeight } : null,
+        maxContentHeight ? { height: maxContentHeight, maxHeight: maxContentHeight } : null,
       ]}
     >
       {/* Header */}
-      <View
-        style={styles.header}
-        onLayout={(event) => {
-          const next = event.nativeEvent.layout.height;
-          setSelectHeaderHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
-        }}
-      >
+      <View style={styles.header}>
         <Text style={styles.headerTitle}>Select Vehicle</Text>
         <Text style={styles.headerSubtitle}>
           Choose your preferred ride type
@@ -655,7 +643,7 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
       </View>
 
       <FlatList
-        style={[styles.container, listMaxHeight ? { maxHeight: listMaxHeight } : null]}
+        style={[styles.container, maxContentHeight ? { flex: 1, minHeight: 0 } : null]}
         contentContainerStyle={styles.scrollContent}
         data={vehicles}
         renderItem={renderVehicleItem}
@@ -675,7 +663,7 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
           setListContentHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
         }}
         ListFooterComponent={(
-          <View style={{ paddingBottom: insets.bottom }}>
+          <>
       {/* Payment Selection - Only show when vehicle is selected */}
       {selectedVehicle && (
         <>
@@ -776,19 +764,19 @@ const SelectVehicleViewComponent = ({ action, back, maxContentHeight }: Props) =
           />
         );
       })()}
-          </View>
+          </>
         )}
       >
       </FlatList>
 
-      {/* Pinned footer: stays outside the list so it can never scroll out of view. */}
+      {/* Sticky footer: sibling of the list, visible as soon as a vehicle is selected. */}
       {selectedVehicle && (
         <View
-          style={[styles.requestButtonWrapper, requestButtonPaddingStyle]}
-          onLayout={(event) => {
-            const next = event.nativeEvent.layout.height;
-            setSelectActionHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
-          }}
+          style={[
+            styles.requestButtonWrapper,
+            requestButtonPaddingStyle,
+            { height: stickyFooterHeight, flexGrow: 0, flexShrink: 0 },
+          ]}
         >
           <TouchableOpacity
             style={[
@@ -861,8 +849,6 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: '#fff',
     width: '100%',
-    // Shrink (and scroll) when the sheet is capped, so the pinned footer below
-    // always keeps its room. Not `flex: 1` — the sheet body has no fixed height.
     flexShrink: 1,
   },
   scrollContent: {
@@ -1128,6 +1114,7 @@ const styles = StyleSheet.create({
   requestButton: {
     backgroundColor: tw.color("base-green"),
     borderRadius: 8,
+    height: REQUEST_RIDE_BUTTON_HEIGHT,
     paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',

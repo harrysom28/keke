@@ -51,6 +51,8 @@ interface Props {
    *  grace-period guard and hydrate from the API payload (same shape as active-ride). */
   onRideBooked?: (confirmedRide?: Record<string, unknown> | null) => void;
   onSheetClose?: () => void;
+  /** Location step is 1. Home uses this to frame pickup and dropoff on the map. */
+  onStepChange?: (step: number) => void;
   /** True while the find-ride bottom sheet is open — gates GPS + keyboard focus. */
   sheetOpen?: boolean;
   initialDropoff?: {
@@ -60,7 +62,7 @@ interface Props {
   } | null;
 }
 
-const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClose, sheetOpen = false, initialDropoff }: Props) => {
+const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClose, onStepChange, sheetOpen = false, initialDropoff }: Props) => {
   const { apiConfig } = useContext(AppContext);
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
@@ -148,8 +150,13 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   }, [step, bottomSheetRef, clearDropoffDraft]);
 
   useEffect(() => {
+    onStepChange?.(step);
+  }, [onStepChange, step]);
+
+  useEffect(() => {
     contentHeightRef.current = 0;
-    setHeight(Math.round(screenHeight * 0.6));
+    // Vehicle step needs the full cap so the sticky Request Ride button is on screen.
+    setHeight(step === 2 ? Math.round(screenHeight * 0.92) : Math.round(screenHeight * 0.6));
     setLocationSearchActive(false);
   }, [step, ride.status, screenHeight]);
 
@@ -580,7 +587,12 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       sheetOpen
     );
   keyboardPadRef.current = keyboardPad;
-  const sheetHeightAboveNav = Math.max(200, Math.round(sheetHeight - insets.bottom));
+  // Step 2 already reserves the nav inset inside contentMaxHeight and the sticky
+  // footer. Subtracting it again shortens a bottom-anchored sheet and clips the button.
+  const sheetHeightAboveNav = Math.max(
+    200,
+    Math.round(step === 2 ? sheetHeight : sheetHeight - insets.bottom)
+  );
 
   // Don't render the BottomSheet at all if there's no valid content
   const content = useMemo(() => RenderView(), [RenderView]);

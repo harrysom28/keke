@@ -158,6 +158,17 @@ function activeRideCameraTarget(status: string): "pickup" | "dropoff" | null {
   return null;
 }
 
+function readMapPin(point: unknown): { latitude: number; longitude: number } | null {
+  if (!point || typeof point !== "object") return null;
+  const source = point as { lat?: unknown; long?: unknown; lng?: unknown; latitude?: unknown; longitude?: unknown };
+  const latitude = parseFloat(String(source.lat ?? source.latitude ?? ""));
+  const longitude = parseFloat(String(source.long ?? source.lng ?? source.longitude ?? ""));
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) < 0.01 && Math.abs(longitude) < 0.01) return null;
+  if (latitude === 1 && longitude === 1) return null;
+  return { latitude, longitude };
+}
+
 function fitMapToPair(
   map: { animateToRegion?: (region: object, duration?: number) => void } | null | undefined,
   a: { latitude: number; longitude: number },
@@ -324,6 +335,7 @@ export default function HomeScreen() {
   const [bookRideOpenVersion, setBookRideOpenVersion] = useState(0);
   const [bookRideSheetOpen, setBookRideSheetOpen] = useState(false);
   const [findRideSheetOpen, setFindRideSheetOpen] = useState(false);
+  const [findRideStep, setFindRideStep] = useState(1);
   const [nearby, setNearby] = useState<
     {
       location: {
@@ -676,6 +688,8 @@ export default function HomeScreen() {
   const deferRouteFit =
     homeMapState === "active" && activeCameraTarget != null && driverLiveOk;
   const mapGestureActiveRef = useRef(false);
+  const pendingLocationFitRef = useRef(false);
+  const [locationFitKick, setLocationFitKick] = useState(0);
   const lastActiveCameraFitRef = useRef<{
     at: number;
     lat: number;
@@ -728,6 +742,40 @@ export default function HomeScreen() {
     maps.origin.longitude,
     maps.destination.latitude,
     maps.destination.longitude,
+  ]);
+
+  const draftRide = (reduxRide?.data ?? ride?.data) as {
+    origin?: unknown;
+    destination?: unknown;
+  } | undefined;
+  const draftPickup = readMapPin(draftRide?.origin);
+  const draftDropoff = readMapPin(draftRide?.destination);
+  const locationStepFrame = findRideSheetOpen && findRideStep === 1;
+
+  useEffect(() => {
+    if (!locationStepFrame || !mapRef.current) return;
+    const map = mapRef.current as {
+      animateToRegion?: (region: object, duration?: number) => void;
+    };
+    if (mapGestureActiveRef.current) {
+      pendingLocationFitRef.current = true;
+      return;
+    }
+    pendingLocationFitRef.current = false;
+    if (draftPickup && draftDropoff) {
+      fitMapToPair(map, draftPickup, draftDropoff);
+      return;
+    }
+    if (draftPickup) {
+      map.animateToRegion?.({ ...draftPickup, ...mapDelta }, 400);
+    }
+  }, [
+    locationStepFrame,
+    draftPickup?.latitude,
+    draftPickup?.longitude,
+    draftDropoff?.latitude,
+    draftDropoff?.longitude,
+    locationFitKick,
   ]);
 
   useEffect(() => {
@@ -1921,6 +1969,7 @@ export default function HomeScreen() {
     if (Math.abs(d.latitude) < 0.01 && Math.abs(d.longitude) < 0.01) return;
     const map = mapRef.current as any;
     const id = setTimeout(() => {
+      if (mapGestureActiveRef.current) return;
       const distanceKm = haversineKm(o, d);
       if (distanceKm <= MAX_FIT_DISTANCE_KM) {
         mapRef.current?.animateToRegion({
@@ -2863,18 +2912,26 @@ export default function HomeScreen() {
           deferRouteFit={deferRouteFit}
           onMapGestureChange={(active) => {
             mapGestureActiveRef.current = active;
+            if (!active && pendingLocationFitRef.current) {
+              pendingLocationFitRef.current = false;
+              setLocationFitKick((n) => n + 1);
+            }
           }}
           pickup={
             maps.origin.latitude !== 0 && maps.origin.longitude !== 0
               ? maps.origin
-              : undefined
+              : locationStepFrame && draftPickup
+                ? draftPickup
+                : undefined
           }
           dropoff={
             maps.destination.latitude !== 0 &&
             maps.destination.longitude !== 0 &&
             maps.destination.latitude !== 1
               ? maps.destination
-              : undefined
+              : locationStepFrame && draftDropoff
+                ? draftDropoff
+                : undefined
           }
           routeCoords={routeCoords}
           routeLoading={routeLoading}
@@ -3449,6 +3506,7 @@ export default function HomeScreen() {
         <FindRideSheet
           bottomSheetRef={rideSheetRef}
           sheetOpen={findRideSheetOpen}
+          onStepChange={setFindRideStep}
           getActiveRide={getActiveRide}
           onSheetClose={() => {
             setFindRideSheetOpen(false);
