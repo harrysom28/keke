@@ -65,6 +65,11 @@ const driverVehicleSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    /** Set when an already-approved driver submits new vehicle files. Does not change verificationStatus. */
+    reviewRequestedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );

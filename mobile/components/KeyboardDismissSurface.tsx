@@ -20,6 +20,10 @@ export function KeyboardDismissSurface({ children, style }: Props) {
   return (
     <Pressable
       accessible={false}
+      // box-none: this surface must not win the touch. On Android a parent
+      // Pressable steals the move gesture from a child ScrollView, so the
+      // sheet looks frozen and the bottom of the form stays off-screen.
+      pointerEvents="box-none"
       onPress={Keyboard.dismiss}
       style={[styles.surface, style]}
     >

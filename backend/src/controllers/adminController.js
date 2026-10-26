@@ -29,6 +29,7 @@ import { generateTokenPair, generateAccessToken } from '../utils/jwt.js';
 import { addToBlacklist } from '../services/tokenBlacklist.js';
 import { extractTokenFromRequest } from '../middleware/auth.js';
 import { logAdminAction } from '../services/auditLogService.js';
+import { decideDriverVerification } from '../services/driverVerificationSync.js';
 import { AuthenticationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
 import { asyncHandler } from '../utils/errors.js';
 import logger from '../utils/logger.js';
@@ -1745,11 +1746,16 @@ export const approveDriverKyc = asyncHandler(async (req, res) => {
   const { userId } = req.params;
   const kyc = await DriverKyc.findOneAndUpdate(
     { userId },
-    { verificationStatus: 'verified', rejectionReason: null },
+    { verificationStatus: 'verified', rejectionReason: null, reviewRequestedAt: null },
     { new: true }
   );
   if (!kyc) throw new NotFoundError('Driver KYC record');
-  await syncDriverVerificationStatus(userId);
+  await syncDriverVerificationStatus(userId, {
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    trigger: 'kyc_approve',
+    req,
+  });
   await logAdminAction({
     adminId: req.user._id,
     adminEmail: req.user.email,
@@ -1774,7 +1780,12 @@ export const rejectDriverKyc = asyncHandler(async (req, res) => {
     { new: true }
   );
   if (!kyc) throw new NotFoundError('Driver KYC record');
-  await syncDriverVerificationStatus(userId);
+  await syncDriverVerificationStatus(userId, {
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    trigger: 'kyc_reject',
+    req,
+  });
   await logAdminAction({
     adminId: req.user._id,
     adminEmail: req.user.email,
@@ -1794,11 +1805,16 @@ export const approveDriverVehicle = asyncHandler(async (req, res) => {
   const { userId } = req.params;
   const vehicle = await DriverVehicle.findOneAndUpdate(
     { userId },
-    { verificationStatus: 'verified', rejectionReason: null },
+    { verificationStatus: 'verified', rejectionReason: null, reviewRequestedAt: null },
     { new: true }
   );
   if (!vehicle) throw new NotFoundError('Driver vehicle record');
-  await syncDriverVerificationStatus(userId);
+  await syncDriverVerificationStatus(userId, {
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    trigger: 'vehicle_approve',
+    req,
+  });
   await logAdminAction({
     adminId: req.user._id,
     adminEmail: req.user.email,
@@ -1823,7 +1839,12 @@ export const rejectDriverVehicle = asyncHandler(async (req, res) => {
     { new: true }
   );
   if (!vehicle) throw new NotFoundError('Driver vehicle record');
-  await syncDriverVerificationStatus(userId);
+  await syncDriverVerificationStatus(userId, {
+    adminId: req.user._id,
+    adminEmail: req.user.email,
+    trigger: 'vehicle_reject',
+    req,
+  });
   await logAdminAction({
     adminId: req.user._id,
     adminEmail: req.user.email,
@@ -1836,24 +1857,34 @@ export const rejectDriverVehicle = asyncHandler(async (req, res) => {
   res.json({ status: 'success', message: 'Vehicle rejected' });
 });
 
-async function syncDriverVerificationStatus(userId) {
+async function syncDriverVerificationStatus(userId, audit = {}) {
   const [kyc, vehicle, driver] = await Promise.all([
     DriverKyc.findOne({ userId }).lean(),
     DriverVehicle.findOne({ userId }).lean(),
     Driver.findOne({ user: userId }),
   ]);
-  const bothVerified = kyc?.verificationStatus === 'verified' && vehicle?.verificationStatus === 'verified';
+  const beforeStatus = driver?.verificationStatus || 'pending';
+  const next = decideDriverVerification({
+    driverStatus: beforeStatus,
+    documentsVerified: Boolean(driver?.documentsVerified),
+    rejectionReason: driver?.rejectionReason || null,
+    kycStatus: kyc?.verificationStatus || null,
+    vehicleStatus: vehicle?.verificationStatus || null,
+    kycRejectionReason: kyc?.rejectionReason || null,
+    vehicleRejectionReason: vehicle?.rejectionReason || null,
+  });
+
   const user = await User.findById(userId);
-  if (user) {
-    user.kycStatus = bothVerified ? 'verified' : 'pending';
+  if (user && user.kycStatus !== next.userKycStatus) {
+    user.kycStatus = next.userKycStatus;
     await user.save();
   }
-  if (driver) {
-    const newlyApproved = bothVerified && driver.verificationStatus !== 'approved';
-    driver.documentsVerified = bothVerified;
-    driver.verificationStatus = bothVerified ? 'approved' : 'pending';
-    if (!bothVerified) driver.rejectionReason = null;
-    if (newlyApproved) {
+
+  if (driver && next.changed) {
+    driver.documentsVerified = next.documentsVerified;
+    driver.verificationStatus = next.verificationStatus;
+    driver.rejectionReason = next.rejectionReason;
+    if (next.promoted) {
       driver.isAvailable = true;
       driver.isOnline = true;
       driver.lastActiveAt = new Date();
@@ -1864,7 +1895,33 @@ async function syncDriverVerificationStatus(userId) {
     }
     await driver.save();
   }
-  if (bothVerified && user && !user.topupAccountNumber) {
+
+  if (next.demoted) {
+    logger.warn(
+      `Driver verification demoted for user ${userId}: ${beforeStatus} -> ${next.verificationStatus} via ${audit.trigger || 'sync'}`
+    );
+    if (audit.adminId) {
+      await logAdminAction({
+        adminId: audit.adminId,
+        adminEmail: audit.adminEmail,
+        action: 'driver_verification_demote',
+        resourceType: 'driver',
+        resourceId: driver?._id?.toString() || String(userId),
+        details: {
+          userId: String(userId),
+          trigger: audit.trigger || null,
+          before: beforeStatus,
+          after: next.verificationStatus,
+          kycStatus: kyc?.verificationStatus || null,
+          vehicleStatus: vehicle?.verificationStatus || null,
+          rejectionReason: next.rejectionReason,
+        },
+        req: audit.req,
+      });
+    }
+  }
+
+  if (next.userKycStatus === 'verified' && user && !user.topupAccountNumber) {
     provisionDvaAsync(userId);
   }
 }
@@ -3578,7 +3635,8 @@ const buildDriverReviewPayload = ({ user, driver, driverKyc, driverVehicle }) =>
   // The `isRealUrl` helper rejects empty strings and the 'pending'
   // sentinel the upload pipeline writes when a record is upserted before
   // its file has finished streaming to Cloudinary.
-  const isRealUrl = (v) => typeof v === 'string' && v.trim() !== '' && v !== 'pending';
+  const isRealUrl = (v) =>
+    typeof v === 'string' && v.trim() !== '' && v !== 'pending' && v !== 'legacy-approved';
   const identityChecklist = [
     { key: 'id_type', label: 'ID type selected', complete: Boolean(driverKyc?.idType) },
     { key: 'id_number', label: 'ID number entered', complete: Boolean(driverKyc?.idNumber) },
@@ -3639,6 +3697,7 @@ const buildDriverReviewPayload = ({ user, driver, driverKyc, driverVehicle }) =>
       exists: Boolean(driverKyc),
       verification_status: driverKyc?.verificationStatus || 'not_started',
       rejection_reason: driverKyc?.rejectionReason || null,
+      review_requested_at: driverKyc?.reviewRequestedAt || null,
       id_type: driverKyc?.idType || null,
       id_number: driverKyc?.idNumber || null,
       // Both ID-flavored images are surfaced as distinct URLs so the
@@ -3656,6 +3715,7 @@ const buildDriverReviewPayload = ({ user, driver, driverKyc, driverVehicle }) =>
       exists: Boolean(driverVehicle),
       verification_status: driverVehicle?.verificationStatus || 'not_started',
       rejection_reason: driverVehicle?.rejectionReason || null,
+      review_requested_at: driverVehicle?.reviewRequestedAt || null,
       vehicle_type: driverVehicle?.vehicleType
         ? {
             id: driverVehicle.vehicleType._id?.toString() || driverVehicle.vehicleType?.toString() || null,
