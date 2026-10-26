@@ -500,6 +500,9 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
               <p><strong>ID number:</strong> {identity.id_number || '—'}</p>
               <p><strong>Uploaded:</strong> {identity.created_at ? Utils.formatDate(identity.created_at) : '—'}</p>
               {identity.rejection_reason && <p><strong>Rejection reason:</strong> {identity.rejection_reason}</p>}
+              {identity.review_requested_at && (
+                <p className="text-amber-700 dark:text-amber-400"><strong>New documents submitted:</strong> {Utils.formatDate(identity.review_requested_at)}. The driver stays approved until you reject them.</p>
+              )}
             </div>
             {(identity.id_image_url || identity.selfie_url) && (
               <div className="space-y-2">
@@ -566,7 +569,7 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
             )}
             {review.user_id && identity.exists && (
               <div className="flex flex-wrap gap-2">
-                {identity.verification_status !== 'verified' && (
+                {(identity.verification_status !== 'verified' || identity.review_requested_at) && (
                   <button type="button" onClick={() => setModal({ open: true, type: 'approve-kyc' })} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm">Approve identity</button>
                 )}
                 {!restricted && <button type="button" onClick={() => setModal({ open: true, type: 'reject-kyc', reason: '' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm">Reject identity</button>}
@@ -588,6 +591,9 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
               <p><strong>Vehicle:</strong> {[vehicle.year, vehicle.make, vehicle.model, vehicle.color].filter(Boolean).join(' · ') || '—'}</p>
               <p><strong>Uploaded:</strong> {vehicle.created_at ? Utils.formatDate(vehicle.created_at) : '—'}</p>
               {vehicle.rejection_reason && <p><strong>Rejection reason:</strong> {vehicle.rejection_reason}</p>}
+              {vehicle.review_requested_at && (
+                <p className="text-amber-700 dark:text-amber-400"><strong>New documents submitted:</strong> {Utils.formatDate(vehicle.review_requested_at)}. The driver stays approved until you reject them.</p>
+              )}
             </div>
             {(vehicle.insurance_document_url || (vehicle.vehicle_documents || []).some((doc) => doc.url)) && (
               <div className="space-y-2">
@@ -656,7 +662,7 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
             )}
             {review.user_id && vehicle.exists && (
               <div className="flex flex-wrap gap-2">
-                {vehicle.verification_status !== 'verified' && (
+                {(vehicle.verification_status !== 'verified' || vehicle.review_requested_at) && (
                   <button type="button" onClick={() => setModal({ open: true, type: 'approve-vehicle' })} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm">Approve vehicle</button>
                 )}
                 {!restricted && <button type="button" onClick={() => setModal({ open: true, type: 'reject-vehicle', reason: '' })} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm">Reject vehicle</button>}

@@ -1381,6 +1381,7 @@ export const validationRules = {
         'driver_approve', 'driver_reject', 'refund', 'dispute_resolve', 'wallet_adjust', 'wallet_reconcile',
         'withdrawal_approve', 'withdrawal_reject',
         'driver_kyc_approve', 'driver_kyc_reject', 'driver_vehicle_approve', 'driver_vehicle_reject',
+        'driver_verification_demote',
         'payout_approve', 'payout_reject',
         'vehicle_type_delete', 'settings_update',
         'promocode_create', 'promocode_update',

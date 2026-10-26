@@ -105,30 +105,40 @@ export const driverStage2 = asyncHandler(async (req, res) => {
   const user = await User.findById(userId);
   if (!user) throw new NotFoundError('User');
 
-  if (!['driver_stage1', 'driver_stage2'].includes(user.onboardingStage)) {
+  const driver = await Driver.findOne({ user: userId }).select('verificationStatus');
+  const alreadyApproved = driver?.verificationStatus === 'approved';
+  if (!alreadyApproved && !['driver_stage1', 'driver_stage2'].includes(user.onboardingStage)) {
     throw new ValidationError('Complete stage 1 first');
   }
 
+  const incoming = {
+    idType: id_type,
+    idNumber: id_number?.trim(),
+    idImageUrl: id_image,
+    selfieUrl: selfie_image,
+  };
+
   let kyc = await DriverKyc.findOne({ userId });
   if (kyc) {
-    kyc.idType = id_type;
-    kyc.idNumber = id_number?.trim();
-    kyc.idImageUrl = id_image;
-    kyc.selfieUrl = selfie_image;
-    kyc.verificationStatus = 'pending';
+    const changed = identityFieldsChanged(kyc, incoming);
+    kyc.idType = incoming.idType;
+    kyc.idNumber = incoming.idNumber;
+    kyc.idImageUrl = incoming.idImageUrl;
+    kyc.selfieUrl = incoming.selfieUrl;
+    applyResubmitStatus(kyc, { changed, alreadyApproved });
     await kyc.save();
   } else {
     kyc = await DriverKyc.create({
       userId,
-      idType: id_type,
-      idNumber: id_number?.trim(),
-      idImageUrl: id_image,
-      selfieUrl: selfie_image,
+      ...incoming,
+      reviewRequestedAt: alreadyApproved ? new Date() : null,
     });
   }
 
-  user.onboardingStage = 'driver_stage2';
-  await user.save();
+  if (!alreadyApproved) {
+    user.onboardingStage = 'driver_stage2';
+    await user.save();
+  }
 
   res.json({
     status: 'success',
@@ -152,7 +162,9 @@ export const driverStage3 = asyncHandler(async (req, res) => {
   const user = await User.findById(userId);
   if (!user) throw new NotFoundError('User');
 
-  if (!['driver_stage2', 'driver_stage3'].includes(user.onboardingStage)) {
+  const driver = await Driver.findOne({ user: userId }).select('verificationStatus');
+  const alreadyApproved = driver?.verificationStatus === 'approved';
+  if (!alreadyApproved && !['driver_stage2', 'driver_stage3'].includes(user.onboardingStage)) {
     throw new ValidationError('Complete stage 2 first');
   }
 
@@ -167,34 +179,49 @@ export const driverStage3 = asyncHandler(async (req, res) => {
       ? [{ type: 'registration', url: vehicle_documents }]
       : [];
 
+  const incomingVehicle = {
+    vehicleType: String(vehicle_type),
+    plateNumber: String(plate_number).toUpperCase().trim(),
+    vehicleDocuments: docArray,
+    insuranceDocumentUrl: insurance_document || null,
+    make: make || null,
+    model: model || null,
+    year: year || null,
+    color: color || null,
+  };
+
   let vehicle = await DriverVehicle.findOne({ userId });
   if (vehicle) {
+    const changed = vehicleFieldsChanged(vehicle, incomingVehicle);
     vehicle.vehicleType = vehicle_type;
-    vehicle.plateNumber = String(plate_number).toUpperCase().trim();
+    vehicle.plateNumber = incomingVehicle.plateNumber;
     vehicle.vehicleDocuments = docArray;
-    vehicle.insuranceDocumentUrl = insurance_document || null;
+    vehicle.insuranceDocumentUrl = incomingVehicle.insuranceDocumentUrl;
     if (make) vehicle.make = make;
     if (model) vehicle.model = model;
     if (year) vehicle.year = year;
     if (color) vehicle.color = color;
-    vehicle.verificationStatus = 'pending';
+    applyResubmitStatus(vehicle, { changed, alreadyApproved });
     await vehicle.save();
   } else {
     vehicle = await DriverVehicle.create({
       userId,
       vehicleType: vehicle_type,
-      plateNumber: String(plate_number).toUpperCase().trim(),
+      plateNumber: incomingVehicle.plateNumber,
       vehicleDocuments: docArray,
-      insuranceDocumentUrl: insurance_document || null,
-      make: make || null,
-      model: model || null,
-      year: year || null,
-      color: color || null,
+      insuranceDocumentUrl: incomingVehicle.insuranceDocumentUrl,
+      make: incomingVehicle.make,
+      model: incomingVehicle.model,
+      year: incomingVehicle.year,
+      color: incomingVehicle.color,
+      reviewRequestedAt: alreadyApproved ? new Date() : null,
     });
   }
 
-  user.onboardingStage = 'driver_stage3';
-  await user.save();
+  if (!alreadyApproved) {
+    user.onboardingStage = 'driver_stage3';
+    await user.save();
+  }
 
   res.json({
     status: 'success',
@@ -323,6 +350,53 @@ export const getOnboardingStatus = asyncHandler(async (req, res) => {
     },
   });
 });
+
+function sameText(left, right) {
+  return String(left ?? '').trim() === String(right ?? '').trim();
+}
+
+function identityFieldsChanged(kyc, incoming) {
+  return (
+    !sameText(kyc.idType, incoming.idType) ||
+    !sameText(kyc.idNumber, incoming.idNumber) ||
+    !sameText(kyc.idImageUrl, incoming.idImageUrl) ||
+    !sameText(kyc.selfieUrl, incoming.selfieUrl)
+  );
+}
+
+function vehicleFieldsChanged(vehicle, incoming) {
+  const currentDocs = (vehicle.vehicleDocuments || [])
+    .map((doc) => `${doc.type || ''}:${doc.url || ''}`)
+    .join('|');
+  const nextDocs = (incoming.vehicleDocuments || [])
+    .map((doc) => `${doc.type || ''}:${doc.url || ''}`)
+    .join('|');
+  const optionalChanged = ['make', 'model', 'year', 'color'].some((key) => {
+    if (incoming[key] == null || incoming[key] === '') return false;
+    return !sameText(vehicle[key], incoming[key]);
+  });
+  return (
+    optionalChanged ||
+    !sameText(vehicle.vehicleType, incoming.vehicleType) ||
+    !sameText(vehicle.plateNumber, incoming.plateNumber) ||
+    !sameText(vehicle.insuranceDocumentUrl, incoming.insuranceDocumentUrl) ||
+    currentDocs !== nextDocs
+  );
+}
+
+/**
+ * A resubmit flags the document for review. An already-approved driver's
+ * verified document stays verified so a later sync cannot take them offline.
+ * A rejected document moves to pending, because a leftover rejection would
+ * demote the driver the next time an admin acts on the other document.
+ */
+function applyResubmitStatus(record, { changed, alreadyApproved }) {
+  if (!changed) return;
+  record.reviewRequestedAt = new Date();
+  if (!alreadyApproved || record.verificationStatus === 'rejected') {
+    record.verificationStatus = 'pending';
+  }
+}
 
 function formatUserForOnboarding(user) {
   return {

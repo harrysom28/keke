@@ -5,14 +5,13 @@ import {
   Keyboard,
   Modal,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
-import { Pressable, TouchableOpacity } from "react-native-gesture-handler";
+import { Pressable, ScrollView as GestureScrollView, TouchableOpacity } from "react-native-gesture-handler";
 import BottomSheet, { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { Path, Svg } from "react-native-svg";
 import RNDateTimePicker from "@react-native-community/datetimepicker";
@@ -34,7 +33,7 @@ import { geocodeAddress, resolvePickupLabel, reverseGeocode } from "@/utils/maps
 import tw from "@/lib/tailwind";
 import { useDispatch, useSelector } from "react-redux";
 import { useFocusEffect } from "expo-router";
-import { useCombinedSafeInsets, sheetFooterBottomPadding } from "@/hooks/useCombinedSafeInsets";
+import { useCombinedSafeInsets } from "@/hooks/useCombinedSafeInsets";
 import { useSheetHeight } from "@/hooks/useSheetHeight";
 import { heightAboveKeyboard, useKeyboardSheetLayout } from "@/hooks/useKeyboardInset";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
@@ -203,6 +202,8 @@ const BookRideSheet = ({
   const [locationSearchField, setLocationSearchField] = useState<"pickup" | "dropoff" | null>(null);
   const searchBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleCleanupDoneRef = useRef(true);
+  /** Set once the rider picks a pickup. GPS fixes must not replace that place. */
+  const pickupChosenRef = useRef(false);
 
   useEffect(() => {
     if (sheetOpen) scheduleCleanupDoneRef.current = false;
@@ -217,6 +218,15 @@ const BookRideSheet = ({
   const resultsMaxHeight = searchPinned
     ? Math.max(160, heightAboveKeyboard(screenHeight, keyboardPad) - 160)
     : 280;
+  // @devvie/bottom-sheet clips overflow and does not give children a flex
+  // parent, so `flex: 1` alone never creates a scroll viewport. Size the
+  // column to the space under the drag handle and let the form scroll inside it.
+  const sheetPadTop = 16;
+  const sheetPadBottom = keyboardPad > 0 ? 16 + keyboardPad : 16;
+  const bodyHeight = Math.max(
+    120,
+    Math.round(sheetHeight - 40 - sheetPadTop - sheetPadBottom - 8)
+  );
 
   const handleLocationSearchFocus = (field: "pickup" | "dropoff") => {
     if (searchBlurTimer.current) {
@@ -240,7 +250,7 @@ const BookRideSheet = ({
     const COLS = 3;
     const w = Math.max(windowWidth || 0, Dimensions.get("window").width || 375);
     const rowW = Math.max(0, w - SHEET_H_PAD);
-    const tileW = Math.max(96, Math.floor((rowW - GAP * (COLS - 1)) / COLS));
+    const tileW = Math.max(72, Math.floor((rowW - GAP * (COLS - 1)) / COLS));
     return { rowW, tileW, GAP, COLS };
   }, [windowWidth]);
   const [state, setState] = useState({
@@ -270,6 +280,7 @@ const BookRideSheet = ({
     setFareEstimate(null);
     setPickupCoords(null);
     setDropoffCoords(null);
+    pickupChosenRef.current = false;
     // This sheet writes the same rideData.origin/destination keys as Find Ride.
     // Clear them on close so a GPS tick or stale coords cannot linger for the next flow.
     dispatch(setRideData({ origin: {}, destination: {} } as any));
@@ -324,6 +335,7 @@ const BookRideSheet = ({
   // Set pickup location from user's current location - use backend resolver for a readable name
   useEffect(() => {
     if (!sheetOpen) return;
+    if (pickupChosenRef.current) return;
     if (!location || location.latitude === 0 || location.longitude === 0) return;
 
     const pickupAddress = userLocation?.name || userLocation?.formatted_address;
@@ -452,6 +464,7 @@ const BookRideSheet = ({
       });
     }
 
+    pickupChosenRef.current = false;
     setPickupCoords({ lat: location.latitude, lng: location.longitude });
     setState((prev) => ({ ...prev, pickup_location: "Current location" }));
 
@@ -665,7 +678,7 @@ const BookRideSheet = ({
         // Use stored coordinates (current location)
         pickupLocation = { lat: pickupCoords.lat, lng: pickupCoords.lng };
         pickupAddress = state.pickup_location || userLocation?.formatted_address || "Current location";
-        pickupName = userLocation?.name || pickupAddress.split(',')[0];
+        pickupName = pickupAddress.split(',')[0] || "Pickup";
       } else {
         // Geocode pickup address
         const pickupGeocode = await geocodeAddress(state.pickup_location);
@@ -821,27 +834,18 @@ const BookRideSheet = ({
         android_closeOnBackPress={false}
         onClose={resetScheduleDraft}
       >
-        <KeyboardDismissSurface>
-          <View
-            style={{
-              flex: 1,
-              minHeight: Math.max(
-                0,
-                Math.min(
-                  sheetHeight - (insets.top + 16) - keyboardPad,
-                  screenHeight * 0.9
-                ) - footerReserve
-              ),
-            }}
-          >
+        <KeyboardDismissSurface style={{ height: bodyHeight }}>
+          <View style={{ height: bodyHeight }}>
           {/* Header */}
-          <View style={tw`flex-row items-center justify-between mb-2`}>
+          <View style={[tw`flex-row items-center justify-between mb-2`, { flexShrink: 0 }]}>
             <View style={tw`w-[28px]`} />
             <View style={tw`flex-row items-center flex-1 justify-center px-2`}>
               <MaterialCommunityIcons name="calendar-clock" size={20} color="#242E42" style={tw`mr-1.5`} />
             <Text
-              style={tw.style(`text-[22px] text-[#242E42]`, {
+              numberOfLines={2}
+              style={tw.style(`text-[20px] text-[#242E42] text-center`, {
                 fontFamily: "RobotoBold",
+                flexShrink: 1,
               })}
             >
               Schedule a ride for later
@@ -856,8 +860,8 @@ const BookRideSheet = ({
             </TouchableOpacity>
           </View>
 
-          <ScrollView
-            style={{ flex: 1 }}
+          <GestureScrollView
+            style={{ flex: 1, minHeight: 0 }}
             onContentSizeChange={(_, contentHeight) => {
               if (!contentHeight || contentHeight <= 0) return;
               // Header row + sheet vertical padding + button row, plus the footer reserve.
@@ -867,20 +871,19 @@ const BookRideSheet = ({
               );
             }}
             contentContainerStyle={{
-              paddingBottom: searchPinned
-                ? 12
-                : sheetFooterBottomPadding(insets.bottom),
+              paddingBottom: searchPinned ? 12 : 20,
             }}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
             automaticallyAdjustKeyboardInsets={!searchPinned}
-            showsVerticalScrollIndicator={false}
+            showsVerticalScrollIndicator={!searchPinned}
             nestedScrollEnabled
+            scrollEnabled
           >
             {/* Date + time */}
             {!searchPinned ? (
             <>
-            <ScrollView
+            <GestureScrollView
                   horizontal
                   nestedScrollEnabled
                   directionalLockEnabled
@@ -927,7 +930,7 @@ const BookRideSheet = ({
                       </TouchableOpacity>
                     );
                   })}
-                </ScrollView>
+                </GestureScrollView>
                 {/* Time: tap to open picker; picker closes on Done */}
                 <TouchableOpacity
                   onPress={() => setShowTimePicker(true)}
@@ -995,7 +998,7 @@ const BookRideSheet = ({
                   </Pressable>
                 </Modal>
                 )}
-                <ScrollView
+                <GestureScrollView
                   horizontal
                   nestedScrollEnabled
                   directionalLockEnabled
@@ -1051,7 +1054,7 @@ const BookRideSheet = ({
                       </TouchableOpacity>
                     );
                   })}
-                </ScrollView>
+                </GestureScrollView>
 
             </>
             ) : null}
@@ -1103,10 +1106,12 @@ const BookRideSheet = ({
                       lat: place.lat,
                     };
                     const displayValue = place.name || place.formatted_address || "Selected location";
+                    pickupChosenRef.current = true;
                     setState((prev) => ({ ...prev, pickup_location: displayValue }));
                     setPickupCoords({ lat: place.lat, lng: place.long });
                   }}
                   onClear={() => {
+                    pickupChosenRef.current = false;
                     if (location != null && location.latitude !== 0 && location.longitude !== 0) {
                       setPickupCoords({ lat: location.latitude, lng: location.longitude });
                       setState((prev) => ({ ...prev, pickup_location: "Current location" }));
@@ -1333,7 +1338,7 @@ const BookRideSheet = ({
             </>
             ) : null}
 
-          </ScrollView>
+          </GestureScrollView>
 
           {/* Schedule Ride button - fixed footer so always visible (not pushed below fare breakdown) */}
           {!searchPinned ? (
@@ -1341,6 +1346,7 @@ const BookRideSheet = ({
             style={[
               tw`px-0 bg-white`,
               {
+                flexShrink: 0,
                 paddingTop: 6,
                 paddingBottom: footerReserve,
                 borderTopWidth: 1,

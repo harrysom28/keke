@@ -19,6 +19,7 @@ const ACTION_LABELS = {
   driver_kyc_reject: 'Driver KYC rejected',
   driver_vehicle_approve: 'Driver vehicle approved',
   driver_vehicle_reject: 'Driver vehicle rejected',
+  driver_verification_demote: 'Driver verification demoted',
   payout_approve: 'Payout approved',
   payout_reject: 'Payout rejected',
   vehicle_type_delete: 'Vehicle type deleted',

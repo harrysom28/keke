@@ -35,6 +35,11 @@ interface Props {
   /** Find Ride renders inside a Portal; `useIsFocused()` can stay false while the sheet is open. */
   locationSheetActive?: boolean;
   onSearchFocusChange?: (active: boolean) => void;
+  /**
+   * Set when the sheet is already at its max height. Pins Continue and lets
+   * the fields scroll instead of drawing the button past the screen edge.
+   */
+  bodyHeight?: number;
 }
 
 export const LocationView = ({
@@ -43,6 +48,7 @@ export const LocationView = ({
   initialDropoff,
   locationSheetActive = false,
   onSearchFocusChange,
+  bodyHeight,
 }: Props) => {
   const insets = useCombinedSafeInsets();
   const { height: windowHeight } = useWindowDimensions();
@@ -616,7 +622,7 @@ export const LocationView = ({
     }
   };
 
-  return (
+  const locationBody = (
     <>
       <View style={tw`flex-row gap-x-3`}>
         {!searchPinned ? (
@@ -908,13 +914,7 @@ export const LocationView = ({
           )}
         </View>
       </View>
-      <ScrollView
-        style={tw`mt-4`}
-        contentContainerStyle={tw`pb-4`}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        nestedScrollEnabled
-      >
+      <View style={tw`mt-4 pb-2`}>
         {recentPlaces.length > 0 && !selected.dropoff && focusedField !== "pickup" && (
           <>
         <Text
@@ -983,14 +983,31 @@ export const LocationView = ({
           </>
         )}
 
-      </ScrollView>
-      
-      {/* Fixed Navigation Button */}
+      </View>
+    </>
+  );
+
+  return (
+    <View style={bodyHeight ? { height: bodyHeight } : undefined}>
+      {bodyHeight ? (
+        <ScrollView
+          style={{ flex: 1, minHeight: 0 }}
+          contentContainerStyle={{ paddingBottom: 8 }}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+        >
+          {locationBody}
+        </ScrollView>
+      ) : (
+        locationBody
+      )}
+      {/* Fixed Navigation Button — sibling of the scroller so it stays on screen */}
       {!keyboardSearchPinned ? (
       <View
         style={[
           tw`px-5 pt-3 bg-white border-t border-[#F0F0F0]`,
-          { paddingBottom: Math.max(insets.bottom + 12, 20) },
+          { flexShrink: 0, paddingBottom: Math.max(insets.bottom + 12, 20) },
         ]}
       >
       <TouchableOpacity
@@ -1066,6 +1083,6 @@ export const LocationView = ({
       </TouchableOpacity>
       </View>
       ) : null}
-    </>
+    </View>
   );
 };

@@ -31,6 +31,7 @@ const auditLogSchema = new mongoose.Schema(
         'driver_kyc_reject',
         'driver_vehicle_approve',
         'driver_vehicle_reject',
+        'driver_verification_demote',
         'payout_approve',
         'payout_reject',
         'vehicle_type_delete',

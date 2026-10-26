@@ -89,6 +89,11 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   });
   const contentMaxHeight = Math.max(240, vehicleSheetCap.height - 48);
   const contentHeightRef = useRef(0);
+  // True content height of the location step, kept even after we cap the sheet
+  // so a second (smaller) layout from the scroll viewport cannot shrink it again.
+  const locationNaturalRef = useRef(0);
+  const locationOverflowRef = useRef(false);
+  const [locationOverflows, setLocationOverflows] = useState(false);
   const criteriaSignatureRef = useRef("");
   const rideData = ride?.data as any;
   const pickupLat = rideData?.origin?.lat ?? rideData?.origin?.latitude ?? null;
@@ -102,14 +107,41 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     const measured = event?.nativeEvent?.layout?.height;
     if (!measured || measured <= 50) return;
 
-    const next = Math.round(measured + 48);
     if (stepRef.current === 2) {
+      const next = Math.round(measured + 48);
       setMeasuredContent((prev) =>
         prev != null && Math.abs(prev - next) <= 8 ? prev : next
       );
       return;
     }
 
+    if (stepRef.current === 1) {
+      // Ignore the shorter layout we get after pinning the body to scroll.
+      if (
+        locationOverflowRef.current &&
+        measured < locationNaturalRef.current - 24
+      ) {
+        return;
+      }
+      locationNaturalRef.current = measured;
+      // Handle (~40) + sheet gap/padding (~20) + close row (~36) sit outside
+      // this measured view. The footer already pads for the nav bar, so do
+      // not subtract that inset again — that was clipping Continue.
+      const chrome = 104;
+      const cap = Math.round(screenHeight * 0.92);
+      const raw = Math.round(measured + chrome);
+      const overflows = raw > cap + 8;
+      locationOverflowRef.current = overflows;
+      setLocationOverflows(overflows);
+      const capped = Math.max(240, Math.min(raw, cap));
+      if (Math.abs(capped - contentHeightRef.current) > 8) {
+        contentHeightRef.current = capped;
+        setHeight(capped);
+      }
+      return;
+    }
+
+    const next = Math.round(measured + 48);
     const capped = Math.max(200, Math.min(next, Math.round(screenHeight * 0.92)));
     if (Math.abs(capped - contentHeightRef.current) > 8) {
       contentHeightRef.current = capped;
@@ -130,6 +162,9 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   const handleSheetClosed = useCallback(() => {
     Keyboard.dismiss();
     contentHeightRef.current = 0;
+    locationNaturalRef.current = 0;
+    locationOverflowRef.current = false;
+    setLocationOverflows(false);
     setMeasuredContent(null);
     setHeight(Math.round(screenHeight * 0.6));
     setStep(1);
@@ -169,6 +204,9 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
 
   useEffect(() => {
     contentHeightRef.current = 0;
+    locationNaturalRef.current = 0;
+    locationOverflowRef.current = false;
+    setLocationOverflows(false);
     setMeasuredContent(null);
     if (step !== 2) {
       setHeight(Math.round(screenHeight * 0.6));
@@ -472,6 +510,11 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     }
   };
 
+  const locationBodyHeight =
+    step === 1 && locationOverflows
+      ? Math.max(180, Math.round(height - 104))
+      : undefined;
+
   const RenderView = useCallback(() => {
     switch (step) {
       case 1:
@@ -483,6 +526,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
             initialDropoff={initialDropoff}
             locationSheetActive={sheetOpen}
             onSearchFocusChange={setLocationSearchActive}
+            bodyHeight={locationBodyHeight}
           />
         );
         
@@ -571,7 +615,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       default:
         return null;
     }
-  }, [step, handleBack, dispatch, bottomSheetRef, ride, sheetOpen, initialDropoff, contentMaxHeight, vehicleSheet.footerReserve]);
+  }, [step, handleBack, dispatch, bottomSheetRef, ride, sheetOpen, initialDropoff, contentMaxHeight, vehicleSheet.footerReserve, locationBodyHeight]);
 
   // Ensure height is always a valid number (pixels)
   const getValidHeight = (): number => {
@@ -604,11 +648,12 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       sheetOpen
     );
   keyboardPadRef.current = keyboardPad;
-  // Step 2's height already excludes the safe area. Other steps still sit on a
-  // raw screen fraction, so they keep the bottom inset subtracted.
+  // Step 1 is measured from content that already pads for the nav bar.
+  // Step 2's height already excludes the safe area. Later steps still sit on
+  // a raw screen fraction, so they keep the bottom inset subtracted.
   const sheetHeightAboveNav = Math.max(
     200,
-    Math.round(step === 2 ? sheetHeight : sheetHeight - insets.bottom)
+    Math.round(step === 1 || step === 2 ? sheetHeight : sheetHeight - insets.bottom)
   );
 
   // Don't render the BottomSheet at all if there's no valid content
