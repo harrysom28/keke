@@ -8,6 +8,39 @@ const C = window.AdminComponents;
 // this hides the controls and skips the calls it would be refused anyway).
 const isDriversManager = () => Auth.getRole() === 'drivers_manager';
 
+function formatLastGpsFix(iso) {
+  if (!iso) return 'never';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'never';
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
+  if (d >= startOfYesterday && d < startOfToday) return 'yesterday';
+  const sec = Math.floor((now.getTime() - d.getTime()) / 1000);
+  if (sec < 60) return 'just now';
+  if (sec < 3600) {
+    const m = Math.floor(sec / 60);
+    return m === 1 ? '1 minute ago' : `${m} minutes ago`;
+  }
+  if (d >= startOfToday) {
+    const h = Math.floor(sec / 3600);
+    return h === 1 ? '1 hour ago' : `${h} hours ago`;
+  }
+  return Utils.formatDate(iso);
+}
+
+function GpsDot({ status }) {
+  const color = status === 'green' ? '#16a34a' : status === 'yellow' ? '#ca8a04' : '#dc2626';
+  const label = status === 'green' ? 'GPS fresh' : status === 'yellow' ? 'GPS aging' : 'No GPS fix';
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: color }}
+    />
+  );
+}
+
 function DriversPage({ onNavigate, showToast }) {
   const [drivers, setDrivers] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, pages: 0 });
@@ -68,6 +101,7 @@ function DriversPage({ onNavigate, showToast }) {
     { key: 'user', label: 'Name', render: (v) => v?.name ?? '—' },
     { key: 'verification_status', label: 'Status' },
     { key: 'documents_verified', label: 'Verified', render: (v) => (v ? 'Yes' : 'No') },
+    { key: 'gps_status', label: 'GPS', render: (v) => <GpsDot status={v} /> },
     { key: 'is_online', label: 'Online', render: (v) => (v ? 'Yes' : 'No') },
     {
       key: 'rating',
@@ -388,6 +422,9 @@ function DriverDetailPage({ id, onBack, onNavigate, showToast }) {
     <div className="space-y-4">
       <C.Breadcrumb items={[{ label: 'Drivers', href: '#' }, { label: u.name || id }]} />
       <button type="button" onClick={onBack} className="text-blue-600 hover:underline">← Back</button>
+      <p className="text-sm text-gray-600 dark:text-gray-300">
+        Last GPS fix: {formatLastGpsFix(d.last_real_fix_at)}
+      </p>
       <div className="flex gap-2">
         {[
           { id: 'review', label: 'Review' },
