@@ -16,6 +16,12 @@ export async function syncDriverLocationToServer(coords: {
   }
   const accuracy = coords.accuracy == null ? undefined : Number(coords.accuracy);
   const capturedAt = coords.capturedAt == null ? undefined : Number(coords.capturedAt);
+  // ageMs is clock-skew immune (both clocks read from same device);
+  // backend prefers it over capturedAt. capturedAt stays for older backends.
+  const ageMs =
+    capturedAt != null && Number.isFinite(capturedAt)
+      ? Math.max(0, Date.now() - capturedAt)
+      : undefined;
   try {
     await apiClient.patch(LOCATION_UPDATE, {
       latitude: lat,
@@ -23,6 +29,7 @@ export async function syncDriverLocationToServer(coords: {
       address: coords.address ?? "",
       ...(Number.isFinite(accuracy) ? { accuracy } : {}),
       ...(Number.isFinite(capturedAt) ? { capturedAt } : {}),
+      ...(ageMs != null ? { ageMs } : {}),
     });
     return true;
   } catch {

@@ -6,6 +6,24 @@ export const REAL_FIX_MAX_AGE_MS = 60 * 1000;
 /** Same trusted accuracy ceiling as a trip-ending live fix. */
 export const REAL_FIX_MAX_ACCURACY_M = LIVE_FIX_MAX_ACCURACY_M;
 
+/**
+ * Looser accuracy ceiling for the going-online gate. The first fresh fix after
+ * GPS has been idle (driver was offline) can read 200–500m before warming up;
+ * requiring ≤150m at that moment blocks drivers who do have a real fix.
+ * Matching freshness and trip-end use the stricter REAL_FIX_MAX_ACCURACY_M.
+ */
+export const GO_ONLINE_MAX_ACCURACY_M = 500;
+
+/**
+ * Fallback tolerance for the client's `capturedAt` wall-clock timestamp when
+ * the client does not send `ageMs` (older APKs). A device whose clock is
+ * drifted by more than REAL_FIX_MAX_AGE_MS from server time would have every
+ * fresh fix rejected under the strict check; this gives wall-clock-skewed
+ * phones a reasonable window. Drivers on APKs that send `ageMs` bypass this
+ * entirely because `ageMs` is clock-independent.
+ */
+export const FALLBACK_CLOCK_SKEW_TOLERANCE_MS = 10 * 60 * 1000;
+
 /** Express-validator ceiling on location.accuracy for the trip-ending field. */
 export const REAL_FIX_ACCURACY_HARD_MAX_M = 100000;
 
@@ -39,7 +57,7 @@ function toMillis(value) {
 
 /**
  * Body carries a client fix attempt when any GPS field is present.
- * `{ lat, lng, accuracy, capturedAt }` — same shape the driver app sends.
+ * `{ lat, lng, accuracy, capturedAt, ageMs }` — same shape the driver app sends.
  */
 export function hasClientGpsFields(body) {
   if (!body || typeof body !== 'object') return false;
@@ -47,32 +65,67 @@ export function hasClientGpsFields(body) {
     body.lat != null ||
     body.lng != null ||
     body.accuracy != null ||
-    body.capturedAt != null
+    body.capturedAt != null ||
+    body.ageMs != null
   );
 }
 
 /**
- * A real client fix: non-zero valid lat/lng, capturedAt within 60s, accuracy in range.
- * Returns null when the payload is missing or fails those checks.
+ * A real client fix: non-zero valid lat/lng, fresh, accuracy in range.
+ *
+ * Freshness is proved one of two ways:
+ *   1. `ageMs` — milliseconds since capture, computed on-device as
+ *      `Date.now() - fix.timestamp` at request send time. This is clock-skew
+ *      immune: both values come from the same device clock so drift cancels.
+ *      Preferred when present.
+ *   2. `capturedAt` — device wall-clock timestamp. Checked against server time
+ *      with FALLBACK_CLOCK_SKEW_TOLERANCE_MS tolerance for drifted phones.
+ *      Only used when `ageMs` is absent (older APKs).
+ *
+ * Returns null when the payload is missing or fails validation.
+ *
+ * Options:
+ *   - maxAccuracyM: override the accuracy ceiling (going-online uses 500m,
+ *     heartbeat/matching uses the strict 150m default).
  */
-export function parseClientGpsFix(input, nowMs = Date.now()) {
+export function parseClientGpsFix(input, nowMs = Date.now(), options = {}) {
   if (!input || typeof input !== 'object') return null;
+  const maxAccuracy = options.maxAccuracyM ?? REAL_FIX_MAX_ACCURACY_M;
+
   const lat = Number(input.lat);
   const lng = Number(input.lng);
   const accuracy =
     input.accuracy == null || input.accuracy === '' ? 0 : Number(input.accuracy);
-  const capturedMs = toMillis(input.capturedAt);
   if (!isUsableLatLng(lat, lng)) return null;
   if (
     !Number.isFinite(accuracy) ||
     accuracy < 0 ||
     accuracy > REAL_FIX_ACCURACY_HARD_MAX_M ||
-    accuracy > REAL_FIX_MAX_ACCURACY_M
+    accuracy > maxAccuracy
   ) {
     return null;
   }
-  if (capturedMs == null || Math.abs(nowMs - capturedMs) > REAL_FIX_MAX_AGE_MS) return null;
-  return { lat, lng, accuracy, capturedAt: new Date(capturedMs) };
+
+  // Path 1: ageMs (preferred, clock-skew immune).
+  if (input.ageMs != null && input.ageMs !== '') {
+    const ageMs = Number(input.ageMs);
+    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > REAL_FIX_MAX_AGE_MS) {
+      return null;
+    }
+    return { lat, lng, accuracy, capturedAt: new Date(nowMs - ageMs) };
+  }
+
+  // Path 2: capturedAt fallback for older APKs. A phone whose wall clock is
+  // drifted within FALLBACK_CLOCK_SKEW_TOLERANCE_MS of server time passes;
+  // when its reported capturedAt is outside the strict freshness window we
+  // store server-now instead of the drifted value so matching freshness is
+  // measured against our own clock.
+  const capturedMs = toMillis(input.capturedAt);
+  if (capturedMs == null) return null;
+  const skewFromServer = Math.abs(nowMs - capturedMs);
+  if (skewFromServer > FALLBACK_CLOCK_SKEW_TOLERANCE_MS) return null;
+  const storedCapturedMs = skewFromServer <= REAL_FIX_MAX_AGE_MS ? capturedMs : nowMs;
+  return { lat, lng, accuracy, capturedAt: new Date(storedCapturedMs) };
 }
 
 /**
@@ -80,10 +133,14 @@ export function parseClientGpsFix(input, nowMs = Date.now()) {
  * - no GPS fields → not rejected; caller may accept a fresh stored fix
  * - GPS fields that fail validation → rejected (do not fall through)
  * - valid fix → use it
+ *
+ * Uses the looser GO_ONLINE_MAX_ACCURACY_M ceiling: the driver is deciding to
+ * start driving, GPS will refine as they move, and the strict 150m ceiling
+ * excludes real fixes that are just still warming up.
  */
 export function readGoOnlineBody(body, nowMs = Date.now()) {
   if (!hasClientGpsFields(body)) return { fix: null, rejected: false };
-  const fix = parseClientGpsFix(body, nowMs);
+  const fix = parseClientGpsFix(body, nowMs, { maxAccuracyM: GO_ONLINE_MAX_ACCURACY_M });
   if (!fix) return { fix: null, rejected: true };
   return { fix, rejected: false };
 }

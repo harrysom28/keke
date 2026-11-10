@@ -469,6 +469,154 @@ try {
     eq(fixed.status, 0, `fix exits 0${fixed.stderr ? ` [${fixed.stderr.slice(0, 180)}]` : ''}`);
     check((await reload(driver._id)).currentLocation == null, '--fix unsets [0,0] currentLocation');
   }
+
+  log('\nK. clock-skew immunity via ageMs');
+  // A Nigerian phone with a drifted wall clock reports a capturedAt that is
+  // minutes off server time. ageMs is clock-independent so the server trusts it.
+  {
+    const p = offset(0.7);
+    const nowServer = Date.now();
+    // Phone clock 5 minutes ahead: capturedAt looks like it's in the future.
+    const skewedCapturedAt = nowServer + 5 * 60 * 1000;
+    const { user, driver } = await makeDriver();
+    const r = await call(
+      {
+        isAvailable: true,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: 12,
+        capturedAt: skewedCapturedAt,
+        ageMs: 1500, // fix was captured 1.5s before send
+      },
+      { _id: user._id }
+    );
+    check(!r.error && r.status === 200, `skewed clock accepted via ageMs${r.error ? ` [${r.error.message}]` : ''}`);
+    const after = await reload(driver._id);
+    eq(after.isOnline, true, 'ageMs path: isOnline true');
+    const storedMs = new Date(after.currentLocation.lastRealFixAt).getTime();
+    check(
+      Math.abs(storedMs - (nowServer - 1500)) < 2000,
+      `ageMs path: lastRealFixAt is server-now minus ageMs (got drift ${storedMs - (nowServer - 1500)}ms)`
+    );
+  }
+
+  log('\nL. clock-skew within fallback tolerance via capturedAt only');
+  // An older APK (no ageMs) on a phone with ≤10min clock skew still goes online.
+  {
+    const p = offset(0.75);
+    const nowServer = Date.now();
+    const { user, driver } = await makeDriver();
+    const r = await call(
+      {
+        isAvailable: true,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: 12,
+        capturedAt: nowServer + 3 * 60 * 1000, // 3 min skew
+      },
+      { _id: user._id }
+    );
+    check(!r.error && r.status === 200, `3min-skewed capturedAt accepted${r.error ? ` [${r.error.message}]` : ''}`);
+    const after = await reload(driver._id);
+    const storedMs = new Date(after.currentLocation.lastRealFixAt).getTime();
+    // Outside strict 60s → server-now is stamped.
+    check(
+      Math.abs(storedMs - nowServer) < 2000,
+      `skewed capturedAt: lastRealFixAt is clamped to server-now (got drift ${storedMs - nowServer}ms)`
+    );
+  }
+
+  log('\nM. clock skew beyond fallback tolerance is rejected');
+  {
+    const p = offset(0.8);
+    const { user, driver } = await makeDriver();
+    const r = await call(
+      {
+        isAvailable: true,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: 12,
+        capturedAt: Date.now() + 30 * 60 * 1000, // 30min skew, no ageMs
+      },
+      { _id: user._id }
+    );
+    assertLocationRequired(r, 'wild clock skew');
+    eq((await reload(driver._id)).isOnline, false, 'wild skew: stays offline');
+  }
+
+  log('\nN. looser accuracy for going-online (first fresh fix warming up)');
+  {
+    const p = offset(0.85);
+    const { user, driver } = await makeDriver();
+    // 300m accuracy — would be rejected under the old strict 150m ceiling,
+    // acceptable under GO_ONLINE_MAX_ACCURACY_M = 500m.
+    const r = await call(
+      {
+        isAvailable: true,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: 300,
+        ageMs: 1000,
+      },
+      { _id: user._id }
+    );
+    check(!r.error && r.status === 200, `300m-accuracy fix accepted for going online${r.error ? ` [${r.error.message}]` : ''}`);
+    eq((await reload(driver._id)).isOnline, true, 'coarse-accuracy fix: online');
+  }
+
+  log('\nO. accuracy above going-online ceiling is still rejected');
+  {
+    const p = offset(0.9);
+    const { user, driver } = await makeDriver();
+    const r = await call(
+      {
+        isAvailable: true,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: 600, // > 500m ceiling
+        ageMs: 1000,
+      },
+      { _id: user._id }
+    );
+    assertLocationRequired(r, '600m accuracy');
+    eq((await reload(driver._id)).isOnline, false, '600m accuracy: stays offline');
+  }
+
+  log('\nP. ageMs older than 60s is rejected');
+  {
+    const p = offset(0.95);
+    const { user, driver } = await makeDriver();
+    const r = await call(
+      {
+        isAvailable: true,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: 12,
+        ageMs: 90 * 1000, // 90s stale per the device itself
+      },
+      { _id: user._id }
+    );
+    assertLocationRequired(r, 'stale ageMs');
+    eq((await reload(driver._id)).isOnline, false, 'stale ageMs: stays offline');
+  }
+
+  log('\nQ. ageMs negative (clock ran backward) is rejected');
+  {
+    const p = offset(1.0);
+    const { user, driver } = await makeDriver();
+    const r = await call(
+      {
+        isAvailable: true,
+        lat: p.lat,
+        lng: p.lng,
+        accuracy: 12,
+        ageMs: -5000,
+      },
+      { _id: user._id }
+    );
+    assertLocationRequired(r, 'negative ageMs');
+    eq((await reload(driver._id)).isOnline, false, 'negative ageMs: stays offline');
+  }
 } catch (err) {
   log(err?.stack || String(err));
   failed++;

@@ -247,7 +247,13 @@ const Home = () => {
   const patchAvailability = useCallback(
     (
       nextAvailable: boolean,
-      locationBody?: { lat: number; lng: number; accuracy: number; capturedAt: number }
+      locationBody?: {
+        lat: number;
+        lng: number;
+        accuracy: number;
+        capturedAt: number;
+        ageMs?: number;
+      }
     ) => {
       setAvailabilityLoading(true);
       return apiClient
@@ -403,11 +409,17 @@ const Home = () => {
           return;
         }
 
+        // ageMs is clock-skew immune: both Date.now() and fix.timestamp are
+        // read from the same device clock, so any wall-clock drift cancels out.
+        // The server prefers ageMs over capturedAt; capturedAt stays for older
+        // backends.
+        const ageMs = Math.max(0, Date.now() - fix.timestamp);
         const online = await patchAvailability(true, {
           lat,
           lng,
           accuracy: fix.coords.accuracy ?? 0,
           capturedAt: fix.timestamp,
+          ageMs,
         });
         if (!online) return;
 
