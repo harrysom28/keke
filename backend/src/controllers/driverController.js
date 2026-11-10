@@ -692,7 +692,7 @@ export const updateDriverProfile = asyncHandler(async (req, res) => {
  */
 export const updateLocation = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const { latitude, longitude, address, heading, accuracy, capturedAt } = req.body;
+  const { latitude, longitude, address, heading, accuracy, capturedAt, ageMs } = req.body;
 
   if (!latitude || !longitude) {
     throw new ValidationError('Latitude and longitude are required');
@@ -712,6 +712,7 @@ export const updateLocation = asyncHandler(async (req, res) => {
       await persistDriverLocationMongo(driver._id, longitude, latitude, address || '', {
         accuracy,
         capturedAt,
+        ageMs,
       });
       // Do not driver.save() here. The document in memory still has the previous
       // currentLocation, and saving it would write that stale point back over

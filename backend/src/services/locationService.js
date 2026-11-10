@@ -70,13 +70,16 @@ export function persistDriverLocationMongo(driverId, longitude, latitude, addres
   if (address != null && String(address).trim() !== '') {
     $set['currentLocation.address'] = address;
   }
-  // lastRealFixAt moves only when the client sent a valid capturedAt.
+  // lastRealFixAt moves only when the client proves the fix is fresh.
   // A heartbeat that only refreshes the stored point leaves it alone.
+  // ageMs (preferred, clock-skew immune) is used when the client sends it;
+  // capturedAt is the older-APK fallback.
   const fix = parseClientGpsFix({
     lat,
     lng,
     accuracy: fixMeta?.accuracy,
     capturedAt: fixMeta?.capturedAt,
+    ageMs: fixMeta?.ageMs,
   });
   if (fix) {
     $set['currentLocation.lastRealFixAt'] = fix.capturedAt;
