@@ -580,11 +580,14 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         );
         
       case 3:
-        // Driver selection and search
+        // Driver selection and search — controlled-child pattern (mirrors step 2):
+        // parent owns the sheet height, child fills maxContentHeight with a
+        // scrollable list + inset-aware sticky Request footer. No more
+        // onHeightChange round-trips, no step-specific insets.bottom subtraction.
         return (
           <DriverView
             action={() => {
-              // Optional: View driver details
+              // Optional: view driver details
             }}
             request={(driverId: string, loading: React.Dispatch<React.SetStateAction<boolean>>) => {
               console.log('🚗 Requesting ride with driver:', driverId);
@@ -592,23 +595,8 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
               createRide(loading, rideData?.payment_type || "Cash", driverId);
             }}
             onChangeLocation={() => setStep(1)}
-            onHeightChange={(measuredHeight) => {
-              if (measuredHeight && measuredHeight > 0 && isFinite(measuredHeight)) {
-                // measuredHeight is already in pixels, use it directly
-                const heightValue = Math.round(measuredHeight);
-                // Clamp between 200px and 95% of screen
-                const clampedHeight = Math.max(200, Math.min(heightValue, Math.round(screenHeight * 0.95)));
-                contentHeightRef.current = clampedHeight;
-                setHeight(clampedHeight);
-                console.log('📐 Driver modal height updated:', { 
-                  measuredHeight, 
-                  clampedHeight, 
-                  screenHeight 
-                });
-              } else {
-                console.warn('⚠️ Invalid height measured for driver view:', measuredHeight);
-              }
-            }}
+            maxContentHeight={contentMaxHeight}
+            footerReserve={vehicleSheet.footerReserve}
           />
         );
         
@@ -639,7 +627,12 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     return Math.round(heightValue);
   };
 
-  const baseHeight = step === 2 ? vehicleSheet.height : getValidHeight();
+  // Steps 2 and 3 both use the controlled-child pattern: parent owns the sheet
+  // height via useSheetHeight (which already excludes the safe area), child
+  // fills maxContentHeight and provides its own inset-aware sticky footer.
+  // Step 1 (location) still measures its own content.
+  const baseHeight =
+    step === 2 || step === 3 ? vehicleSheet.height : getValidHeight();
   // Resizes only once the keyboard reports real coverage; otherwise this returns
   // `baseHeight` and no padding, so the sheet keeps its measured content height.
   const { height: sheetHeight, paddingBottom: keyboardPad } =
@@ -648,13 +641,10 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       sheetOpen
     );
   keyboardPadRef.current = keyboardPad;
-  // Step 1 is measured from content that already pads for the nav bar.
-  // Step 2's height already excludes the safe area. Later steps still sit on
-  // a raw screen fraction, so they keep the bottom inset subtracted.
-  const sheetHeightAboveNav = Math.max(
-    200,
-    Math.round(step === 1 || step === 2 ? sheetHeight : sheetHeight - insets.bottom)
-  );
+  // All steps now use a sheet height that already accounts for the safe area
+  // (steps 2 and 3 via useSheetHeight, step 1 via content that already pads for
+  // the nav bar). No step-specific insets.bottom subtraction.
+  const sheetHeightAboveNav = Math.max(200, Math.round(sheetHeight));
 
   // Don't render the BottomSheet at all if there's no valid content
   const content = useMemo(() => RenderView(), [RenderView]);
