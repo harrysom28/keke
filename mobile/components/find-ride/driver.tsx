@@ -5,12 +5,11 @@ import {
   Text,
   View,
   StyleSheet,
-  Dimensions,
   InteractionManager,
 } from "react-native";
 import { AppDetailsState, setRideData, setRideUtils } from "@/store/AppSlice";
 import { Path, Svg } from "react-native-svg";
-import { memo, useCallback, useContext, useEffect, useRef, useState, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
 import { AntDesign, Ionicons } from "@expo/vector-icons";
@@ -24,83 +23,76 @@ import apiClient from "@/utils/apiClient";
 import { NoDriversScreen } from "./NoDriversScreen";
 import { requestManager } from "@/utils/requestManager";
 import { getErrorMessage } from "@/utils/errorHandler";
+import {
+  useCombinedSafeInsets,
+  sheetFooterBottomPadding,
+} from "@/hooks/useCombinedSafeInsets";
 
 interface LProps {
   item: object;
-  onPress: () => void;
-  onClick?: (driverId: string, loading: React.Dispatch<React.SetStateAction<boolean>>) => void;
-  onReassign: (
-    item: string,
-    loading: React.Dispatch<React.SetStateAction<boolean>>
-  ) => void;
-  isActive: boolean;
+  onSelect: (driverId: string) => void;
+  isSelected: boolean;
 }
 
-const ListItem = memo(({ item, onPress, onClick, onReassign, isActive }: LProps) => {
+const ListItem = memo(({ item, onSelect, isSelected }: LProps) => {
   const { ride } = useSelector(AppDetailsState);
-  const dispatch = useDispatch();
-  const [loading, setLoading] = useState(false);
-  
-  // Get selected vehicle from Redux (for pricing)
   const rideUtils = ride?.utils as any;
   const selectedVehicle = rideUtils?.vehicle;
   const itemData = item as any;
-  
-  // Use driver's own vehicle type for the image (not the selected vehicle type)
-  const driverVehicleType = itemData?.vehicle_type_name || itemData?.vehicle_type?.name || itemData?.vehicleDetails?.vehicleType?.name || selectedVehicle?.vehicle_type_name;
-  const driverVehicleId = itemData?.vehicle_type_id || itemData?.vehicle_type?.id || itemData?.vehicle_type || itemData?.vehicleDetails?.vehicleType?._id || selectedVehicle?.vehicle_type_id;
-  const handleRequestRide = () => {
-    // Validate that destination exists before allowing ride request
-    const rideData = ride?.data as any;
-    const hasDestination = rideData?.destination && 
-                          (rideData.destination.lat || rideData.destination.latitude) &&
-                          (rideData.destination.long || rideData.destination.longitude);
-    
-    if (!hasDestination) {
-      showMessage({
-        type: "warning",
-        message: "Please select a destination location first.",
-      });
-      return;
-    }
-    
-    const driverId = itemData?.driver_id;
-    if (!driverId) return;
-    dispatch(setRideData({ driver_id: driverId }));
-    dispatch(setRideUtils({ driver: item }));
-    if (onClick) {
-      onClick(driverId, setLoading);
-    }
-  };
+
+  const driverVehicleType =
+    itemData?.vehicle_type_name ||
+    itemData?.vehicle_type?.name ||
+    itemData?.vehicleDetails?.vehicleType?.name ||
+    selectedVehicle?.vehicle_type_name;
+  const driverVehicleId =
+    itemData?.vehicle_type_id ||
+    itemData?.vehicle_type?.id ||
+    itemData?.vehicle_type ||
+    itemData?.vehicleDetails?.vehicleType?._id ||
+    selectedVehicle?.vehicle_type_id;
+
+  const driverId = itemData?.driver_id;
 
   return (
-    <View style={tw`mb-4 w-full px-1`}>
+    <View style={tw`mb-3 w-full px-1`}>
       <Pressable
         onPress={() => {
-          dispatch(setRideUtils({ driver_id: itemData?.driver_id }));
-          onPress();
+          if (!driverId) return;
+          onSelect(driverId);
         }}
-        style={tw.style(`flex-row items-center w-full px-4 py-3 bg-black rounded-[20px]`, {
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.25,
-          shadowRadius: 4,
-          elevation: 5,
-          zIndex: 20,
-          position: 'relative',
-          overflow: 'visible',
-          minHeight: 80,
-        })}
-        android_ripple={{ color: 'rgba(255,255,255,0.1)' }}
+        style={tw.style(
+          `flex-row items-center w-full px-4 py-3 rounded-[20px]`,
+          {
+            backgroundColor: isSelected ? "#0D1F1A" : "#000",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.25,
+            shadowRadius: 4,
+            elevation: 5,
+            zIndex: 20,
+            position: "relative",
+            overflow: "visible",
+            minHeight: 80,
+            borderWidth: isSelected ? 2 : 0,
+            borderColor: isSelected ? tw.color("base-green") || "#00C853" : "transparent",
+          }
+        )}
+        android_ripple={{ color: "rgba(255,255,255,0.1)" }}
       >
         <View style={tw`flex-col gap-0.5 flex-shrink-0 mr-2`}>
-          <View style={{ width: 53, height: 20, justifyContent: 'center', alignItems: 'flex-start', marginBottom: 1 }}>
+          <View
+            style={{
+              width: 53,
+              height: 20,
+              justifyContent: "center",
+              alignItems: "flex-start",
+              marginBottom: 1,
+            }}
+          >
             {driverVehicleType ? (
               <RNImage
-                source={getVehicleImage(
-                  driverVehicleId,
-                  driverVehicleType
-                )}
+                source={getVehicleImage(driverVehicleId, driverVehicleType)}
                 style={{ width: 53, height: 20 }}
                 resizeMode="contain"
               />
@@ -122,141 +114,99 @@ const ListItem = memo(({ item, onPress, onClick, onReassign, isActive }: LProps)
             )}
           </View>
 
-          <Text
-            style={tw.style(`text-lg text-[#DADADA]`, {
-              fontFamily: "RobotoBold",
-            })}
-          >
-            ₦{(() => {
-              // Try multiple sources for cost
-              const cost = itemData?.cost || 
-                          itemData?.fare?.totalFare || 
-                          itemData?.fare || 
-                          rideUtils?.distanceTime?.cost || 
-                          (ride?.data as any)?.fare?.totalFare ||
-                          (ride?.data as any)?.cost;
-              
+          <Text style={tw.style(`text-lg text-[#DADADA]`, { fontFamily: "RobotoBold" })}>
+            ₦
+            {(() => {
+              const cost =
+                itemData?.cost ||
+                itemData?.fare?.totalFare ||
+                itemData?.fare ||
+                rideUtils?.distanceTime?.cost ||
+                (ride?.data as any)?.fare?.totalFare ||
+                (ride?.data as any)?.cost;
               if (cost) {
-                const numCost = typeof cost === 'string' ? parseFloat(cost) : cost;
-                return isNaN(numCost) ? '0' : Math.round(numCost).toLocaleString();
+                const numCost = typeof cost === "string" ? parseFloat(cost) : cost;
+                return isNaN(numCost) ? "0" : Math.round(numCost).toLocaleString();
               }
-              return '0';
+              return "0";
             })()}
           </Text>
-          <Text
-            style={tw.style(`text-xs text-[#DADADA] mt-0`, {
-              fontFamily: "RobotoMedium",
-            })}
-          >
+          <Text style={tw.style(`text-xs text-[#DADADA] mt-0`, { fontFamily: "RobotoMedium" })}>
             {(() => {
-              // Try multiple sources for distance
               let distance: string | number | undefined;
-              
-              if (itemData?.trip_distance?.text) {
-                distance = itemData.trip_distance.text;
-              } else if (itemData?.trip_distance) {
-                distance = itemData.trip_distance;
-              } else if (rideUtils?.distanceTime?.distance?.text) {
-                distance = rideUtils.distanceTime.distance.text;
-              } else if (rideUtils?.distanceTime?.distance) {
-                distance = rideUtils.distanceTime.distance;
-              } else if ((ride?.data as any)?.distance?.value) {
-                distance = `${(ride.data as any).distance.value} km`;
-              } else if ((ride?.data as any)?.distance) {
+              if (itemData?.trip_distance?.text) distance = itemData.trip_distance.text;
+              else if (itemData?.trip_distance) distance = itemData.trip_distance;
+              else if (rideUtils?.distanceTime?.distance?.text) distance = rideUtils.distanceTime.distance.text;
+              else if (rideUtils?.distanceTime?.distance) distance = rideUtils.distanceTime.distance;
+              else if ((ride?.data as any)?.distance?.value) distance = `${(ride.data as any).distance.value} km`;
+              else if ((ride?.data as any)?.distance) {
                 const rideDistance = (ride.data as any).distance;
-                if (typeof rideDistance === 'object' && rideDistance.value) {
-                  distance = `${rideDistance.value} km`;
-                } else if (typeof rideDistance === 'string' || typeof rideDistance === 'number') {
-                  distance = rideDistance;
-                }
+                if (typeof rideDistance === "object" && rideDistance.value) distance = `${rideDistance.value} km`;
+                else if (typeof rideDistance === "string" || typeof rideDistance === "number") distance = rideDistance;
               }
-              
-              if (distance) {
-                return typeof distance === 'string' ? distance : `${distance} km`;
-              }
-              return '0 km';
+              if (distance) return typeof distance === "string" ? distance : `${distance} km`;
+              return "0 km";
             })()}
             <Text style={tw.style(`text-base-green`)}>
               {(() => {
-                // Try multiple sources for duration
                 let duration: string | number | undefined;
-                
-                if (itemData?.trip_duration?.text) {
-                  duration = itemData.trip_duration.text;
-                } else if (itemData?.trip_duration) {
-                  duration = itemData.trip_duration;
-                } else if (rideUtils?.distanceTime?.duration?.text) {
-                  duration = rideUtils.distanceTime.duration.text;
-                } else if (rideUtils?.distanceTime?.duration) {
-                  duration = rideUtils.distanceTime.duration;
-                } else if ((ride?.data as any)?.duration?.estimated) {
-                  duration = `${(ride.data as any).duration.estimated} min`;
-                } else if ((ride?.data as any)?.duration) {
+                if (itemData?.trip_duration?.text) duration = itemData.trip_duration.text;
+                else if (itemData?.trip_duration) duration = itemData.trip_duration;
+                else if (rideUtils?.distanceTime?.duration?.text) duration = rideUtils.distanceTime.duration.text;
+                else if (rideUtils?.distanceTime?.duration) duration = rideUtils.distanceTime.duration;
+                else if ((ride?.data as any)?.duration?.estimated) duration = `${(ride.data as any).duration.estimated} min`;
+                else if ((ride?.data as any)?.duration) {
                   const rideDuration = (ride.data as any).duration;
-                  if (typeof rideDuration === 'object' && rideDuration.estimated) {
-                    duration = `${rideDuration.estimated} min`;
-                  } else if (typeof rideDuration === 'string' || typeof rideDuration === 'number') {
-                    duration = rideDuration;
-                  }
+                  if (typeof rideDuration === "object" && rideDuration.estimated) duration = `${rideDuration.estimated} min`;
+                  else if (typeof rideDuration === "string" || typeof rideDuration === "number") duration = rideDuration;
                 }
-                
-                if (duration) {
-                  return typeof duration === 'string' ? duration : `${duration} min`;
-                }
-                return '0 min';
+                if (duration) return typeof duration === "string" ? duration : `${duration} min`;
+                return "0 min";
               })()}
             </Text>
           </Text>
         </View>
+
         <View style={[tw`flex-row gap-x-2 items-center`, { marginLeft: 20, flex: 1 }]}>
           <View style={tw`flex-1 items-end pr-2`}>
             <Text
-              style={tw.style(`text-base text-[#F9F0FF] text-right mb-0.5`, {
-                fontFamily: 'RobotoBold',
-              })}
+              style={tw.style(`text-base text-[#F9F0FF] text-right mb-0.5`, { fontFamily: "RobotoBold" })}
               numberOfLines={1}
             >
-              {itemData?.name || itemData?.driver_name || itemData?.user?.name || 'Driver'}
+              {itemData?.name || itemData?.driver_name || itemData?.user?.name || "Driver"}
             </Text>
             <View style={tw`flex-row items-center gap-x-1.5 self-end mb-0.5`}>
-              <Ionicons
-                name="star"
-                size={14}
-                color={tw.color("base-green") || "#00C853"}
-              />
-              <Text
-                style={tw.style(`text-sm text-[#F9F0FF]`, {
-                  fontFamily: 'RobotoMedium',
-                })}
-              >
-                {typeof itemData?.rating === 'object' && itemData?.rating?.average !== undefined
+              <Ionicons name="star" size={14} color={tw.color("base-green") || "#00C853"} />
+              <Text style={tw.style(`text-sm text-[#F9F0FF]`, { fontFamily: "RobotoMedium" })}>
+                {typeof itemData?.rating === "object" && itemData?.rating?.average !== undefined
                   ? itemData.rating.average.toFixed(1)
-                  : (typeof itemData?.rating === 'number' ? itemData.rating.toFixed(1) : '0.0')}
+                  : typeof itemData?.rating === "number"
+                    ? itemData.rating.toFixed(1)
+                    : "0.0"}
               </Text>
             </View>
             {itemData?.distance && (
-              <Text
-                style={tw.style(`text-xs text-[#999] text-right`, {
-                  fontFamily: 'RobotoRegular',
-                })}
-              >
+              <Text style={tw.style(`text-xs text-[#999] text-right`, { fontFamily: "RobotoRegular" })}>
                 {parseFloat(String(itemData.distance)).toFixed(1)} km away
               </Text>
             )}
             {(itemData?.vehicle_number || itemData?.vehicle_type_name) && (
               <Text
-                style={tw.style(`text-xs text-[#999] text-right mt-0.5`, {
-                  fontFamily: 'RobotoRegular',
-                })}
+                style={tw.style(`text-xs text-[#999] text-right mt-0.5`, { fontFamily: "RobotoRegular" })}
                 numberOfLines={1}
               >
-                {itemData?.vehicle_type_name ? `${itemData.vehicle_type_name}${itemData?.vehicle_number ? ' • ' : ''}` : ''}
-                {itemData?.vehicle_number || ''}
+                {itemData?.vehicle_type_name ? `${itemData.vehicle_type_name}${itemData?.vehicle_number ? " • " : ""}` : ""}
+                {itemData?.vehicle_number || ""}
               </Text>
             )}
           </View>
-          <View style={[tw`h-14 w-14 rounded-full bg-gray-200 border-2 border-white justify-center items-center`, { marginRight: -8 }]}>
-            {(itemData?.profile_image || itemData?.driver_image || itemData?.user?.profileImage) ? (
+          <View
+            style={[
+              tw`h-14 w-14 rounded-full bg-gray-200 border-2 border-white justify-center items-center`,
+              { marginRight: -8 },
+            ]}
+          >
+            {itemData?.profile_image || itemData?.driver_image || itemData?.user?.profileImage ? (
               <Image
                 source={{
                   uri: itemData.profile_image || itemData.driver_image || itemData.user?.profileImage,
@@ -268,41 +218,17 @@ const ListItem = memo(({ item, onPress, onClick, onReassign, isActive }: LProps)
               <AntDesign name="user" size={24} color="#999" />
             )}
           </View>
+          {isSelected && (
+            <View style={styles.selectedBadge}>
+              <Ionicons
+                name="checkmark-circle"
+                size={22}
+                color={tw.color("base-green") || "#00C853"}
+              />
+            </View>
+          )}
         </View>
       </Pressable>
-      <TouchableOpacity
-        onPress={() => {
-          if (isActive) {
-            onReassign(itemData?.driver_id, setLoading);
-          } else {
-            handleRequestRide();
-          }
-        }}
-        style={tw.style(`w-full mt-2 mx-1 self-center px-8 py-3 bg-base-green rounded-[20px] min-h-[52px] justify-center`, {
-          zIndex: 1,
-          position: 'relative',
-          shadowColor: tw.color("base-green") || '#00C853',
-          shadowOffset: { width: 0, height: 3 },
-          shadowOpacity: 0.3,
-          shadowRadius: 6,
-          elevation: 6,
-        })}
-        activeOpacity={0.8}
-        disabled={loading}
-      >
-        {loading ? (
-          <ActivityIndicator color="white" size="small" />
-        ) : (
-          <Text
-            style={tw.style(`text-base text-center text-white`, {
-              fontWeight: '700',
-              fontFamily: 'RobotoBold',
-            })}
-          >
-            Request Ride
-          </Text>
-        )}
-      </TouchableOpacity>
     </View>
   );
 });
@@ -319,120 +245,69 @@ interface Props {
   ) => void;
   isActive?: boolean;
   back?: () => void;
-  /** Prefer: return user to location step (e.g. setStep(1) in find-ride). */
+  /** Return user to location step (e.g. setStep(1) in find-ride). */
   onChangeLocation?: () => void;
-  onHeightChange?: (height: number) => void;
+  /**
+   * Room available inside the sheet. Caps the content so the list shrinks and
+   * scrolls instead of pushing the sticky Request button past the sheet's edge.
+   * Mirrors the step-2 (SelectVehicleView) contract.
+   */
+  maxContentHeight?: number;
+  /**
+   * Bottom padding for the sticky Request footer. Clears the gesture pill /
+   * 3-button nav bar even when the OS reports a zero bottom inset.
+   */
+  footerReserve?: number;
 }
 
+const REQUEST_RIDE_BUTTON_HEIGHT = 52;
+
 const DriverViewComponent = ({
-  action,
+  action: _action,
   request = () => {},
   reassign = () => {},
   isActive = false,
-  onHeightChange,
   back,
   onChangeLocation,
+  maxContentHeight,
+  footerReserve,
 }: Props) => {
   const { ride } = useSelector(AppDetailsState);
   const dispatch = useDispatch();
   const rideUtils = ride?.utils as any;
   const rawData = rideUtils?.drivers;
-  const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
+  const [listViewportHeight, setListViewportHeight] = useState(0);
+  const [listContentHeight, setListContentHeight] = useState(0);
   const isFocused = useIsFocused();
-  const measuredHeightRef = useRef(0);
-  const [headerHeight, setHeaderHeight] = useState(0);
-  const maxListHeight = useMemo(() => {
-    const h = Dimensions.get("window").height;
-    return Math.min(Math.round(h * 0.55), 520);
-  }, []);
 
-  const emitMeasuredHeight = useCallback((contentHeight: number) => {
-    if (!onHeightChange || !contentHeight || !isFinite(contentHeight)) return;
+  const insets = useCombinedSafeInsets();
+  const footerPad = footerReserve ?? sheetFooterBottomPadding(insets.bottom);
+  const stickyFooterHeight = 10 + REQUEST_RIDE_BUTTON_HEIGHT + footerPad;
+  const listOverflows = listContentHeight > listViewportHeight + 1;
 
-    const screenHeight = Dimensions.get('window').height;
-    const cappedHeight = Math.min(contentHeight + 48, screenHeight * 0.92);
-    if (Math.abs(cappedHeight - measuredHeightRef.current) > 30) {
-      measuredHeightRef.current = cappedHeight;
-      onHeightChange(cappedHeight);
-    }
-  }, [onHeightChange]);
-
-  // Initialize searching state based on whether we have data
   useEffect(() => {
     const hasDrivers = rawData && Array.isArray(rawData) && rawData.length > 0;
-    console.log('🔍 Checking initial driver state:', {
-      hasDrivers,
-      rawDataLength: Array.isArray(rawData) ? rawData.length : 0,
-      searching,
-    });
-    if (hasDrivers) {
-      setSearching(false);
-      console.log('✅ Found existing drivers, stopping search');
-    }
-  }, [rawData, searching]);
-  
-  // Debug logging - always log render state (origin may be lat/long, latitude/longitude, or lng)
-  useEffect(() => {
-    const rideData = ride?.data as any;
-    const o = rideData?.origin;
-    const oLat = o?.lat ?? o?.latitude ?? o?.location?.lat ?? o?.geometry?.location?.lat;
-    const oLng = o?.long ?? o?.longitude ?? o?.lng ?? o?.location?.long ?? o?.location?.lng ?? o?.geometry?.location?.lng;
-    console.log('🚗 DriverView render:', {
-      isFocused,
-      hasRide: !!ride,
-      hasUtils: !!ride?.utils,
-      rawData: rawData,
-      rawDataLength: Array.isArray(rawData) ? rawData.length : 0,
-      searching,
-      hasOrigin: !!o,
-      originLat: oLat,
-      originLong: oLng,
-      vehicleTypeId: rideData?.vehicle_type_id,
-    });
-  }, [isFocused, ride, rawData, searching]);
+    if (hasDrivers) setSearching(false);
+  }, [rawData]);
 
   // Driver search with request manager
   useEffect(() => {
-    console.log('🔍 Driver search useEffect triggered:', {
-      isFocused,
-      hasRawData: !!rawData,
-      rawDataLength: Array.isArray(rawData) ? rawData.length : 0,
-    });
-
-    // Check if we already have drivers
     const hasDrivers = rawData && Array.isArray(rawData) && rawData.length > 0;
-    
     if (hasDrivers) {
-      console.log('✅ Already have drivers, skipping search');
       setSearching(false);
       return;
     }
 
-    // Validate required data: support lat/long, latitude/longitude, lng, and nested location/geometry
     const rideData = ride?.data as any;
-    const rideUtils = ride?.utils as any;
+    const rideUtilsLocal = ride?.utils as any;
     const origin = rideData?.origin;
     const vehicleTypeId = rideData?.vehicle_type_id;
     const waitingOrigin = rideData?.waiting?.origin;
-    const userLoc = rideUtils?.user_location;
+    const userLoc = rideUtilsLocal?.user_location;
 
-    // Raw values for logging/debugging only (may be empty strings).
-    const latFromOrigin = origin?.lat;
-    const lngFromOrigin = origin?.long;
-    const fallbackLat = userLoc?.lat ?? userLoc?.latitude;
-    const fallbackLng = userLoc?.long ?? userLoc?.longitude ?? userLoc?.lng;
-    const waitingLatFromWaitingOrigin =
-      waitingOrigin?.lat ?? waitingOrigin?.latitude ?? waitingOrigin?.location?.lat ?? waitingOrigin?.geometry?.location?.lat;
-    const waitingLngFromWaitingOrigin =
-      waitingOrigin?.long ??
-      waitingOrigin?.longitude ??
-      waitingOrigin?.lng ??
-      waitingOrigin?.location?.long ??
-      waitingOrigin?.location?.lng ??
-      waitingOrigin?.geometry?.location?.lng;
-
-    // Important: treat empty string coordinates as missing (so we can fall back to other fields/sources).
     const toNumber = (v: any): number => {
       if (v == null) return NaN;
       if (typeof v === "number") return v;
@@ -450,15 +325,13 @@ const DriverViewComponent = ({
       return null;
     };
 
-    // Try multiple pickup sources; different parts of the app populate different ride sub-objects.
-    // Also: don't short-circuit on empty strings (e.g. origin.lat === "").
     const originLat =
       pickFirstValidCoord([
         origin?.lat,
         origin?.latitude,
         origin?.location?.lat,
         origin?.geometry?.location?.lat,
-        origin?.lng, // sometimes used incorrectly
+        origin?.lng,
         waitingOrigin?.lat,
         waitingOrigin?.latitude,
         waitingOrigin?.location?.lat,
@@ -487,248 +360,125 @@ const DriverViewComponent = ({
 
     const hasValidOrigin = !Number.isNaN(originLat) && !Number.isNaN(originLong);
 
-    console.log('🔍 Validating search data:', {
-      isFocused,
-      hasOrigin: !!origin,
-      hasValidOrigin,
-      hasVehicleType: !!vehicleTypeId,
-      latFromOrigin,
-      lngFromOrigin,
-      fallbackLat,
-      fallbackLng,
-      waitingLatFromWaitingOrigin,
-      waitingLngFromWaitingOrigin,
-      originLat,
-      originLong,
-      vehicleTypeId,
-    });
-
     if (!isFocused) {
-      console.log('⚠️ Component not focused, skipping search');
       setSearching(false);
       return;
     }
 
     if (!hasValidOrigin || !vehicleTypeId) {
-      console.log('⚠️ Missing required data for driver search');
       setSearching(false);
-      console.log('🧾 Origin debug snapshot:', {
-        origin,
-        waitingOrigin,
-        userLoc,
-        vehicleTypeId,
-      });
       return;
     }
 
-    // Search for drivers using request manager
     const searchDrivers = async () => {
-      console.log('🚀 Starting driver search...');
       setSearching(true);
-
       try {
         const cacheKey = `find-drivers-${originLat}-${originLong}-${vehicleTypeId}`;
-        console.log('🔑 Cache key:', cacheKey);
-
         const responseData = await requestManager.execute(
           cacheKey,
           async () => {
-            console.log('📡 Making API call to find drivers...', {
-              loc_lat: originLat,
-              loc_long: originLong,
-              vehicleTypeId: vehicleTypeId,
-            });
-            const response = await apiClient.get('booking/find-driver', {
+            const response = await apiClient.get("booking/find-driver", {
               params: {
                 loc_lat: originLat,
                 loc_long: originLong,
                 vehicleTypeId: vehicleTypeId,
               },
             });
-            console.log('📥 API response received:', {
-              hasData: !!response?.data,
-              hasDrivers: !!response?.data?.data?.drivers,
-              driversCount: response?.data?.data?.drivers?.length || 0,
-            });
             return response.data;
           },
-          10000 // Cache for 10 seconds
+          10000
         );
 
-        let drivers = responseData?.data?.drivers || [];
-        console.log('✅ Found drivers:', drivers.length);
-        console.log('📋 Drivers data:', drivers);
-
-        if (drivers.length > 0) {
-          console.log('💾 Storing drivers in Redux...', { count: drivers.length });
-          dispatch(setRideUtils({ drivers }));
-          console.log('✅ Drivers stored in Redux');
-          
-          // Verify the data was stored
-          setTimeout(() => {
-            const updatedRide = ride?.utils as any;
-            const storedDrivers = updatedRide?.drivers;
-            console.log('🔍 Verification - stored drivers:', {
-              hasStored: !!storedDrivers,
-              count: Array.isArray(storedDrivers) ? storedDrivers.length : 0,
-            });
-          }, 100);
-        } else {
-          dispatch(setRideUtils({ drivers: [] }));
-          console.log('ℹ️ No drivers available nearby');
-        }
+        const drivers = responseData?.data?.drivers || [];
+        dispatch(setRideUtils({ drivers }));
       } catch (err: any) {
-        console.error('❌ Find drivers error:', {
-          message: err?.message,
-          status: err?.status || err?.response?.status,
-          data: err?.response?.data,
-        });
-
-        // If we have cached drivers, use them silently
         if (hasDrivers) {
-          console.log('✅ Using cached drivers despite error');
           setSearching(false);
           return;
         }
-
         const errorMessage = getErrorMessage(err);
         dispatch(setRideUtils({ drivers: [] }));
-        if (errorMessage && !errorMessage.toLowerCase().includes('too many')) {
-          showMessage({
-            type: "danger",
-            message: errorMessage,
-            duration: 4000,
-          });
+        if (errorMessage && !errorMessage.toLowerCase().includes("too many")) {
+          showMessage({ type: "danger", message: errorMessage, duration: 4000 });
         }
       } finally {
-        console.log('🏁 Driver search completed, setting searching to false');
         setSearching(false);
       }
     };
 
-    // Defer network work until modal interaction settles.
     const interactionTask = InteractionManager.runAfterInteractions(() => {
       searchDrivers();
     });
 
     return () => {
       interactionTask.cancel();
-      console.log('🧹 Cleaning up driver search');
       setSearching(false);
     };
   }, [isFocused, ride?.data, dispatch]);
 
-  // Sort drivers by distance (closest first) and filter out invalid data
   const data = useMemo(() => {
-    console.log('🔄 Processing drivers data:', {
-      hasRawData: !!rawData,
-      isArray: Array.isArray(rawData),
-      rawDataLength: Array.isArray(rawData) ? rawData.length : 0,
-      rawData: rawData,
-    });
-    
-    if (!rawData || !Array.isArray(rawData)) {
-      console.log('❌ No rawData or not an array');
-      return [];
-    }
-    
-    const filtered = [...rawData].filter((driver) => {
-      const isValid = driver && (driver.driver_id || driver.user_id || driver.name);
-      if (!isValid) {
-        console.log('⚠️ Invalid driver filtered out:', driver);
-      }
-      return isValid;
-    });
-    
-    console.log('✅ Filtered drivers:', filtered.length, 'out of', rawData.length);
-    
-    if (filtered.length === 0) {
-      console.log('⚠️ No valid drivers after filtering');
-      return [];
-    }
-    
-    const sorted = filtered.sort((a, b) => {
+    if (!rawData || !Array.isArray(rawData)) return [];
+    const filtered = rawData.filter(
+      (driver: any) => driver && (driver.driver_id || driver.user_id || driver.name)
+    );
+    return filtered.sort((a: any, b: any) => {
       const distanceA = parseFloat(String(a.distance)) || 9999;
       const distanceB = parseFloat(String(b.distance)) || 9999;
       return distanceA - distanceB;
     });
-    
-    console.log('✅ Sorted drivers:', sorted.length, 'drivers ready to render');
-    return sorted;
   }, [rawData]);
 
-  // Debug logging for processed drivers
+  // Clear the selection when the underlying driver list no longer contains it.
   useEffect(() => {
-    console.log('🚗 Processed drivers state:', {
-      rawData: rawData,
-      rawDataLength: Array.isArray(rawData) ? rawData.length : 0,
-      data: data,
-      dataLength: data?.length || 0,
-      searching,
-      hasData: !!data && data.length > 0,
-      isFocused,
-    });
-  }, [data, searching, rawData, isFocused]);
+    if (!selectedDriverId) return;
+    const stillPresent = data.some((d: any) => d.driver_id === selectedDriverId);
+    if (!stillPresent) setSelectedDriverId(null);
+  }, [data, selectedDriverId]);
 
-  // Get origin and destination for map (MUST be before any early returns)
-  const rideData = ride?.data as any;
-  const origin = rideData?.origin;
-  const destination = rideData?.destination;
-  
-  // Calculate map region to show both pickup and dropoff (MUST be before any early returns)
-  const mapRegion = useMemo(() => {
-    const oLat = origin?.lat ?? origin?.latitude ?? origin?.location?.lat ?? origin?.geometry?.location?.lat;
-    const oLng = origin?.long ?? origin?.longitude ?? origin?.lng ?? origin?.location?.long ?? origin?.location?.lng ?? origin?.geometry?.location?.lng;
-    if (oLat == null || oLng == null) return null;
+  const handleSelect = useCallback((driverId: string) => {
+    setSelectedDriverId((prev) => (prev === driverId ? null : driverId));
+    dispatch(setRideUtils({ driver_id: driverId }));
+  }, [dispatch]);
 
-    const originLat = parseFloat(String(oLat));
-    const originLng = parseFloat(String(oLng));
-    if (Number.isNaN(originLat) || Number.isNaN(originLng)) return null;
+  const handleRequestOrReassign = useCallback(() => {
+    if (!selectedDriverId) return;
+    const item = data.find((d: any) => d.driver_id === selectedDriverId);
+    if (!item) return;
 
-    const dLat = destination?.lat ?? destination?.latitude ?? destination?.location?.lat ?? destination?.geometry?.location?.lat;
-    const dLng = destination?.long ?? destination?.longitude ?? destination?.lng ?? destination?.location?.long ?? destination?.location?.lng ?? destination?.geometry?.location?.lng;
-    if (dLat != null && dLng != null) {
-      const destLat = parseFloat(String(dLat));
-      const destLng = parseFloat(String(dLng));
-      
-      // Calculate bounds to include both points
-      const minLat = Math.min(originLat, destLat);
-      const maxLat = Math.max(originLat, destLat);
-      const minLng = Math.min(originLng, destLng);
-      const maxLng = Math.max(originLng, destLng);
-      
-      const latDelta = (maxLat - minLat) * 1.5 + 0.01;
-      const lngDelta = (maxLng - minLng) * 1.5 + 0.01;
-      
-      return {
-        latitude: (minLat + maxLat) / 2,
-        longitude: (minLng + maxLng) / 2,
-        latitudeDelta: Math.max(latDelta, 0.01),
-        longitudeDelta: Math.max(lngDelta, 0.01),
-      };
+    if (isActive) {
+      reassign(selectedDriverId, setLoading);
+      return;
     }
-    
-    // Only origin available
-    return {
-      latitude: originLat,
-      longitude: originLng,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    };
-  }, [origin, destination]);
 
-  // Retry function
+    // Normal request flow: validate destination, dispatch, then call parent.
+    const rideData = ride?.data as any;
+    const hasDestination =
+      rideData?.destination &&
+      (rideData.destination.lat || rideData.destination.latitude) &&
+      (rideData.destination.long || rideData.destination.longitude);
+
+    if (!hasDestination) {
+      showMessage({
+        type: "warning",
+        message: "Please select a destination location first.",
+      });
+      return;
+    }
+
+    dispatch(setRideData({ driver_id: selectedDriverId }));
+    dispatch(setRideUtils({ driver: item }));
+    request(selectedDriverId, setLoading);
+  }, [selectedDriverId, data, isActive, ride?.data, dispatch, request, reassign]);
+
   const handleRetry = async () => {
     setSearching(true);
-
     const rideData = ride?.data as any;
-    const rideUtils = ride?.utils as any;
+    const rideUtilsLocal = ride?.utils as any;
     const origin = rideData?.origin;
     const vehicleTypeId = rideData?.vehicle_type_id;
     const waitingOrigin = rideData?.waiting?.origin;
-    const userLoc = rideUtils?.user_location;
+    const userLoc = rideUtilsLocal?.user_location;
 
-    // Same invalid/empty handling as initial search.
     const toNumber = (v: any): number => {
       if (v == null) return NaN;
       if (typeof v === "number") return v;
@@ -752,7 +502,7 @@ const DriverViewComponent = ({
         origin?.latitude,
         origin?.location?.lat,
         origin?.geometry?.location?.lat,
-        origin?.lng, // sometimes used incorrectly
+        origin?.lng,
         waitingOrigin?.lat,
         waitingOrigin?.latitude,
         waitingOrigin?.location?.lat,
@@ -782,12 +532,6 @@ const DriverViewComponent = ({
 
     if (!hasValid || !vehicleTypeId) {
       setSearching(false);
-      console.log('🧾 Retry origin debug snapshot:', {
-        origin,
-        waitingOrigin,
-        userLoc,
-        vehicleTypeId,
-      });
       showMessage({
         type: "warning",
         message: "Missing pickup location or vehicle type",
@@ -799,22 +543,19 @@ const DriverViewComponent = ({
     try {
       const cacheKey = `find-drivers-${originLat}-${originLong}-${vehicleTypeId}`;
       requestManager.clear(cacheKey);
-
-      const response = await apiClient.get('booking/find-driver', {
+      const response = await apiClient.get("booking/find-driver", {
         params: {
           loc_lat: originLat,
           loc_long: originLong,
           vehicleTypeId: vehicleTypeId,
         },
       });
-
       const drivers = response?.data?.data?.drivers || [];
-      
       if (drivers.length > 0) {
         dispatch(setRideUtils({ drivers }));
         showMessage({
           type: "success",
-          message: `Found ${drivers.length} driver${drivers.length !== 1 ? 's' : ''}`,
+          message: `Found ${drivers.length} driver${drivers.length !== 1 ? "s" : ""}`,
           duration: 2000,
         });
       } else {
@@ -825,48 +566,59 @@ const DriverViewComponent = ({
         });
       }
     } catch (err: any) {
-      const errorMessage = getErrorMessage(err);
-      showMessage({
-        type: "danger",
-        message: errorMessage,
-        duration: 5000,
-      });
+      showMessage({ type: "danger", message: getErrorMessage(err), duration: 5000 });
     } finally {
       setSearching(false);
     }
   };
 
-  // Determine render state - check data first
   const hasValidData = Array.isArray(data) && data.length > 0;
-  
-  console.log('🎨 Render decision:', {
-    searching,
-    hasValidData,
-    dataLength: data?.length || 0,
-    dataType: typeof data,
-    isArray: Array.isArray(data),
-  });
 
-  // Show loading if actively searching and no data
+  const renderDriverItem = useCallback(
+    ({ item }: { item: any }) => (
+      <ListItem
+        item={item}
+        onSelect={handleSelect}
+        isSelected={selectedDriverId === item?.driver_id}
+      />
+    ),
+    [handleSelect, selectedDriverId]
+  );
+
+  const driverKeyExtractor = useCallback(
+    (item: any, index: number) =>
+      item?.driver_id || item?.user_id || `driver-${index}`,
+    []
+  );
+
+  const wrapperStyle = useMemo(() => {
+    if (typeof maxContentHeight === "number" && maxContentHeight > 0) {
+      return { height: maxContentHeight, maxHeight: maxContentHeight };
+    }
+    return null;
+  }, [maxContentHeight]);
+
+  const requestButtonPaddingStyle = useMemo(() => ({ paddingBottom: footerPad }), [footerPad]);
+
+  // Loading
   if (searching && !hasValidData) {
-    console.log('⏳ Showing loading screen (searching)');
     return (
       <View
-        onLayout={(event) => emitMeasuredHeight(event.nativeEvent.layout.height)}
-        style={[tw`flex-1 justify-center items-center py-20 px-6`, { minHeight: 400 }]}
+        style={[
+          styles.wrapper,
+          wrapperStyle,
+          tw`flex-1 justify-center items-center py-20 px-6`,
+          { minHeight: 400 },
+        ]}
       >
         <ActivityIndicator color={tw.color("base-green")} size="large" />
         <Text
-          style={tw.style(`text-lg text-center text-[#666] mt-4`, {
-            fontFamily: "RobotoBold",
-          })}
+          style={tw.style(`text-lg text-center text-[#666] mt-4`, { fontFamily: "RobotoBold" })}
         >
           Finding available drivers...
         </Text>
         <Text
-          style={tw.style(`text-sm text-center text-[#999] mt-2`, {
-            fontFamily: "RobotoRegular",
-          })}
+          style={tw.style(`text-sm text-center text-[#999] mt-2`, { fontFamily: "RobotoRegular" })}
         >
           This may take a few moments
         </Text>
@@ -874,13 +626,16 @@ const DriverViewComponent = ({
     );
   }
 
-  // No drivers screen - only show if we're not searching and have no data
+  // Empty state
   if (!searching && !hasValidData) {
-    console.log('⚠️ Showing NoDriversScreen (no data, not searching)');
     return (
       <View
-        onLayout={(event) => emitMeasuredHeight(event.nativeEvent.layout.height)}
-        style={[tw`flex-1 bg-white`, { minHeight: 460 }]}
+        style={[
+          styles.wrapper,
+          wrapperStyle,
+          tw`flex-1 bg-white`,
+          { minHeight: 460 },
+        ]}
       >
         <NoDriversScreen
           onRetry={handleRetry}
@@ -891,78 +646,73 @@ const DriverViewComponent = ({
     );
   }
 
-  // If we reach here, we should have valid data
-  // This check is redundant since we already checked above, but keeping for safety
-  if (!hasValidData) {
-    console.error('❌ CRITICAL: No valid data but passed checks', {
-      data,
-      dataType: typeof data,
-      isArray: Array.isArray(data),
-      length: data?.length,
-    });
-    return (
-      <View
-        onLayout={(event) => emitMeasuredHeight(event.nativeEvent.layout.height)}
-        style={[tw`flex-1 justify-center items-center py-20 px-6`, { minHeight: 400 }]}
-      >
-        <ActivityIndicator color={tw.color("base-green")} size="large" />
-        <Text
-          style={tw.style(`text-lg text-center text-[#666] mt-4`, {
-            fontFamily: "RobotoBold",
-          })}
-        >
-          Loading drivers...
-        </Text>
-      </View>
-    );
-  }
-
-  // At this point, we should have valid data - render the driver list
-  console.log('✅ Rendering driver list with', data.length, 'drivers');
-
   return (
-    <View
-      style={styles.container}
-      onLayout={(event) => emitMeasuredHeight(event.nativeEvent.layout.height)}
-    >
-      {/* Compact Header */}
-      <View
-        style={styles.header}
-        onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
-      >
-        <Text style={styles.headerTitle}>
-          Available Drivers
-        </Text>
+    <View style={[styles.wrapper, wrapperStyle]}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Available Drivers</Text>
         <Text style={styles.headerSubtitle}>
-          {data.length} driver{data.length !== 1 ? 's' : ''} found nearby
+          {data.length} driver{data.length !== 1 ? "s" : ""} found nearby
         </Text>
       </View>
 
-      {/* Virtualized driver list for smoother low-end Android scrolling */}
       <FlatList
-        style={[styles.scrollView, { maxHeight: maxListHeight }]}
-        contentContainerStyle={styles.scrollContent}
+        style={[styles.scrollView, { flex: 1, minHeight: 0 }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: selectedDriverId ? stickyFooterHeight : footerPad },
+        ]}
         data={data}
-        renderItem={({ item }) => (
-          <ListItem
-            item={item}
-            onPress={action}
-            onClick={request}
-            onReassign={reassign}
-            isActive={isActive}
-          />
-        )}
-        keyExtractor={(item: any, index: number) => item?.driver_id || item?.user_id || `driver-${index}`}
-        scrollEnabled={true}
-        nestedScrollEnabled={true}
-        removeClippedSubviews={true}
+        renderItem={renderDriverItem}
+        keyExtractor={driverKeyExtractor}
+        showsVerticalScrollIndicator={listOverflows}
+        scrollEnabled
+        nestedScrollEnabled
+        removeClippedSubviews
         maxToRenderPerBatch={4}
         windowSize={3}
         initialNumToRender={3}
-        onContentSizeChange={(_, contentHeight) => {
-          emitMeasuredHeight(contentHeight + headerHeight);
+        onLayout={(e) => {
+          const next = e.nativeEvent.layout.height;
+          setListViewportHeight((p) => (Math.abs(p - next) > 1 ? next : p));
+        }}
+        onContentSizeChange={(_, h) => {
+          setListContentHeight((p) => (Math.abs(p - h) > 1 ? h : p));
         }}
       />
+
+      {/* Sticky footer: sibling of the list, visible once a driver is selected. */}
+      {selectedDriverId && (
+        <View
+          style={[
+            styles.requestButtonWrapper,
+            requestButtonPaddingStyle,
+            { height: stickyFooterHeight, flexGrow: 0, flexShrink: 0 },
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.requestButton}
+            onPress={handleRequestOrReassign}
+            activeOpacity={0.8}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="white" size="small" />
+            ) : (
+              <>
+                <Text style={styles.requestButtonText}>
+                  {isActive ? "Reassign Driver" : "Request Ride"}
+                </Text>
+                <Ionicons
+                  name="arrow-forward"
+                  size={18}
+                  color="white"
+                  style={{ marginLeft: 6 }}
+                />
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 };
@@ -970,37 +720,68 @@ const DriverViewComponent = ({
 export const DriverView = memo(DriverViewComponent);
 
 const styles = StyleSheet.create({
-  container: {
-    backgroundColor: '#fff',
-    width: '100%',
+  wrapper: {
+    backgroundColor: "#fff",
+    width: "100%",
   },
   header: {
     paddingHorizontal: 20,
     paddingTop: 6,
     paddingBottom: 2,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: "#F0F0F0",
   },
   headerTitle: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#1A1A1A',
-    fontFamily: 'RobotoBold',
+    fontWeight: "700",
+    color: "#1A1A1A",
+    fontFamily: "RobotoBold",
     marginBottom: 2,
   },
   headerSubtitle: {
     fontSize: 13,
-    color: '#666',
-    fontFamily: 'RobotoRegular',
+    color: "#666",
+    fontFamily: "RobotoRegular",
   },
   scrollView: {
-    backgroundColor: '#fff',
-    width: '100%',
+    backgroundColor: "#fff",
+    width: "100%",
   },
   scrollContent: {
     paddingHorizontal: 4,
     paddingTop: 2,
-    paddingBottom: 100, // Increased bottom padding to ensure last card and button are fully visible
+  },
+  selectedBadge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    backgroundColor: "#fff",
+    borderRadius: 11,
+    padding: 1,
+  },
+  requestButtonWrapper: {
+    paddingTop: 10,
+    paddingHorizontal: 4,
+    backgroundColor: "#fff",
+  },
+  requestButton: {
+    height: REQUEST_RIDE_BUTTON_HEIGHT,
+    backgroundColor: "#00C853",
+    borderRadius: 20,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#00C853",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  requestButtonText: {
+    color: "#fff",
+    fontFamily: "RobotoBold",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });
