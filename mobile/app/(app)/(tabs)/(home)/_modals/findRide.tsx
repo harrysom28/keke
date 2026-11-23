@@ -111,7 +111,11 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     if (!measured || measured <= 50) return;
 
     if (stepRef.current === 2 || stepRef.current === 3) {
-      const next = Math.round(measured + 48);
+      // Handle (~25) + close row (~36) + sheet padding/gap (~24) sit outside
+      // DriverView/SelectVehicleView. Under-counting this chrome clips the
+      // sticky footer into the system nav bar.
+      const chrome = stepRef.current === 3 ? 84 : 48;
+      const next = Math.round(measured + chrome);
       setMeasuredContent((prev) =>
         prev != null && Math.abs(prev - next) <= 8 ? prev : next
       );
@@ -694,7 +698,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
         onClose={handleSheetClosed}
       >
         {sheetCloseButton}
-        <View onLayout={handleContentLayout}>
+        <View onLayout={handleContentLayout} collapsable={false} style={{ flexGrow: 0 }}>
           {content}
         </View>
       </BottomSheet>
@@ -716,7 +720,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
       onClose={handleSheetClosed}
     >
       {sheetCloseButton}
-      <View onLayout={handleContentLayout}>
+      <View onLayout={handleContentLayout} collapsable={false} style={{ flexGrow: 0 }}>
         {content}
       </View>
     </BottomSheet>
