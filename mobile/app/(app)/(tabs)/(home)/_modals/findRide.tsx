@@ -84,7 +84,10 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
   // to the measured vehicle list when that is shorter than the cap.
   const vehicleSheetCap = useSheetHeight({ cap: 0.75 });
   const vehicleSheet = useSheetHeight({
-    measuredContent: step === 2 ? measuredContent : null,
+    // Share step 2's measured-content wiring with step 3 so the sheet
+    // shrinks to fit the actual driver list instead of sitting at the full
+    // 75% cap and leaving a large empty gap below a short list.
+    measuredContent: step === 2 || step === 3 ? measuredContent : null,
     cap: 0.75,
   });
   const contentMaxHeight = Math.max(240, vehicleSheetCap.height - 48);
@@ -107,7 +110,7 @@ const FindRideSheet = ({ bottomSheetRef, getActiveRide, onRideBooked, onSheetClo
     const measured = event?.nativeEvent?.layout?.height;
     if (!measured || measured <= 50) return;
 
-    if (stepRef.current === 2) {
+    if (stepRef.current === 2 || stepRef.current === 3) {
       const next = Math.round(measured + 48);
       setMeasuredContent((prev) =>
         prev != null && Math.abs(prev - next) <= 8 ? prev : next
