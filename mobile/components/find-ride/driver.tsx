@@ -428,11 +428,20 @@ const DriverViewComponent = ({
     });
   }, [rawData]);
 
-  // Clear the selection when the underlying driver list no longer contains it.
+  // Auto-select the first driver so the Request button is live from the start.
+  // If the user taps another driver, we honor that. If the selected driver
+  // disappears from the list (e.g. went offline), fall back to the first.
   useEffect(() => {
-    if (!selectedDriverId) return;
-    const stillPresent = data.some((d: any) => d.driver_id === selectedDriverId);
-    if (!stillPresent) setSelectedDriverId(null);
+    if (!data.length) {
+      if (selectedDriverId) setSelectedDriverId(null);
+      return;
+    }
+    const stillPresent = selectedDriverId
+      ? data.some((d: any) => d.driver_id === selectedDriverId)
+      : false;
+    if (!stillPresent) {
+      setSelectedDriverId(data[0].driver_id);
+    }
   }, [data, selectedDriverId]);
 
   const handleSelect = useCallback((driverId: string) => {
@@ -767,12 +776,12 @@ const styles = StyleSheet.create({
   },
   requestButton: {
     height: REQUEST_RIDE_BUTTON_HEIGHT,
-    backgroundColor: "#00C853",
+    backgroundColor: tw.color("base-green") || "#3C8F7C",
     borderRadius: 20,
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
-    shadowColor: "#00C853",
+    shadowColor: tw.color("base-green") || "#3C8F7C",
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.3,
     shadowRadius: 6,
