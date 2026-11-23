@@ -32,9 +32,10 @@ interface LProps {
   item: object;
   onSelect: (driverId: string) => void;
   isSelected: boolean;
+  isLast: boolean;
 }
 
-const ListItem = memo(({ item, onSelect, isSelected }: LProps) => {
+const ListItem = memo(({ item, onSelect, isSelected, isLast }: LProps) => {
   const { ride } = useSelector(AppDetailsState);
   const rideUtils = ride?.utils as any;
   const selectedVehicle = rideUtils?.vehicle;
@@ -55,7 +56,7 @@ const ListItem = memo(({ item, onSelect, isSelected }: LProps) => {
   const driverId = itemData?.driver_id;
 
   return (
-    <View style={tw`mb-3 w-full px-1`}>
+    <View style={tw.style(`w-full px-1`, !isLast && `mb-2`)}>
       <Pressable
         onPress={() => {
           if (!driverId) return;
@@ -286,7 +287,8 @@ const DriverViewComponent = ({
 
   const insets = useCombinedSafeInsets();
   const footerPad = footerReserve ?? sheetFooterBottomPadding(insets.bottom);
-  const stickyFooterHeight = 10 + REQUEST_RIDE_BUTTON_HEIGHT + footerPad;
+  const footerTopGap = 8;
+  const stickyFooterHeight = footerTopGap + REQUEST_RIDE_BUTTON_HEIGHT + footerPad;
   const listOverflows = listContentHeight > listViewportHeight + 1;
 
   useEffect(() => {
@@ -585,14 +587,15 @@ const DriverViewComponent = ({
   const hasValidData = Array.isArray(data) && data.length > 0;
 
   const renderDriverItem = useCallback(
-    ({ item }: { item: any }) => (
+    ({ item, index }: { item: any; index: number }) => (
       <ListItem
         item={item}
         onSelect={handleSelect}
         isSelected={selectedDriverId === item?.driver_id}
+        isLast={index === data.length - 1}
       />
     ),
-    [handleSelect, selectedDriverId]
+    [handleSelect, selectedDriverId, data.length]
   );
 
   const driverKeyExtractor = useCallback(
@@ -601,27 +604,28 @@ const DriverViewComponent = ({
     []
   );
 
-  // Only clamp to a fixed height when content actually overflows the cap.
-  // When content fits, use maxHeight only so the wrapper shrinks to its
-  // natural size and the parent's onLayout reports that smaller value — which
-  // is what lets the sheet shrink to fit a short driver list.
+  // Pin an explicit height once we know natural content size. `maxHeight` alone
+  // is not enough: the parent BottomSheet is a fixed-height box, and a child
+  // that only has maxHeight can still be measured at the cap — which is why
+  // PR #5 still left a large gap under a single card.
   const footerBlock = selectedDriverId ? stickyFooterHeight : footerPad;
   const naturalHeight = headerHeight + listContentHeight + footerBlock;
+  const hasNaturalMeasure = headerHeight > 0 && listContentHeight > 0;
   const contentCapped =
     typeof maxContentHeight === "number" &&
     maxContentHeight > 0 &&
-    listContentHeight > 0 &&
+    hasNaturalMeasure &&
     naturalHeight > maxContentHeight + 1;
   const wrapperStyle = useMemo(() => {
-    if (!(typeof maxContentHeight === "number" && maxContentHeight > 0)) {
-      return null;
+    if (hasNaturalMeasure) {
+      const height = contentCapped ? (maxContentHeight as number) : naturalHeight;
+      return { height, maxHeight: maxContentHeight, flexGrow: 0, flexShrink: 0 };
     }
-    return contentCapped
-      ? { height: maxContentHeight, maxHeight: maxContentHeight }
-      : { maxHeight: maxContentHeight };
-  }, [maxContentHeight, contentCapped]);
-
-  const requestButtonPaddingStyle = useMemo(() => ({ paddingBottom: footerPad }), [footerPad]);
+    if (typeof maxContentHeight === "number" && maxContentHeight > 0) {
+      return { maxHeight: maxContentHeight, flexGrow: 0 };
+    }
+    return { flexGrow: 0 };
+  }, [hasNaturalMeasure, contentCapped, maxContentHeight, naturalHeight]);
 
   // Loading
   if (searching && !hasValidData) {
@@ -693,9 +697,9 @@ const DriverViewComponent = ({
         data={data}
         renderItem={renderDriverItem}
         keyExtractor={driverKeyExtractor}
-        showsVerticalScrollIndicator={listOverflows}
-        scrollEnabled
-        nestedScrollEnabled
+        showsVerticalScrollIndicator={contentCapped || listOverflows}
+        scrollEnabled={contentCapped || listOverflows}
+        nestedScrollEnabled={contentCapped || listOverflows}
         removeClippedSubviews
         maxToRenderPerBatch={4}
         windowSize={3}
@@ -714,8 +718,7 @@ const DriverViewComponent = ({
         <View
           style={[
             styles.requestButtonWrapper,
-            requestButtonPaddingStyle,
-            { height: stickyFooterHeight, flexGrow: 0, flexShrink: 0 },
+            { paddingBottom: footerPad, flexGrow: 0, flexShrink: 0 },
           ]}
         >
           <TouchableOpacity
@@ -790,7 +793,7 @@ const styles = StyleSheet.create({
     padding: 1,
   },
   requestButtonWrapper: {
-    paddingTop: 10,
+    paddingTop: 8,
     paddingHorizontal: 4,
     backgroundColor: "#fff",
   },
