@@ -281,6 +281,7 @@ const DriverViewComponent = ({
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const [listContentHeight, setListContentHeight] = useState(0);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const isFocused = useIsFocused();
 
   const insets = useCombinedSafeInsets();
@@ -600,12 +601,25 @@ const DriverViewComponent = ({
     []
   );
 
+  // Only clamp to a fixed height when content actually overflows the cap.
+  // When content fits, use maxHeight only so the wrapper shrinks to its
+  // natural size and the parent's onLayout reports that smaller value — which
+  // is what lets the sheet shrink to fit a short driver list.
+  const footerBlock = selectedDriverId ? stickyFooterHeight : footerPad;
+  const naturalHeight = headerHeight + listContentHeight + footerBlock;
+  const contentCapped =
+    typeof maxContentHeight === "number" &&
+    maxContentHeight > 0 &&
+    listContentHeight > 0 &&
+    naturalHeight > maxContentHeight + 1;
   const wrapperStyle = useMemo(() => {
-    if (typeof maxContentHeight === "number" && maxContentHeight > 0) {
-      return { height: maxContentHeight, maxHeight: maxContentHeight };
+    if (!(typeof maxContentHeight === "number" && maxContentHeight > 0)) {
+      return null;
     }
-    return null;
-  }, [maxContentHeight]);
+    return contentCapped
+      ? { height: maxContentHeight, maxHeight: maxContentHeight }
+      : { maxHeight: maxContentHeight };
+  }, [maxContentHeight, contentCapped]);
 
   const requestButtonPaddingStyle = useMemo(() => ({ paddingBottom: footerPad }), [footerPad]);
 
@@ -657,7 +671,13 @@ const DriverViewComponent = ({
 
   return (
     <View style={[styles.wrapper, wrapperStyle]}>
-      <View style={styles.header}>
+      <View
+        style={styles.header}
+        onLayout={(event) => {
+          const next = event.nativeEvent.layout.height;
+          setHeaderHeight((prev) => (Math.abs(prev - next) > 1 ? next : prev));
+        }}
+      >
         <Text style={styles.headerTitle}>Available Drivers</Text>
         <Text style={styles.headerSubtitle}>
           {data.length} driver{data.length !== 1 ? "s" : ""} found nearby
@@ -665,11 +685,11 @@ const DriverViewComponent = ({
       </View>
 
       <FlatList
-        style={[styles.scrollView, { flex: 1, minHeight: 0 }]}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: selectedDriverId ? stickyFooterHeight : footerPad },
+        style={[
+          styles.scrollView,
+          contentCapped ? { flex: 1, minHeight: 0 } : { flexGrow: 0 },
         ]}
+        contentContainerStyle={styles.scrollContent}
         data={data}
         renderItem={renderDriverItem}
         keyExtractor={driverKeyExtractor}
