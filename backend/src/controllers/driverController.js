@@ -453,14 +453,24 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
   let driver;
   try {
     if (existingDriver) {
-      // Idempotent in-place update for a non-verified draft profile.
-      // `Object.assign` overwrites only the keys we re-submit, so any
-      // fields already on the document but not in `driverData`
-      // (vehicleImages, rejectionReason, etc.) survive untouched.
-      // `save()` runs the same schema validators and middleware as
-      // `create()`, so the duplicate-key (11000) path below still
-      // covers a plate/license collision against a different user.
-      Object.assign(existingDriver, driverData);
+      // Idempotent in-place update for an existing draft profile.
+      // `Object.assign` overwrites only the keys we re-submit. Admin-owned
+      // state fields are stripped first — this endpoint must never silently
+      // change a driver's approval status or toggle their online/available
+      // state. Those fields move only via adminController (verifyDriver,
+      // rejectDriver, updateUser, syncDriverVerificationStatus) and via
+      // toggleAvailability. Leaving them in driverData previously demoted
+      // legacy approved drivers to pending on any retry.
+      // See Nov 2026 incident: 14 drivers silently demoted, 10 in a single
+      // 3-second batch on 2026-11-04 07:19 UTC.
+      const {
+        verificationStatus: _vs,
+        documentsVerified: _dv,
+        isOnline: _io,
+        isAvailable: _ia,
+        ...updatableFields
+      } = driverData;
+      Object.assign(existingDriver, updatableFields);
       driver = await existingDriver.save();
     } else {
       driver = await Driver.create(driverData);
@@ -480,7 +490,16 @@ export const createDriverProfile = asyncHandler(async (req, res) => {
             data: { driver: formatDriverResponse(raced) },
           });
         }
-        Object.assign(raced, driverData);
+        // Same protection as the main update path: strip admin-owned fields
+        // so the race-loser cannot demote the race-winner.
+        const {
+          verificationStatus: _vs2,
+          documentsVerified: _dv2,
+          isOnline: _io2,
+          isAvailable: _ia2,
+          ...racedUpdatable
+        } = driverData;
+        Object.assign(raced, racedUpdatable);
         try {
           driver = await raced.save();
           existingDriver = raced;
