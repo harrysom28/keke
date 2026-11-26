@@ -164,19 +164,45 @@ async function requestNativeNotificationPermission(): Promise<boolean> {
   return notificationPermissionIsGranted(result);
 }
 
+let __lastPushRegistration: { ok: boolean; at: Date; error?: string } = {
+  ok: false,
+  at: new Date(0),
+};
+
+export function getLastPushRegistrationStatus() {
+  return __lastPushRegistration;
+}
+
+export function recordPushRegistration(ok: boolean, error?: string) {
+  __lastPushRegistration = ok
+    ? { ok: true, at: new Date() }
+    : { ok: false, at: new Date(), error: error ? String(error) : undefined };
+}
+
 async function fetchPushTokenWhenGranted(): Promise<string> {
   try {
     const expoToken = await Notifications.getExpoPushTokenAsync();
-    return expoToken?.data ?? "";
+    const token = expoToken?.data ?? "";
+    if (token) {
+      recordPushRegistration(true);
+      console.log("[push] Expo token fetched");
+    }
+    return token;
   } catch {
     try {
       const deviceToken = await Notifications.getDevicePushTokenAsync();
-      return deviceToken?.data ?? "";
+      const token = deviceToken?.data ?? "";
+      if (token) {
+        recordPushRegistration(true);
+        console.log("[push] device token fetched");
+      }
+      return token;
     } catch (fallbackError) {
       console.warn(
         "Push token fetch failed, continuing without token:",
         fallbackError
       );
+      recordPushRegistration(false, String((fallbackError as Error)?.message || fallbackError));
       return "";
     }
   }

@@ -8,6 +8,7 @@ import { Pusher, PusherEvent } from "@pusher/pusher-websocket-react-native";
 import { router } from "expo-router";
 import { Platform, Vibration } from "react-native";
 import { registerForPushNotifications } from "@/utils/registerPushToken";
+import { recordPushRegistration } from "@/utils/notifications";
 import { requestDriverOfferRefresh } from "@/utils/driverRideOffer";
 import { markInitialDriverRouteHandled } from "@/utils/driverInitialRoute";
 
@@ -510,6 +511,7 @@ export const registerFcmToken = async (): Promise<void> => {
       const token = await registerForPushNotifications({ requestPermission: false });
       if (!token) {
         logger.debug("Push token not available (likely simulator or permissions denied)");
+        recordPushRegistration(false, "no token");
         return;
       }
 
@@ -517,12 +519,15 @@ export const registerFcmToken = async (): Promise<void> => {
       if (isExpo) {
         await apiClient.post("auth/push-token", { token, type: "expo" });
         logger.debug("Expo push token registered with backend");
+        recordPushRegistration(true);
       } else {
         // Single native FCM/APNs token — backend delivers via Firebase Admin only.
         await apiClient.post("notifications/fcm-token", { token });
         logger.debug("Native FCM/APNs token registered with backend");
+        recordPushRegistration(true);
       }
     } catch (error) {
+      recordPushRegistration(false, String((error as Error)?.message || error));
       logger.error(
         "FCM token registration failed",
         error instanceof Error ? error : undefined,
