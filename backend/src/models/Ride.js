@@ -327,6 +327,14 @@ const rideSchema = new mongoose.Schema(
       },
     ],
     driverMovementFlag: { type: String, default: null },
+    // Last time a driver GPS ping was received for this ride during the active
+    // trip (in-progress and earlier). Used by staleTripService to detect
+    // genuine connectivity loss instead of flagging every long trip.
+    // See Nov 2026: the old updatedAt-based check flagged every ride > 8 min
+    // because nothing touches the Ride doc during in-progress unless the
+    // driver pings in. This field is bumped by
+    // rideMovementService.updateDriverLocationForAcceptedRide.
+    lastDriverLocationAt: { type: Date, default: null },
     /** Drivers who have already been notified (socket) for this ride — used to rotate to the next match */
     notifiedDriverIds: {
       type: [

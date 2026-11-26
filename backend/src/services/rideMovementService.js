@@ -23,10 +23,25 @@ function distanceToPickupMeters(ride, lat, lng) {
 export async function updateDriverLocationForAcceptedRide(driverId, driverLocation) {
   let ride = await Ride.findOne({
     driver: driverId,
-    status: { $in: ['accepted', 'driver_en_route'] },
+    status: { $in: ['accepted', 'driver_en_route', 'in-progress'] },
   }).lean();
 
-  if (!ride || !ride.pickupLocation?.coordinates?.length) return;
+  if (!ride) return;
+
+  // During an active trip, just bump the trip-level ping timestamp.
+  // Everything below (driverLocationHistory, movement flag, en-route
+  // transition) only makes sense for the pre-pickup phase. Without this,
+  // staleTripService flags every long trip as "stale_timeout" because
+  // nothing else writes to the Ride doc during in-progress.
+  if (ride.status === 'in-progress') {
+    await Ride.updateOne(
+      { _id: ride._id, status: 'in-progress' },
+      { $set: { lastDriverLocationAt: new Date() } }
+    );
+    return;
+  }
+
+  if (!ride.pickupLocation?.coordinates?.length) return;
 
   if (ride.status === 'accepted') {
     const t = new Date();

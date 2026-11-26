@@ -73,6 +73,7 @@ router.post(
 
 // Driver management (specific routes before :id)
 router.get('/drivers', adminController.listDrivers);
+router.get('/drivers/reachability', adminController.getDriverReachability);
 router.patch('/drivers/kyc/:userId/approve', validationRules.mongoUserId, validate, adminController.approveDriverKyc);
 router.patch('/drivers/kyc/:userId/reject', validationRules.mongoUserId, validate, adminController.rejectDriverKyc);
 router.patch('/drivers/vehicle/:userId/approve', validationRules.mongoUserId, validate, adminController.approveDriverVehicle);

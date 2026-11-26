@@ -6,7 +6,16 @@ import { getSocketService } from './socketService.js';
 import { logRideAudit } from './rideAuditLogService.js';
 import { safeTrigger } from './pusherService.js';
 
-const STALE_MINUTES = 8;
+// 15 minutes is a real signal-loss window (device dead, network gone, app
+// killed by OEM). The old 8-minute value fired on normal trips because the
+// trigger was Ride.updatedAt — which doesn't bump during an in-progress
+// trip at all. Now that `lastDriverLocationAt` is a true GPS heartbeat from
+// the driver's device, 15 minutes is safely above normal trip duration.
+const STALE_MINUTES = 15;
+// Legacy rides that existed before lastDriverLocationAt was introduced
+// fall back to updatedAt with a longer window so they're not falsely flagged
+// during the deploy.
+const STALE_LEGACY_MINUTES = 20;
 const TICK_MS = 5 * 60 * 1000;
 const STALE_SEARCHING_MINUTES = 30;
 /**
@@ -60,7 +69,7 @@ export async function flagRideAsStaleTimeout(ride) {
   ride.statusHistory.push({
     status: 'issue_flagged',
     timestamp: new Date(),
-    note: `Auto-flagged by system (stale > ${STALE_MINUTES}m)`,
+    note: `Auto-flagged by system (no driver GPS ping for > ${STALE_MINUTES}m)`,
   });
   await ride.save();
 
@@ -142,11 +151,25 @@ class StaleTripService {
     this.isRunning = true;
     try {
       // ── Flag stale in-progress rides ──────────────────────────────────
+      // Primary signal: lastDriverLocationAt (true GPS heartbeat from driver
+      // during active trip). Fallback: updatedAt for legacy rides that
+      // predate that field.
       const cutoff = new Date(Date.now() - STALE_MINUTES * 60 * 1000);
+      const legacyCutoff = new Date(Date.now() - STALE_LEGACY_MINUTES * 60 * 1000);
       const staleRides = await Ride.find({
         status: 'in-progress',
-        updatedAt: { $lt: cutoff },
-      }).select('_id rider driver status startedAt updatedAt flag completed_by completion_reason statusHistory fare');
+        $or: [
+          { lastDriverLocationAt: { $lt: cutoff } },
+          {
+            lastDriverLocationAt: { $exists: false },
+            updatedAt: { $lt: legacyCutoff },
+          },
+          {
+            lastDriverLocationAt: null,
+            updatedAt: { $lt: legacyCutoff },
+          },
+        ],
+      }).select('_id rider driver status startedAt updatedAt lastDriverLocationAt flag completed_by completion_reason statusHistory fare');
 
       if (staleRides.length > 0) {
         logger.warn(`Found ${staleRides.length} stale in-progress rides to flag`);

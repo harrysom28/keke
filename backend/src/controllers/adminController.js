@@ -4296,3 +4296,56 @@ export const listPaystackUnmatchedPayments = asyncHandler(async (req, res) => {
     },
   });
 });
+
+/**
+ * Live driver reachability diagnostics - GET /api/admin/drivers/reachability
+ *
+ * Returns per-driver reachability signals so ops can identify "ghost" drivers
+ * who are flagged online but cannot actually receive rides:
+ *   - hasPushToken:  one of fcm_token, expoPushToken, or deviceToken is set
+ *   - gpsFresh:      currentLocation.lastRealFixAt within 5 min
+ *   - reachable:     all signals pass AND driver is available
+ */
+export const getDriverReachability = asyncHandler(async (req, res) => {
+  const drivers = await Driver.find({ isOnline: true })
+    .populate('user', 'name phone fcm_token expoPushToken deviceToken')
+    .select('_id user isOnline isAvailable currentLocation vehicleDetails')
+    .lean();
+
+  const now = Date.now();
+  const FRESH_MS = 5 * 60 * 1000;
+
+  const list = drivers.map((d) => {
+    const u = d.user || {};
+    const hasPushToken = Boolean(u.fcm_token || u.expoPushToken || u.deviceToken);
+    const fixMs = d.currentLocation?.lastRealFixAt
+      ? new Date(d.currentLocation.lastRealFixAt).getTime()
+      : null;
+    const gpsAgeS = fixMs != null ? Math.round((now - fixMs) / 1000) : null;
+    const gpsFresh = gpsAgeS != null && gpsAgeS * 1000 <= FRESH_MS;
+    return {
+      driverId: d._id.toString(),
+      name: u.name || null,
+      phone: u.phone || null,
+      isOnline: !!d.isOnline,
+      isAvailable: !!d.isAvailable,
+      hasPushToken,
+      gpsAgeS,
+      gpsFresh,
+      reachable: hasPushToken && gpsFresh && !!d.isAvailable,
+    };
+  });
+
+  const summary = {
+    total: list.length,
+    reachable: list.filter((x) => x.reachable).length,
+    missingPushToken: list.filter((x) => !x.hasPushToken).length,
+    staleGps: list.filter((x) => !x.gpsFresh).length,
+    notAvailable: list.filter((x) => !x.isAvailable).length,
+  };
+
+  res.json({
+    status: 'success',
+    data: { summary, drivers: list },
+  });
+});
