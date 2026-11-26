@@ -38,6 +38,7 @@ import { AppContext } from "@/app/context";
 import { AuthState } from "@/store/AuthSlice";
 import { BottomSheetMethods } from "@devvie/bottom-sheet";
 import { DriverBookingSheet } from "@/components/driver/bookingSheet";
+import { DriverReachabilityChip } from "@/components/driver/DriverReachabilityChip";
 import EmergencyModal from "@/app/(app)/(tabs)/(home)/_modals/emergencyModal";
 import { Portal } from "@gorhom/portal";
 import axios from "axios";
@@ -960,6 +961,9 @@ const Home = () => {
               </View>
             </TouchableOpacity>
           </View>
+        </View>
+        <View style={tw`px-4 pt-2`}>
+          <DriverReachabilityChip />
         </View>
         <View
           style={tw`flex-row justify-between items-center bg-[#3C8F7C33] px-4 py-2`}
